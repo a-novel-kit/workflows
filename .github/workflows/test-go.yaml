@@ -1,0 +1,54 @@
+name: Test Go
+
+on:
+  workflow_call:
+    secrets:
+      codecov_token:
+        required: true
+
+jobs:
+  golang-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61.0
+
+  test-go:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 1
+      ANOVEL_LOGGER_DYNAMIC: false
+      PORT: 8080
+      DSN: postgres://test:test@localhost:5432/test?sslmode=disable
+      GODEBUG: x509sha1=1
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_USER: test
+          POSTGRES_DB: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - name: Download Go packages
+        run: go mod download
+      - name: Run tests
+        run: go test $(go list ./... | grep -v /mocks | grep -v /internal) -count=1 -p 1 -v -coverprofile=coverage.txt
+      - name: Upload results to Codecov
+        uses: codecov/codecov-action@v4
+        env:
+          CODECOV_TOKEN: ${{ secrets.codecov_token }}

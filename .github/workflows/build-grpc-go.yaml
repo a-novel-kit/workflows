@@ -1,0 +1,129 @@
+name: Build Go
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        type: string
+        required: true
+      repository_name:
+        type: string
+        required: true
+      ref:
+        type: string
+        required: true
+      actor:
+        type: string
+        required: true
+
+jobs:
+  build-go:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      PORT: 8080
+      DSN: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ inputs.repository }}/${{ inputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+      - name: Retrieve Go packages
+        uses: actions/download-artifact@v4
+        with:
+          name: vendor
+          path: ./vendor/
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ inputs.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and export to Docker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:test
+      - name: Install check tools
+        run: |
+          wget https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.34/grpc_health_probe-linux-amd64 -O grpc_health_probe
+          chmod +x grpc_health_probe
+          sudo apt install netcat
+      - name: Run Docker image
+        id: local_container
+        run: |
+          docker run -d \
+            -e PORT=$PORT \
+            -e DSN="$DSN" \
+            --network="host" \
+            --name uservice-container \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:test
+          
+          until [ "`docker inspect -f {{.State.Running}} uservice-container`"=="true" ]
+          do 
+            ((c++)) && ((c==300)) && break
+            sleep 0.1
+          done
+      - name: TCP check
+        run: |
+          while ! nc -z localhost $PORT
+          do 
+            ((c++)) && ((c==100)) && break
+            sleep 0.1
+          done
+          nc -z localhost $PORT
+      - name: GRPC check
+        run: |
+          while ! ./grpc_health_probe -addr=localhost:$PORT
+          do 
+            ((c++)) && ((c==100)) && break
+            sleep 0.1
+          done
+          ./grpc_health_probe -addr=localhost:$PORT
+      - name: Show container logs
+        if: ${{ failure() && steps.local_container.outcome == 'success' }}
+        run: docker logs uservice-container
+      - name: Cleanup local container
+        if: ${{ always() && steps.local_container.outcome == 'success' }}
+        run: docker stop uservice-container
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ inputs.repository_name }}/${{ inputs.ref }}
+          package-type: 'container'
+          min-versions-to-keep: 8
+          delete-only-pre-release-versions: false
+          delete-only-untagged-versions: false
