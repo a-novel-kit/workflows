@@ -1,0 +1,20 @@
+name: Check changes
+
+outputs:
+  diff:
+    description: "Whether or not there are uncommitted changes in the pathspec"
+    value: ${{ steps.check_diff.outputs.diff }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check diff
+      id: check_diff
+      shell: bash
+      run: |
+        if [ -z "$(git status --porcelain)" ]
+        then
+          exit 0
+        else 
+          echo "diff=1" >> $GITHUB_OUTPUT
+        fi

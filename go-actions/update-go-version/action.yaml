@@ -1,0 +1,41 @@
+name: update go version
+
+inputs:
+  pat:
+    required: true
+    description: The personal access token to use for the action.
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ inputs.pat }}
+    - name: get latest go version
+      shell: bash
+      run: |
+        echo "GOLATEST=$(curl -s https://go.dev/VERSION\?m\=text | head -n 1 | sed -e "s/^go//")" >> $GITHUB_ENV
+    - name: edit files to latest go version
+      shell: bash
+      run: |
+        for mod in `find . -name "go.work"`
+        do
+          go work edit -go=${{ env.GOLATEST }} $mod
+        done
+        
+        for mod in `find . -name "go.mod"`
+        do
+          go mod edit -go=${{ env.GOLATEST }} $mod
+          (cd $(dirname $mod) && go mod tidy)
+        done
+    - uses: a-novel-kit/workflows/generic-actions/create-pull-request@master
+      with:
+        branch: go/${{ env.GOLATEST }}
+        commit_message: "chores: update go to ${{ env.GOLATEST }}"
+        github_token: ${{ inputs.github_token }}
+        pat: ${{ inputs.pat }}
+        auto_merge: "true"
