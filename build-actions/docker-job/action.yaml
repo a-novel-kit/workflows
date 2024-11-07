@@ -1,0 +1,102 @@
+name: Build Docker Job
+
+inputs:
+  file:
+    required: false
+    description: Path of the dockerfile, relative to repository root.
+    default: "Dockerfile"
+  image_name:
+    required: true
+    description: The name of the image to build.
+  run_args:
+    required: false
+    description: Args to use for the test run of the image.
+  timeout:
+    required: false
+    description: Timeout (in deciseconds) for the container healthcheck.
+    default: "300"
+  skip_healthcheck:
+    required: false
+    description: Skip the test run of the image.
+  github_token:
+    required: true
+    description: The GitHub token to use for publication.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ghcr.io/${{ inputs.image_name }}
+        tags: |
+          # Default tags
+          type=schedule,pattern=nightly
+          type=ref,event=branch
+          type=ref,event=tag
+          # Versioning tags
+          type=semver,pattern=v{{version}}
+          type=semver,pattern=v{{major}}.{{minor}}
+          type=semver,pattern=v{{major}}
+        flavor: latest=auto
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github_token }}
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+    - uses: docker/build-push-action@v6
+      with:
+        context: .
+        load: true
+        tags: ghcr.io/${{ inputs.image_name }}:test
+        file: ${{ inputs.file }}
+    - name: Test docker image
+      id: local_container
+      if: ${{ inputs.skip_healthcheck != 'true' }}
+      shell: bash
+      run: |
+        docker run -d --network="host" ${{ inputs.run_args }} --name test-container \
+            ghcr.io/${{ inputs.image_name }}:test
+
+        until [ "`docker inspect -f {{.State.Status}} test-container`" == "exited" ]
+        do 
+          ((c++)) && ((c==${{ inputs.timeout }})) && break
+          sleep 0.1
+        done
+
+        if [ "`docker inspect -f {{.State.Status}} test-container`" != "exited" ]
+        then
+          echo "Container did not exit in time"
+          docker stop test-container
+          echo "Extracting logs"
+          docker logs test-container
+          exit 1
+        fi
+
+        if [ "`docker inspect -f {{.State.ExitCode}} test-container`" == 0 ]
+        then
+          echo "Container exited successfully"
+          docker stop test-container
+          exit 0
+        else
+          echo "Container exited with non-zero exit code"
+          docker stop test-container
+          echo "Extracting logs"
+          docker logs test-container
+          exit 1
+        fi
+    - uses: docker/build-push-action@v6
+      if: ${{ success() }}
+      id: build
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        file: ${{ inputs.file }}

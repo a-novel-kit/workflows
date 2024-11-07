@@ -1,0 +1,48 @@
+name: Publish Storybook Page
+
+inputs:
+  cmd:
+    description: The pnpm command used to build the Storybook site
+    required: false
+    default: storybook:build
+  build_path:
+    description: The path to the directory that contains statically generated files.
+    required: false
+    default: dist/storybook
+
+outputs:
+  page_url:
+    description: The URL where the github page is published
+    value: ${{ steps.deployment.outputs.page_url }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        # fetch all commits to get last updated time or other git log info
+        fetch-depth: 0
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        # choose node.js version to use
+        node-version: latest
+        # cache deps for pnpm
+        cache: pnpm
+    - name: Install deps
+      shell: bash
+      run: pnpm install --frozen-lockfile
+    - name: build storybook
+      shell: bash
+      run: pnpm run ${{ inputs.cmd }}
+    - name: upload
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: ${{ inputs.build_path }}
+    - name: setup Pages
+      uses: actions/configure-pages@v5
+    - name: deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

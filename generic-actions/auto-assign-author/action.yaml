@@ -1,0 +1,31 @@
+name: auto-assign-author
+
+inputs:
+  pull_request:
+    required: true
+    description: The number of the pull request to be merged.
+  author:
+    required: true
+    description: The author to assign to the pull request.
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Assign author
+      if: ${{ inputs.author != 'dependabot[bot]' }}
+      shell: bash
+      run: |
+        echo "Assigning author to PR"
+        echo "PR author: ${{ inputs.author }}"
+        echo "PR number: ${{ inputs.pull_request }}"
+        echo "Assigning author to PR"
+        gh api --method POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          /repos/${{ github.repository }}/issues/${{ inputs.pull_request }}/assignees \
+          -f "assignees[]=${{ inputs.author }}"
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}

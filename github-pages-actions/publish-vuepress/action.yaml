@@ -1,0 +1,50 @@
+name: Publish Vuepress Page
+
+inputs:
+  cmd:
+    description: The pnpm command used to build the VuePress site
+    required: false
+    default: docs:build
+  build_path:
+    description: The path to the directory that contains statically generated files.
+    required: false
+    default: docs/.vuepress/dist/
+
+outputs:
+  page_url:
+    description: The URL where the github page is published
+    value: ${{ steps.deployment.outputs.page_url }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        # fetch all commits to get last updated time or other git log info
+        fetch-depth: 0
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        # choose node.js version to use
+        node-version: latest
+        # cache deps for pnpm
+        cache: pnpm
+    - name: Install deps
+      shell: bash
+      run: pnpm install --frozen-lockfile
+    # run build script
+    - name: Build VuePress site
+      shell: bash
+      run: pnpm ${{ inputs.cmd }}
+    - name: Upload static files as artifact
+      id: deployment
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: ${{ inputs.build_path }}
+    - name: Setup Pages
+      uses: actions/configure-pages@v5
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
