@@ -1,0 +1,28 @@
+name: dependabot auto-merge
+
+inputs:
+  pull_request:
+    required: true
+    description: The URL of the pull request to be merged.
+  pat:
+    required: true
+    description: The personal access token to use for the action.
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Dependabot metadata
+      id: dependabot-metadata
+      uses: dependabot/fetch-metadata@v2
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ inputs.pat }}
+    - uses: a-novel-kit/workflows/generic-actions/auto-merge@master
+      with:
+        pull_request: ${{ inputs.pull_request }}
+        pat: ${{ inputs.pat }}
+        github_token: ${{ inputs.github_token }}

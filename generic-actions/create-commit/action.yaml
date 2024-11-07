@@ -1,0 +1,40 @@
+name: Push commit
+
+inputs:
+  commit_message:
+    required: true
+    description: The commit message to use when committing changes.
+  pat:
+    required: true
+    description: The GitHub token to use for the action.
+  branch:
+    required: false
+    description: The branch to push the commit to.
+
+outputs:
+  diff:
+    description: "Whether or not there were changes to commit"
+    value: ${{ steps.check_diff.outputs.diff }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: push changes if any
+      shell: bash
+      id: check_diff
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        git commit -am "${{ inputs.commit_message }}" || { echo "No changes to commit"; exit 0; }
+
+        BRANCH=${{ github.head_ref || github.ref_name }}
+        if [ -n "${{ inputs.branch }}" ]; then
+          git checkout -b "${{ inputs.branch }}"
+          BRANCH="${{ inputs.branch }}"
+        fi
+        
+        git push --set-upstream origin "HEAD:${BRANCH}"
+        echo "diff=1" >> $GITHUB_OUTPUT
+      env:
+        GITHUB_TOKEN: ${{ inputs.pat }}
