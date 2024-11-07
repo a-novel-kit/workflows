@@ -1,0 +1,38 @@
+name: update pnpm version
+
+inputs:
+  pat:
+    required: true
+    description: The personal access token to use for the action.
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ inputs.pat }}
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+    - name: get latest pnpm version
+      shell: bash
+      run: |
+        echo "PNPMLATEST=$(npm view pnpm version)" >> $GITHUB_ENV
+    - name: edit files to latest pnpm version
+      shell: bash
+      run: |
+        version=${{ env.PNPMLATEST }}
+        tmp=$(mktemp)
+        jq --arg version "$version" '.packageManager="pnpm@"+$version' package.json > "$tmp" && \
+          mv "$tmp" package.json
+    - uses: a-novel-kit/workflows/generic-actions/create-pull-request@master
+      with:
+        branch: pnpm/${{ env.PNPMLATEST }}
+        commit_message: "chores: update pnpm to ${{ env.PNPMLATEST }}"
+        github_token: ${{ inputs.github_token }}
+        pat: ${{ inputs.pat }}
+        auto_merge: "true"
