@@ -1,0 +1,131 @@
+name: build docker job
+description: Build a docker container from a Dockerfile, and make sure it completes successfully when run.
+
+inputs:
+  file:
+    required: false
+    description: Path of the dockerfile, relative to repository root.
+    default: "Dockerfile"
+  image_name:
+    required: true
+    description: The name of the image to build.
+  run_args:
+    required: false
+    description: Args to use for the test run of the image.
+  timeout:
+    required: false
+    description: Timeout (in deciseconds) for the container healthcheck.
+    default: "300"
+  skip_healthcheck:
+    required: false
+    description: Skip the test run of the image.
+  github_token:
+    required: true
+    description: The GitHub token to use for publication.
+  context:
+    required: false
+    description: The context to use for the build.
+    # Build from the directory containing the Dockerfiles, to mimic the same behavior locally and from the CI.
+    default: .
+  secrets:
+    description: "List of secrets to expose to the build (e.g., key=string, GIT_AUTH_TOKEN=mytoken)"
+    required: false
+  secret-envs:
+    description: "List of secret env vars to expose to the build (e.g., key=envname, MY_SECRET=MY_ENV_VAR)"
+    required: false
+  secret-files:
+    description: "List of secret files to expose to the build (e.g., key=filename, MY_SECRET=./secret.txt)"
+    required: false
+
+outputs:
+  digest:
+    description: The digest of the built image.
+    value: ${{ steps.build.outputs.digest }}
+  imageid:
+    description: The tags of the built image.
+    value: ${{ steps.build.outputs.imageid }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ inputs.image_name }}
+        tags: |
+          # Default tags
+          type=schedule,pattern=nightly
+          type=ref,event=branch
+          type=ref,event=tag
+          # Versioning tags
+          type=semver,pattern=v{{version}}
+          type=semver,pattern=v{{major}}.{{minor}}
+          type=semver,pattern=v{{major}}
+        flavor: latest=auto
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github_token }}
+    - uses: docker/setup-qemu-action@v3
+    - uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context }}
+        load: true
+        tags: ghcr.io/${{ inputs.image_name }}:test
+        file: ${{ inputs.file }}
+        secret-envs: ${{ inputs.secret-envs }}
+        secret-files: ${{ inputs.secret-files }}
+        secrets: ${{ inputs.secrets }}
+    - name: wait for container to complete
+      id: local_container
+      if: ${{ inputs.skip_healthcheck != 'true' }}
+      shell: bash
+      run: |
+        docker run -d --network="host" ${{ inputs.run_args }} --name test-container \
+          ghcr.io/${{ inputs.image_name }}:test
+
+        state="`docker inspect --type=container -f {{.State.Status}} test-container`"
+
+        until [ "$state" == "exited" ]
+        do 
+          state="`docker inspect --type=container -f {{.State.Status}} test-container`"
+          ((c++)) && ((c==${{ inputs.timeout }})) && break
+          sleep 0.1
+        done
+
+        if [ "$state" != "exited" ]
+        then
+          echo "Container did not exit in time"
+          docker stop test-container
+          echo "Extracting logs"
+          docker logs test-container
+          exit 1
+        fi
+
+        if [ "`docker inspect -f {{.State.ExitCode}} test-container`" == 0 ]
+        then
+          echo "Container exited successfully"
+          docker stop test-container
+          exit 0
+        else
+          echo "Container exited with non-zero exit code"
+          docker stop test-container
+          echo "Extracting logs"
+          docker logs test-container
+          exit 1
+        fi
+    - uses: docker/build-push-action@v6
+      if: ${{ success() }}
+      id: build
+      with:
+        context: ${{ inputs.context }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        file: ${{ inputs.file }}
+        secret-envs: ${{ inputs.secret-envs }}
+        secret-files: ${{ inputs.secret-files }}
+        secrets: ${{ inputs.secrets }}

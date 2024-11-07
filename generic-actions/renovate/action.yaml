@@ -1,0 +1,46 @@
+name: self-hosted renovate
+
+inputs:
+  allowed_commands:
+    required: false
+    description: Specify allowed commands for renovate post update actions.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+
+runs:
+  using: "composite"
+  steps:
+    - name: get app token
+      id: get_token
+      uses: actions/create-github-app-token@v1
+      with:
+        private-key: ${{ inputs.app_private_key }}
+        app-id: ${{ inputs.app_id }}
+        owner: ${{ github.repository_owner }}
+        repositories: "${{ github.repository }}"
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ steps.get_token.outputs.token }}
+        ref: ${{ github.head_ref }}
+        # Make sure the value of GITHUB_TOKEN will not be persisted in repo's config
+        persist-credentials: false
+    - name: self-hosted renovate
+      uses: renovatebot/github-action@v43.0.5
+      with:
+        token: "${{ steps.get_token.outputs.token }}"
+        docker-network: ${{ job.container.network }}
+      env:
+        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
+        RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
+        RENOVATE_PR_HOURLY_LIMIT: 0
+        LOG_LEVEL: debug
+        # NPM internal registries.
+        RENOVATE_DETECT_HOST_RULES_FROM_ENV: true
+        RENOVATE_NPM_NPM_PKG_GITHUB_COM_TOKEN: ${{ inputs.pat }}
+        RENOVATE_SECRETS: '{"GITHUB_TOKEN": "${{ inputs.pat }}"}'
+        RENOVATE_CUSTOM_ENV_VARIABLES: '{"GITHUB_TOKEN": "''{{ secrets.GITHUB_TOKEN }}''"}'
+        RENOVATE_ALLOW_SCRIPTS: true

@@ -1,0 +1,13 @@
+name: lint postgres
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+    - name: install sqlfluff
+      shell: bash
+      run: pip install sqlfluff
+    - name: lint sql
+      shell: bash
+      run: sqlfluff lint .

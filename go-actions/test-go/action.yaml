@@ -1,0 +1,80 @@
+name: test go
+
+inputs:
+  test_args:
+    required: false
+    description: The arguments to pass to the test command.
+    default: -p 1 -race
+  ignore_patterns:
+    required: false
+    description: A list of patterns to ignore when running tests.
+    default: /mocks,/codegen,/test
+  test_artifact:
+    required: false
+    description: The name of the artifact to store the test report.
+    default: go-test
+  coverage_artifact:
+    required: false
+    description: The name of the artifact to store the coverage report.
+    default: coverage
+  test_file:
+    required: false
+    description: The name of the test report file.
+    default: tests.json
+  coverage_file:
+    required: false
+    description: The name of the coverage report file.
+    default: coverage.txt
+  skip_setup:
+    required: false
+    description: Skip the setup steps.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      if: ${{ inputs.skip_setup != 'true' }}
+    - uses: actions/setup-go@v5
+      if: ${{ inputs.skip_setup != 'true' }}
+      with:
+        go-version: stable
+    - name: download go packages
+      if: ${{ inputs.skip_setup != 'true' }}
+      shell: bash
+      run: go mod download
+    - name: discover modules
+      shell: bash
+      id: discover
+      run: |
+        # List all modules using `go list -m`, and for each module, list every package.
+        # The extra `go list -m` steps is used to discover multiple modules when working with workspaces.
+        echo "$(for mod in $(go list -m); do go list ${mod//$(go list .)/.}/...; done)" > modules.txt
+
+        # Auto filter out any modules that match the ignore_patterns.
+        if [ -n "${{ inputs.ignore_patterns }}" ]; then
+          echo "${{ inputs.ignore_patterns }}" | sed -n 1'p' | tr ',' '\n' | while read word; do
+            echo "$(cat modules.txt | grep -v ${word})" > modules.txt
+          done
+        fi
+
+        echo "MODULES=$(cat modules.txt | tr '\n' ' ')" >> $GITHUB_ENV
+    - name: install gotestsum
+      shell: bash
+      run: go install gotest.tools/gotestsum@latest
+    - name: run tests
+      shell: bash
+      run: |
+        go run gotest.tools/gotestsum@latest --jsonfile ${{ inputs.test_file }} --format pkgname \
+          -- -count=1 -cover -coverprofile=${{ inputs.coverage_file }} -json ${{ env.MODULES }}
+
+        go tool cover -func ${{ inputs.coverage_file }}
+    - name: archive code coverage results
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.coverage_artifact }}
+        path: ${{ inputs.coverage_file }}
+    - name: archive test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.test_artifact }}
+        path: ${{ inputs.test_file }}

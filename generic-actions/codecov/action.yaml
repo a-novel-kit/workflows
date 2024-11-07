@@ -1,0 +1,29 @@
+name: codecov
+description: Uploads code coverage reports to Codecov.
+
+inputs:
+  coverage_artifact:
+    required: false
+    description: The name of the artifact to store the coverage report.
+    default: coverage
+  coverage_file:
+    required: false
+    description: The name of the coverage report file.
+    default: coverage.txt
+  codecov_token:
+    required: true
+    description: The codecov token used to upload coverage reports
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.coverage_artifact }}
+    - uses: codecov/codecov-action@v5
+      env:
+        CODECOV_TOKEN: ${{ inputs.codecov_token }}
+      with:
+        fail_ci_if_error: true
+        files: ${{ inputs.coverage_file }}
