@@ -1,0 +1,24 @@
+name: Build Node
+
+inputs:
+  build_action:
+    required: false
+    description: The name of the build command in the package file.
+    default: build
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+    - name: install pnpm
+      shell: bash
+      run: npm install -g pnpm
+    - name: install dependencies
+      shell: bash
+      run: pnpm i --frozen-lockfile
+    - name: build
+      shell: bash
+      run: pnpm run ${{ inputs.build_action }}
