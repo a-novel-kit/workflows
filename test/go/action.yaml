@@ -1,0 +1,42 @@
+name: Test Go
+
+inputs:
+  codecov_token:
+    required: true
+    description: The codecov token used to upload coverage reports
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+    - name: Download Go packages
+      shell: bash
+      run: go mod download
+    - name: Run tests
+      shell: bash
+      # Go list has 2 exclusive commands, that only work for a specified use case:
+      # - `go list -m`: list modules (in workspace)
+      # - `go list ./...`: list sub packages
+      #
+      # Since we need a solution to accommodate both cases, I used a workaround;
+      #  - `go list -m` starts by listing every module (usually just one when not working with workspaces)
+      #  - `go list ${mod//$(go list .)/.}/...` list every package inside a given submodule
+      #    - `go list ${package_list}` will print warnings when provided symlinks, which makes the output unusable (until
+      #       its sanitized). To resolve this issue, we just edit out the prefix for each module (which normally equals the
+      #       root module name), to turn those modules into relative paths.
+      #       eg:
+      #         github.com/org/repo -> .
+      #         github.com/org/repo/submodule -> ./submodule
+      run: |
+        GOCOVERTMPDIR="$(mktemp -d)"
+        go test -p 1 -covermode=atomic \
+          $(for mod in $(go list -m); do go list ${mod//$(go list .)/.}/...; done | grep -v /mocks | grep -v /codegen) \
+          -args -test.gocoverdir="$GOCOVERTMPDIR"
+        go tool covdata textfmt -i="$GOCOVERTMPDIR" -o=coverage.txt
+    - name: Upload results to Codecov
+      uses: codecov/codecov-action@v5
+      env:
+        CODECOV_TOKEN: ${{ inputs.CODECOV_TOKEN }}
+      with:
+        fail_ci_if_error: true
