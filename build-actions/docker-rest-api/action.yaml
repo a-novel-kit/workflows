@@ -1,0 +1,136 @@
+name: Build Docker API
+
+inputs:
+  file:
+    required: false
+    description: Path of the dockerfile, relative to repository root.
+    default: "Dockerfile"
+  image_name:
+    required: true
+    description: The name of the image to build.
+  image_tags:
+    required: true
+    description: The tags of the image to build, as a list of comma-separated values.
+  run_args:
+    required: false
+    description: Args to use for the test run of the image.
+  timeout:
+    required: false
+    description: Timeout (in deciseconds) for the container healthcheck.
+    default: "300"
+  tcp_timeout:
+    required: false
+    description: Timeout (in deciseconds) for the tcp healthcheck.
+    default: "600"
+  ping:
+    required: false
+    description: The ping endpoint.
+    default: /v1/ping
+  skip_healthcheck:
+    required: false
+    description: Skip the test run of the image.
+  github_token:
+    required: true
+    description: The GitHub token to use for publication.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: docker/setup-buildx-action@v3
+    - uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github_token }}
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+    - uses: docker/build-push-action@v6
+      with:
+        context: .
+        load: true
+        tags: ghcr.io/${{ inputs.image_name }}:test
+        file: ${{ inputs.file }}
+    - name: Install check tools
+      shell: bash
+      run: sudo apt install curl
+    - name: Test docker image
+      id: local_container
+      shell: bash
+      if: ${{ inputs.skip_healthcheck != 'true' }}
+      run: |
+        docker run -d --network="host" -p 8080:8080 -e PORT=8080 ${{ inputs.run_args }} --name test-container \
+            ghcr.io/${{ inputs.image_name }}:test
+
+        until [ "`docker inspect --type=container -f {{.State.Running}} test-container`" == "true" ]
+        do 
+          ((c++)) && ((c==${{ inputs.timeout }})) && break
+          sleep 0.1
+        done
+
+        if [ "`docker inspect -f {{.State.Running}} test-container`" == "true" ]
+        then
+          echo "Container started successfuly"
+          exit 0
+        else
+          echo "Container failed to report ready status"
+          docker stop test-container
+          echo "Extracting logs"
+          docker logs test-container
+          exit 1
+        fi
+    - name: TCP check
+      if: ${{ success() && inputs.skip_healthcheck != 'true' }}
+      shell: bash
+      run: |
+        while ! curl -s 127.0.0.1:8080${{ inputs.ping }}
+        do 
+          ((c++)) && ((c==${{ inputs.tcp_timeout }})) && break
+          sleep 0.1
+        done
+        curl 127.0.0.1:8080${{ inputs.ping }} || (docker stop test-container && docker logs test-container && exit 1)
+        docker stop test-container
+    - name: Compute tags
+      id: compute_tags
+      shell: bash
+      run: |
+        echo "${{ inputs.image_tags }}" | \
+          sed -n 1'p' | \
+          tr ',' '\n' | \
+          while read word; do 
+            printf "ghcr.io/${{ inputs.image_name }}:$(echo $word | sed 's/[^a-zA-Z0-9]/-/g'),"
+          done | \
+          sed "s/.\{1\}$//" > repo.txt
+         echo "TAGS=$(cat repo.txt)" >> $GITHUB_ENV
+         rm -rf repo.txt
+    - uses: docker/build-push-action@v6
+      if: ${{ success() }}
+      id: build
+      with:
+        context: .
+        push: true
+        tags: ${{ env.TAGS }}
+        annotations:
+        file: ${{ inputs.file }}
+    - uses: actions/attest-build-provenance@v1
+      if: ${{ success() }}
+      with:
+        subject-name: ghcr.io/${{ inputs.image_name }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        push-to-registry: true
+    # Publishing to GitHub registry requires the image to start with owner/repository.
+    # Delete action requires only repository, so we must strip the owner name.
+    - name: Strip owner name
+      id: strip_owner_name
+      shell: bash
+      run: |
+        echo "${{ inputs.image_name }}" | cut -d'/' -f2- > repo.txt
+        echo "REPO_NAME=$(cat repo.txt)" >> $GITHUB_ENV
+        rm -rf repo.txt
+    - uses: actions/delete-package-versions@v5
+      if: ${{ success() }}
+      with:
+        package-name: ${{ env.REPO_NAME }}
+        package-type: "container"
+        min-versions-to-keep: 0
+        delete-only-untagged-versions: true

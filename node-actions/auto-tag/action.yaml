@@ -1,0 +1,51 @@
+name: Auto tag
+
+inputs:
+  package_path:
+    required: false
+    description: The path to the package.json file.
+    default: ./package.json
+  pat:
+    required: true
+    description: The personal access token to use for the action.
+    default: ${{ github.token }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: "0"
+        token: ${{ inputs.pat }}
+    - name: Get package.json version
+      id: get_version
+      shell: bash
+      run: |
+        # The leading 'v' is super important, don't miss it future editor.
+        PACKAGE_VERSION="v$(node -p "require('${{ inputs.package_path }}').version")"
+        echo "version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+    - name: Fetch latest tag
+      shell: bash
+      id: get_latest_tag
+      run: |
+        echo "tag=$(git describe --tags `git rev-list --tags --max-count=1` || echo 'v0.0.0')" >> $GITHUB_OUTPUT
+    - name: Compare package.production.json version with latest tag
+      shell: bash
+      id: compare_versions
+      run: |
+        npm install -g pnpm
+        pnpm i --frozen-lockfile
+        pnpm add semver
+        COMPARE="$(node -p "require('semver').gt('${{ steps.get_version.outputs.version }}', '${{ steps.get_latest_tag.outputs.tag }}')")"
+        echo "compare=$COMPARE" >> $GITHUB_OUTPUT
+    - name: Create tag
+      if: steps.compare_versions.outputs.compare == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.pat }}
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        git tag ${{ steps.get_version.outputs.version }}
+        git push origin ${{ steps.get_version.outputs.version }}

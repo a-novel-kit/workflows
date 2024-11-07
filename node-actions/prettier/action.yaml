@@ -1,0 +1,44 @@
+name: Prettier
+
+inputs:
+  working-directory:
+    required: false
+    description: The working directory to run the scan from.
+    default: .
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+    - name: setup pnpm version
+      id: pnpm_version
+      shell: bash
+      run: |
+        pnpmVer="pnpm@$(npm view pnpm version)"
+
+        # If their is a package json and a packageManager field inside, use it for the installation
+        if [ -e package.json ]
+        then
+          pnpmVer=$(jq --arg pnpmVer -r '.packageManager // $pnpmVer' package.json | cut -d '"' -f 2)
+        fi
+
+        prefix="pnpm@"
+
+        echo "ver=${pnpmVer#$prefix}" >> $GITHUB_OUTPUT
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ steps.pnpm_version.outputs.ver }}
+    - name: prettier
+      shell: bash
+      run: |
+        # If run from a repository that has a package.json file, install its dependencies.
+        if [ -e package.json ]
+        then
+          pnpm install --frozen-lockfile
+        fi
+
+        npx prettier ${{ inputs.working-directory }} --check

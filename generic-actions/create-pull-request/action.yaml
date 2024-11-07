@@ -1,0 +1,58 @@
+name: Create pull request
+
+inputs:
+  branch:
+    required: true
+    description: The branch to create the pull request from.
+  base_branch:
+    required: false
+    description: The branch to create the pull request to.
+    default: ${{ github.event.repository.default_branch }}
+  commit_message:
+    required: true
+    description: The commit message to use when committing changes.
+  pr_message:
+    required: false
+    description: The message to use when creating the pull request. Defaults to the commit message.
+  pr_body:
+    required: false
+    description: The body to use when creating the pull request.
+    default: "Created by Github action"
+  auto_merge:
+    required: false
+    description: Whether to auto-merge the pull request.
+    default: "false"
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  pat:
+    required: true
+    description: The personal access token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/create-commit@master
+      id: commit
+      with:
+        commit_message: ${{ inputs.commit_message }}
+        pat: ${{ inputs.pat }}
+        branch: ${{ inputs.branch }}
+    - name: create pull request
+      if: steps.commit.outputs.diff == '1'
+      shell: bash
+      run: |
+        gh pr create -B "${{ inputs.base_branch }}" \
+          -H "${{ inputs.branch }}" \
+          --title "${{ inputs.pr_message || inputs.commit_message }}" \
+          --body "${{ inputs.pr_body }}" > prurl.txt
+
+        echo "PR_URL=$(cat prurl.txt)" >> $GITHUB_ENV
+      env:
+        GH_TOKEN: ${{ inputs.pat }}
+    - uses: a-novel-kit/workflows/generic-actions/auto-merge@master
+      if: steps.commit.outputs.diff == '1' && inputs.auto_merge == 'true'
+      with:
+        pull_request: ${{ env.PR_URL }}
+        pat: ${{ inputs.pat }}
+        github_token: ${{ inputs.github_token }}
