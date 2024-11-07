@@ -1,0 +1,21 @@
+name: lint openapi
+
+inputs:
+  doc:
+    description: The path to the OpenAPI document
+    required: false
+    default: docs/api.yaml
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+    - name: install Redocly CLI
+      shell: bash
+      run: npm install -g @redocly/cli@latest
+    - name: lint
+      shell: bash
+      run: redocly lint ${{ inputs.doc }} --format=github-actions

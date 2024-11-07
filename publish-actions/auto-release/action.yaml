@@ -1,0 +1,20 @@
+name: auto release
+
+inputs:
+  github_token:
+    required: true
+    description: The GitHub token to use for deleting old images
+
+runs:
+  using: "composite"
+  steps:
+    - name: create release
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        tag: ${{ github.ref_name }}
+      shell: bash
+      run: |
+        gh release create "$tag" \
+            --repo="${{ github.repository }}" \
+            --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
+            --generate-notes

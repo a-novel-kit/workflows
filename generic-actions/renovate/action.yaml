@@ -1,0 +1,51 @@
+name: self-hosted renovate
+
+inputs:
+  allowed_commands:
+    required: false
+    description: Specify allowed commands for renovate post update actions.
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+      id: app_token
+      with:
+        app_id: ${{ inputs.app_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+    - name: self-hosted renovate
+      uses: renovatebot/github-action@v43.0.5
+      with:
+        token: ${{ steps.app_token.outputs.token }}
+        docker-network: ${{ job.container.network }}
+      env:
+        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
+        RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
+        RENOVATE_PR_HOURLY_LIMIT: 0
+        LOG_LEVEL: debug
+        # NPM internal registries.
+        RENOVATE_DETECT_HOST_RULES_FROM_ENV: true
+        RENOVATE_NPM_NPM_PKG_GITHUB_COM_TOKEN: ${{ inputs.github_token }}
+        RENOVATE_SECRETS: '{"GITHUB_TOKEN": "${{ inputs.github_token }}"}'
+        RENOVATE_CUSTOM_ENV_VARIABLES: '{"GITHUB_TOKEN": "''{{ secrets.GITHUB_TOKEN }}''"}'
+        RENOVATE_ALLOW_SCRIPTS: true
+        RENOVATE_ASSIGN_AUTOMERGE: true
+        RENOVATE_ASSIGNEES_FROM_CODE_OWNERS: true
+        RENOVATE_LABELS: "['dependencies', 'renovate']"
+        RENOVATE_PACKAGE_RULES: >
+          [
+            {
+              "description": "Automerge updates",
+              "matchPackageNames": ["!major"],
+              "automerge": true
+            }
+          ]

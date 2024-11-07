@@ -1,0 +1,27 @@
+name: lint go
+
+inputs:
+  golangci_lint_artifact:
+    required: false
+    description: The name of the artifact to store the lint report.
+    default: go-lint
+  golangci_lint_file:
+    required: false
+    description: The name of the lint report file.
+    default: golangci-lint-report.xml
+  working-directory:
+    required: false
+    description: The working directory to run the scan from.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+    - uses: golangci/golangci-lint-action@v8
+      with:
+        args: --output.checkstyle.path=${{ inputs.golangci_lint_file }}
+        version: latest
+        working-directory: ${{ inputs.working-directory }}

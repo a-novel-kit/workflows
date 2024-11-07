@@ -1,0 +1,42 @@
+name: lint node
+
+inputs:
+  lint_action:
+    required: false
+    description: The name of the lint command in the package file.
+    default: lint
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+      id: app_token
+      with:
+        app_id: ${{ inputs.app_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+    - name: install pnpm
+      shell: bash
+      run: npm install -g pnpm
+    - name: setup github registry
+      shell: bash
+      run: |
+        pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
+        pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
+    - name: install dependencies
+      shell: bash
+      run: pnpm i --frozen-lockfile
+    - name: run lint
+      shell: bash
+      run: pnpm run ${{ inputs.lint_action }}

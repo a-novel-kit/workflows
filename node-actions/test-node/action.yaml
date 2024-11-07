@@ -1,0 +1,55 @@
+name: test node
+
+inputs:
+  test_action:
+    required: false
+    description: The name of the test command in the package file.
+    default: test
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+  coverage_artifact:
+    required: false
+    description: The name of the artifact to store the coverage report.
+    default: coverage
+  coverage_file:
+    required: false
+    description: The name of the coverage report file.
+    default: coverage/*
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+      id: app_token
+      with:
+        app_id: ${{ inputs.app_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+    - name: install pnpm
+      shell: bash
+      run: npm install -g pnpm
+    - name: setup github registry
+      shell: bash
+      run: |
+        pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
+        pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
+    - name: install dependencies
+      shell: bash
+      run: pnpm i --frozen-lockfile
+    - name: run lint
+      shell: bash
+      run: pnpm run ${{ inputs.test_action }}
+    - name: Archive code coverage results
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.coverage_artifact }}
+        path: ${{ inputs.coverage_file }}

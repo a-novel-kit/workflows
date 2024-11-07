@@ -1,0 +1,58 @@
+name: publish storybook page
+
+inputs:
+  cmd:
+    description: The pnpm command used to build the Storybook site
+    required: false
+    default: storybook:build
+  build_path:
+    description: The path to the directory that contains statically generated files.
+    required: false
+    default: dist/storybook
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+
+outputs:
+  page_url:
+    description: The URL where the github page is published
+    value: ${{ steps.deployment.outputs.page_url }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+      id: app_token
+      with:
+        app_id: ${{ inputs.app_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        # choose node.js version to use
+        node-version: latest
+        # cache deps for pnpm
+        cache: pnpm
+    - name: setup github registry
+      shell: bash
+      run: |
+        pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
+        pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
+    - name: install deps
+      shell: bash
+      run: pnpm install --frozen-lockfile
+    - name: build storybook
+      shell: bash
+      run: pnpm run ${{ inputs.cmd }}
+    - uses: actions/upload-pages-artifact@v3
+      with:
+        path: ${{ inputs.build_path }}
+    - uses: actions/configure-pages@v5
+    - id: deployment
+      uses: actions/deploy-pages@v4

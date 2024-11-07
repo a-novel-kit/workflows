@@ -1,0 +1,23 @@
+name: publish static page
+
+inputs:
+  build:
+    description: The path to the directory that contains statically generated files
+    required: false
+    default: docs
+
+outputs:
+  page_url:
+    description: The URL where the github page is published
+    value: ${{ steps.deployment.outputs.page_url }}
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/configure-pages@v5
+    - uses: actions/upload-pages-artifact@v3
+      with:
+        path: ${{ inputs.build }}
+    - id: deployment
+      uses: actions/deploy-pages@v4

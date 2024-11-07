@@ -1,0 +1,25 @@
+name: approve bot
+description: Automatically approves a pull request. Make sure to only enable this for a specific set of users.
+
+inputs:
+  pull_request:
+    required: true
+    description: The URL of the pull request to be merged.
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - name: approve PR
+      shell: bash
+      run: |
+        gh pr checkout "$PR_URL" # sets the upstream metadata for `gh pr status`
+        if [ "$(gh pr status --json reviewDecision -q .currentBranch.reviewDecision)" != "APPROVED" ];
+        then gh pr review --approve "$PR_URL"
+        else echo "PR already approved, skipping additional approvals to minimize emails/notification noise.";
+        fi
+      env:
+        PR_URL: ${{ inputs.pull_request }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}

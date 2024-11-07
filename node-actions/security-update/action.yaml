@@ -1,0 +1,84 @@
+name: security update node
+
+inputs:
+  publish_action:
+    required: false
+    description: The name of the patch publish command in the package file.
+    default: "publish:patch"
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+  min_days_since_last_release:
+    required: false
+    description: The minimum number of days since the last release to trigger a security update.
+    default: 3
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+      id: app_token
+      with:
+        app_id: ${{ inputs.app_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+        registry-url: "https://npm.pkg.github.com"
+    - name: install pnpm
+      shell: bash
+      run: npm install -g pnpm
+    - name: setup github registry
+      shell: bash
+      run: |
+        pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
+        pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
+    - name: install dependencies
+      shell: bash
+      run: pnpm i --frozen-lockfile
+    - name: get github app user id
+      id: app_user_id
+      shell: bash
+      run: echo "user_id=$(gh api "/users/${{ steps.app_token.outputs.app_login }}" --jq .id)" >> "$GITHUB_OUTPUT"
+      env:
+        GH_TOKEN: ${{ steps.app_token.outputs.token }}
+    - name: publish security update
+      shell: bash
+      run: |
+        # Get latest release.
+        latest="$(gh release view --json createdAt -q ".createdAt" || "")"
+
+        if [ -z "$latest" ]; then
+          echo "No releases found, skipping security update."
+          exit 0
+        fi
+
+        # Check if the latest release is older than x days.
+        latest_ts="$(date -d "$latest" +%s)"
+        now_ts="$(date +%s)"
+        days_ago_ts=$((now_ts - ${{ inputs.min_days_since_last_release }} * 86400)) # 86400 seconds in a day
+
+        if [ "$latest_ts" -gt "$days_ago_ts" ]; then
+          echo "Latest release is less than ${{ inputs.min_days_since_last_release }} days old, skipping security update."
+          exit 0
+        fi
+
+        # Check if there are any changes since the last release.
+        latest_commit_ts="$(date -d "$(git --no-pager log -1 --format="%ai")" +%s)"
+
+        if [ "$latest_commit_ts" -gt "$days_ago_ts" ]; then
+          git config url."https:///x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf https://github.com/
+          git config user.name "${{ steps.app_token.outputs.app_login }}"
+          git config user.email "${{ steps.app_user_id.outputs.user_id }}+${{ steps.app_token.outputs.app_login }}@users.noreply.github.com"
+          pnpm run ${{ inputs.publish_action }}
+        else
+          echo "No changes found since latest release, skipping security update."
+        fi
+      env:
+        GH_TOKEN: ${{ steps.app_token.outputs.token }}

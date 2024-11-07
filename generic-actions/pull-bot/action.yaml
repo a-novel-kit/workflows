@@ -1,0 +1,43 @@
+name: pull bot
+
+inputs:
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+  fetch_depth:
+    required: false
+    description: Number of commits to fetch. 0 indicates all history for all branches and tags.
+    default: "1"
+  fetch_tags:
+    required: false
+    description: Whether to fetch tags, even if fetch-depth > 0.
+    default: "false"
+
+outputs:
+  token:
+    description: The bot token.
+    value: ${{ steps.get_token.outputs.token  }}
+  app_login:
+    description: The login name of the bot.
+    value: ${{ steps.get_token.outputs.app-slug }}[bot]
+
+runs:
+  using: "composite"
+  steps:
+    - name: get app token
+      id: get_token
+      uses: actions/create-github-app-token@v1
+      with:
+        private-key: ${{ inputs.app_private_key }}
+        app-id: ${{ inputs.app_id }}
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ steps.get_token.outputs.token }}
+        ref: ${{ github.head_ref }}
+        # Make sure the value of GITHUB_TOKEN will not be persisted in repo's config
+        persist-credentials: false
+        fetch-depth: ${{ inputs.fetch_depth }}
+        fetch-tags: ${{ inputs.fetch_tags }}

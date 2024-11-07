@@ -1,0 +1,59 @@
+name: lint prettier
+
+inputs:
+  working-directory:
+    required: false
+    description: The working directory to run the scan from.
+    default: .
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: THe Github App ID.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+      id: app_token
+      with:
+        app_id: ${{ inputs.app_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+    - uses: actions/setup-node@v4
+      with:
+        node-version: latest
+    - name: setup pnpm version
+      id: pnpm_version
+      shell: bash
+      run: |
+        pnpmVer="pnpm@$(npm view pnpm version)"
+
+        # If their is a package json and a packageManager field inside, use it for the installation
+        if [ -e package.json ]
+        then
+          pnpmVer=$(jq --arg pnpmVer -r '.packageManager // $pnpmVer' package.json | cut -d '"' -f 2)
+        fi
+
+        prefix="pnpm@"
+
+        echo "ver=${pnpmVer#$prefix}" >> $GITHUB_OUTPUT
+    - name: setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ steps.pnpm_version.outputs.ver }}
+    - name: prettier
+      shell: bash
+      run: |
+        # If run from a repository that has a package.json file, install its dependencies.
+        if [ -e package.json ]
+        then
+          pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
+          pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
+          pnpm install --frozen-lockfile
+        fi
+
+        npx prettier ${{ inputs.working-directory }} --check

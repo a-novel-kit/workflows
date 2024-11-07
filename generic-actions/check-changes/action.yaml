@@ -1,0 +1,41 @@
+name: check changes
+description: Check if there are uncommitted changes in the pathspec.
+
+inputs:
+  pathspec:
+    description: "The pathspec to check for uncommitted changes. Defaults to the current directory."
+    required: false
+    default: "."
+  fail_on_changes:
+    description: "Whether to fail the action if there are uncommitted changes. Defaults to true."
+    required: false
+    default: "true"
+  fail_message:
+    description: "The message to display if there are uncommitted changes. Defaults to 'Uncommitted changes found in the pathspec.'"
+    required: false
+    default: "Uncommitted changes found in the pathspec."
+
+outputs:
+  diff:
+    description: "Whether or not there are uncommitted changes in the pathspec"
+    value: ${{ steps.check_diff.outputs.diff }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: check diff
+      id: check_diff
+      shell: bash
+      run: |
+        if [ -z "$(git status --porcelain -- ${{ inputs.pathspec }})" ];
+        then
+          exit 0
+        else 
+          echo "diff=1" >> $GITHUB_OUTPUT
+        fi
+    - name: fail if changes
+      if: inputs.fail_on_changes == 'true' && steps.check_diff.outputs.diff == '1'
+      shell: bash
+      run: |
+        echo "${{ inputs.fail_message }}"
+        exit 1
