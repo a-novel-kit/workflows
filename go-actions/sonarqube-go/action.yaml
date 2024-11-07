@@ -1,0 +1,60 @@
+name: Sonarqube Go
+
+inputs:
+  test_artifact:
+    required: false
+    description: The name of the artifact to store the test report.
+    default: go-test
+  coverage_artifact:
+    required: false
+    description: The name of the artifact to store the coverage report.
+    default: go-coverage
+  golangci_lint_artifact:
+    required: false
+    description: The name of the artifact to store the lint report.
+    default: go-lint
+  test_file:
+    required: false
+    description: The name of the test report file.
+    default: tests.json
+  coverage_file:
+    required: false
+    description: The name of the coverage report file.
+    default: coverage.txt
+  golangci_lint_file:
+    required: false
+    description: The name of the lint report file.
+    default: golangci-lint-report.xml
+  sonarqube_token:
+    required: true
+    description: The Sonarqube token used to upload coverage reports
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        # Disabling shallow clones is recommended for improving the relevancy of reporting
+        fetch-depth: 0
+    - uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.test_artifact }}
+    - uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.coverage_artifact }}
+    - uses: actions/download-artifact@v4
+      if: ${{ inputs.golangci_lint_artifact != '' }}
+      with:
+        name: ${{ inputs.golangci_lint_artifact }}
+    - name: Normalize coverage file name
+      shell: bash
+      if: ${{ inputs.coverage_file != 'coverage.out' }}
+      run: |
+        mv ${{ inputs.coverage_file }} coverage.out
+    - name: SonarQube Scan
+      uses: SonarSource/sonarqube-scan-action@master
+      env:
+        SONAR_TEST_REPORT_PATH: ${{ inputs.test_file }}
+        SONAR_COVERAGE_REPORT_PATH: coverage.out
+        SONAR_LINT_REPORT_PATH: ${{ inputs.golangci_lint_file }}
+        SONAR_TOKEN: ${{ inputs.sonarqube_token }}

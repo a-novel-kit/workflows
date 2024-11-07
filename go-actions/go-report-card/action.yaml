@@ -1,0 +1,8 @@
+name: Go Report Card
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Update report card
+      shell: bash
+      run: curl -X POST -F "repo=github.com/${{ github.repository }}" https://goreportcard.com/checks
