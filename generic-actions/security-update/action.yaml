@@ -56,7 +56,7 @@ runs:
         if [ "$latest_commit_ts" -gt "$days_ago_ts" ]; then
           curtag="$(gh release view --json tagName -q ".tagName")"
           curtag="${curtag/v/}"
-        
+
           IFS='.' read -a vers <<< "$curtag"
 
           maj=${vers[0]}
@@ -65,11 +65,11 @@ runs:
 
           patch=$((patch + 1))
           newtag="$maj.$min.$patch"
-        
+
           git config url."https:///x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf https://github.com/
           git config user.name "${{ steps.app_token.outputs.app_login }}"
           git config user.email "${{ steps.app_user_id.outputs.user_id }}+${{ steps.app_token.outputs.app_login }}@users.noreply.github.com"
-        
+
           git tag -a $newtag -m $newtag
           git push origin $newtag
         else
