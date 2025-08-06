@@ -29,7 +29,7 @@ runs:
   steps:
     - name: get app token
       id: get_token
-      uses: actions/create-github-app-token@v1
+      uses: actions/create-github-app-token@v2
       with:
         private-key: ${{ inputs.app_private_key }}
         app-id: ${{ inputs.app_id }}
