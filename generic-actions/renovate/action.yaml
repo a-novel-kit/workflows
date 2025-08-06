@@ -48,6 +48,13 @@ runs:
               "description": "Automerge updates",
               "matchPackageNames": ["!major"],
               "automerge": true
+            },
+            {
+              "description": "Always bump go version",
+              "matchManagers": ["gomod"],
+              "matchDepNames": ["go"],
+              "matchDepTypes": ["golang"],
+              "rangeStrategy": "bump"
             }
           ]
         # NPM internal registries.
