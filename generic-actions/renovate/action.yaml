@@ -55,6 +55,18 @@ runs:
               "matchDepNames": ["go"],
               "matchDepTypes": ["golang"],
               "rangeStrategy": "bump"
+            },
+            {
+              "matchPackageNames": ["/.*a-novel\\/service-json-keys.*/"],
+              "groupName": "service json keys"
+            },
+            {
+              "matchPackageNames": ["/.*a-novel\\/service-authentication.*/"],
+              "groupName": "service authentication"
+            },
+            {
+              "matchPackageNames": ["/.*a-novel\\/service-story-schematics.*/"],
+              "groupName": "service story-schematics"
             }
           ]
         # NPM internal registries.
