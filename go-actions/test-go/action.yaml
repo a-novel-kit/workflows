@@ -58,13 +58,10 @@ runs:
         fi
 
         echo "MODULES=$(cat modules.txt | tr '\n' ' ')" >> $GITHUB_ENV
-    - name: install gotestsum
-      shell: bash
-      run: go install gotest.tools/gotestsum@latest
     - name: run tests
       shell: bash
       run: |
-        go run gotest.tools/gotestsum@latest --jsonfile ${{ inputs.test_file }} --format pkgname \
+        go tool gotestsum --jsonfile ${{ inputs.test_file }} --format pkgname \
           -- -count=1 -cover -coverprofile=${{ inputs.coverage_file }} -json ${{ env.MODULES }}
 
         go tool cover -func ${{ inputs.coverage_file }}
