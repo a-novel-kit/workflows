@@ -21,6 +21,7 @@ runs:
     - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
       id: app_token
       with:
+        fetch_depth: 0
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
     - name: get github app user id
@@ -53,7 +54,7 @@ runs:
         # Check if there are any changes since the last release.
         latest_commit_ts="$(date -d "$(git --no-pager log -1 --format="%ai")" +%s)"
 
-        if [ "$latest_commit_ts" -gt "$days_ago_ts" ]; then
+        if [ "$latest_commit_ts" -gt "$latest_ts" ]; then
           curtag="$(gh release view --json tagName -q ".tagName")"
           curtag="${curtag/v/}"
 
