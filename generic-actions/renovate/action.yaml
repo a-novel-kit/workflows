@@ -72,5 +72,3 @@ runs:
         # NPM internal registries.
         RENOVATE_DETECT_HOST_RULES_FROM_ENV: true
         RENOVATE_NPM_NPM_PKG_GITHUB_COM_TOKEN: ${{ inputs.github_token }}
-        # Go registry
-        GOPROXY: direct
