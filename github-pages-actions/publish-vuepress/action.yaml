@@ -46,7 +46,7 @@ runs:
       working-directory: ${{ inputs.working_directory }}
       shell: bash
       run: pnpm ${{ inputs.cmd }}
-    - uses: actions/upload-pages-artifact@v3
+    - uses: actions/upload-pages-artifact@v4
       with:
         path: ${{ inputs.build_path }}
     - uses: actions/configure-pages@v5
