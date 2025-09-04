@@ -4,7 +4,7 @@ runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v5
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
     - name: install sqlfluff
       shell: bash
       run: pip install sqlfluff
