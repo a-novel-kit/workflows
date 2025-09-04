@@ -33,7 +33,7 @@ runs:
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
     - uses: pnpm/action-setup@v4
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v5
       with:
         # choose node.js version to use
         node-version: latest
