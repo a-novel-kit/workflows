@@ -23,7 +23,7 @@ runs:
       with:
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v5
       with:
         node-version: latest
     - name: install pnpm

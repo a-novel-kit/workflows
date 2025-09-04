@@ -28,7 +28,7 @@ runs:
         fetch_depth: 0
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v5
       with:
         node-version: latest
         registry-url: "https://npm.pkg.github.com"
