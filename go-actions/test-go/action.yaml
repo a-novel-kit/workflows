@@ -34,7 +34,7 @@ runs:
   steps:
     - uses: actions/checkout@v5
       if: ${{ inputs.skip_setup != 'true' }}
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@v6
       if: ${{ inputs.skip_setup != 'true' }}
       with:
         go-version: stable
