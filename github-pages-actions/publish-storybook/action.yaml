@@ -35,9 +35,8 @@ runs:
     - uses: pnpm/action-setup@v4
     - uses: actions/setup-node@v5
       with:
-        # choose node.js version to use
+        package-manager-cache: false
         node-version: latest
-        # cache deps for pnpm
         cache: pnpm
     - name: setup github registry
       shell: bash
