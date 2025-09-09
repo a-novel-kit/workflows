@@ -23,12 +23,12 @@ runs:
       with:
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
+    - uses: pnpm/action-setup@v4
     - uses: actions/setup-node@v5
       with:
+        package-manager-cache: false
         node-version: latest
-    - name: install pnpm
-      shell: bash
-      run: npm install -g pnpm
+        cache: pnpm
     - name: setup github registry
       shell: bash
       run: |
