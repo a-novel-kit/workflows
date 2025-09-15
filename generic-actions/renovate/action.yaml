@@ -23,7 +23,7 @@ runs:
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
     - name: self-hosted renovate
-      uses: renovatebot/github-action@v43.0.11
+      uses: renovatebot/github-action@v43.0.12
       with:
         token: ${{ steps.app_token.outputs.token }}
         docker-network: ${{ job.container.network }}
