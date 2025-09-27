@@ -67,6 +67,10 @@ runs:
             {
               "matchPackageNames": ["/.*a-novel\\/service-story-schematics.*/"],
               "groupName": "service story-schematics"
+            },
+            {
+              "matchPackageNames": ["/.playwright.*/"],
+              "groupName": "playwright"
             }
           ]
         # NPM internal registries.
