@@ -24,7 +24,7 @@ runs:
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
     - uses: pnpm/action-setup@v4
-    - uses: actions/setup-node@v5
+    - uses: actions/setup-node@v6
       with:
         package-manager-cache: false
         node-version: latest
