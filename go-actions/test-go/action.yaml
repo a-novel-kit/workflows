@@ -66,12 +66,12 @@ runs:
 
         go tool cover -func ${{ inputs.coverage_file }}
     - name: archive code coverage results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: ${{ inputs.coverage_artifact }}
         path: ${{ inputs.coverage_file }}
     - name: archive test results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v5
       with:
         name: ${{ inputs.test_artifact }}
         path: ${{ inputs.test_file }}
