@@ -20,7 +20,7 @@ runs:
     - uses: actions/setup-go@v6
       with:
         go-version: stable
-    - uses: golangci/golangci-lint-action@v8
+    - uses: golangci/golangci-lint-action@v9
       with:
         args: --output.checkstyle.path=${{ inputs.golangci_lint_file }}
         version: latest
