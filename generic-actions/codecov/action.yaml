@@ -5,11 +5,12 @@ inputs:
   coverage_artifact:
     required: false
     description: The name of the artifact to store the coverage report.
-    default: coverage
-  coverage_file:
+  coverage_artifact_ids:
+    required: false
+    description: The ids of the coverage report file.
+  coverage_files:
     required: false
     description: The name of the coverage report file.
-    default: coverage.txt
   codecov_token:
     required: true
     description: The codecov token used to upload coverage reports
@@ -21,9 +22,10 @@ runs:
     - uses: actions/download-artifact@v6
       with:
         name: ${{ inputs.coverage_artifact }}
+        artifact-ids: ${{ inputs.coverage_artifact_ids }}
     - uses: codecov/codecov-action@v5
       env:
         CODECOV_TOKEN: ${{ inputs.codecov_token }}
       with:
         fail_ci_if_error: true
-        files: ${{ inputs.coverage_file }}
+        files: ${{ inputs.coverage_files }}

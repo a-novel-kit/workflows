@@ -23,6 +23,11 @@ inputs:
     description: The name of the coverage report file.
     default: coverage/*
 
+outputs:
+  artifact-id:
+    description: The coverage artifact id.
+    value: ${{ steps.upload-artifact.outputs.artifact-id }}
+
 runs:
   using: "composite"
   steps:
@@ -49,6 +54,7 @@ runs:
       shell: bash
       run: pnpm run ${{ inputs.test_action }}
     - name: Archive code coverage results
+      id: upload-artifact
       uses: actions/upload-artifact@v5
       with:
         name: ${{ inputs.coverage_artifact }}
