@@ -5,10 +5,6 @@ inputs:
     required: false
     description: The arguments to pass to the test command.
     default: -p 1 -race
-  ignore_patterns:
-    required: false
-    description: A list of patterns to ignore when running tests.
-    default: /mocks,/codegen,/test
   test_artifact:
     required: false
     description: The name of the artifact to store the test report.
@@ -28,6 +24,14 @@ inputs:
   skip_setup:
     required: false
     description: Skip the setup steps.
+  filter_patterns:
+    required: false
+    description: The file patterns to filter.
+    default: "| grep -v /mocks | grep -v /test | grep -v /proto"
+  filter_extra_patterns:
+    required: false
+    description: The file patterns to filter, appended to filter_patterns.
+    default: ""
 
 outputs:
   artifact-id:
@@ -53,15 +57,7 @@ runs:
       run: |
         # List all modules using `go list -m`, and for each module, list every package.
         # The extra `go list -m` steps is used to discover multiple modules when working with workspaces.
-        echo "$(for mod in $(go list -m); do go list ${mod//$(go list .)/.}/...; done)" > modules.txt
-
-        # Auto filter out any modules that match the ignore_patterns.
-        if [ -n "${{ inputs.ignore_patterns }}" ]; then
-          echo "${{ inputs.ignore_patterns }}" | sed -n 1'p' | tr ',' '\n' | while read word; do
-            echo "$(cat modules.txt | grep -v ${word})" > modules.txt
-          done
-        fi
-
+        echo "$(for mod in $(go list -m); do go list ${mod//$(go list .)/.}/... ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }}; done)" > modules.txt
         echo "MODULES=$(cat modules.txt | tr '\n' ' ')" >> $GITHUB_ENV
     - name: run tests
       shell: bash
