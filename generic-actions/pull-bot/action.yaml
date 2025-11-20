@@ -33,7 +33,7 @@ runs:
       with:
         private-key: ${{ inputs.app_private_key }}
         app-id: ${{ inputs.app_id }}
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         token: ${{ steps.get_token.outputs.token }}
         ref: ${{ github.head_ref }}
