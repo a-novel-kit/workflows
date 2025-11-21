@@ -1,2 +1,2 @@
 format:
-	npx -y prettier . --write
+	pnpm format
