@@ -27,7 +27,7 @@ runs:
     - uses: actions/setup-node@v6
       with:
         package-manager-cache: false
-        node-version: latest
+        node-version: "lts/*"
         cache: pnpm
     - name: setup github registry
       shell: bash

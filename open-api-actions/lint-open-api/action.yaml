@@ -13,7 +13,7 @@ runs:
     - uses: pnpm/action-setup@v4
     - uses: actions/setup-node@v6
       with:
-        node-version: latest
+        node-version: "lts/*"
     - name: install Redocly CLI
       shell: bash
       run: npm install -g @redocly/cli@latest
