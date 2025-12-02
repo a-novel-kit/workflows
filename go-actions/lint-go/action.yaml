@@ -19,7 +19,7 @@ runs:
     - uses: actions/checkout@v6
     - uses: actions/setup-go@v6
       with:
-        go-version: stable
+        go-version-file: "go.mod"
     - uses: golangci/golangci-lint-action@v9
       with:
         args: --output.checkstyle.path=${{ inputs.golangci_lint_file }}

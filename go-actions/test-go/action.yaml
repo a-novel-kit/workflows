@@ -46,7 +46,7 @@ runs:
     - uses: actions/setup-go@v6
       if: ${{ inputs.skip_setup != 'true' }}
       with:
-        go-version: stable
+        go-version-file: "go.mod"
     - name: download go packages
       if: ${{ inputs.skip_setup != 'true' }}
       shell: bash
