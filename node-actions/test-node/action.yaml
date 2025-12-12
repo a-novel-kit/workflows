@@ -56,7 +56,7 @@ runs:
       run: pnpm run ${{ inputs.test_action }}
     - name: Archive code coverage results
       id: upload-artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ inputs.coverage_artifact }}
         path: ${{ inputs.coverage_file }}
