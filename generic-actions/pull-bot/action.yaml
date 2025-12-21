@@ -6,7 +6,7 @@ inputs:
     description: The Github App private key.
   app_id:
     required: true
-    description: THe Github App ID.
+    description: The Github App ID.
   fetch_depth:
     required: false
     description: Number of commits to fetch. 0 indicates all history for all branches and tags.

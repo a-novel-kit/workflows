@@ -13,7 +13,7 @@ inputs:
     description: The Github App private key.
   app_id:
     required: true
-    description: THe Github App ID.
+    description: The Github App ID.
   coverage_artifact:
     required: false
     description: The name of the artifact to store the coverage report.
@@ -31,27 +31,13 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+    - uses: a-novel-kit/workflows/node-actions/setup-node@master
       id: app_token
       with:
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
-    - uses: pnpm/action-setup@v4
-    - uses: actions/setup-node@v6
-      with:
-        package-manager-cache: false
-        node-version: "lts/*"
-        cache: pnpm
-    - name: setup github registry
-      shell: bash
-      run: |
-        pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
-        pnpm config set "@a-novel-kit:registry" "https://npm.pkg.github.com"
-        pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
-    - name: install dependencies
-      shell: bash
-      run: pnpm i --frozen-lockfile
-    - name: run lint
+        github_token: ${{ inputs.github_token }}
+    - name: run test
       shell: bash
       run: pnpm run ${{ inputs.test_action }}
     - name: Archive code coverage results
