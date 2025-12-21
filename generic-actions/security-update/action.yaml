@@ -9,7 +9,7 @@ inputs:
     description: The Github App private key.
   app_id:
     required: true
-    description: THe Github App ID.
+    description: The Github App ID.
   min_days_since_last_release:
     required: false
     description: The minimum number of days since the last release to trigger a security update.

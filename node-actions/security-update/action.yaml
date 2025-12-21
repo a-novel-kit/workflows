@@ -13,7 +13,7 @@ inputs:
     description: The Github App private key.
   app_id:
     required: true
-    description: THe Github App ID.
+    description: The Github App ID.
   min_days_since_last_release:
     required: false
     description: The minimum number of days since the last release to trigger a security update.
@@ -22,28 +22,12 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@master
+    - uses: a-novel-kit/workflows/node-actions/setup-node@master
       id: app_token
       with:
-        fetch_depth: 0
         app_id: ${{ inputs.app_id }}
         app_private_key: ${{ inputs.app_private_key }}
-    - uses: pnpm/action-setup@v4
-    - uses: actions/setup-node@v6
-      with:
-        package-manager-cache: false
-        node-version: "lts/*"
-        cache: pnpm
-        registry-url: "https://npm.pkg.github.com"
-    - name: setup github registry
-      shell: bash
-      run: |
-        pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
-        pnpm config set "@a-novel-kit:registry" "https://npm.pkg.github.com"
-        pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
-    - name: install dependencies
-      shell: bash
-      run: pnpm i --frozen-lockfile
+        github_token: ${{ inputs.github_token }}
     - name: get github app user id
       id: app_user_id
       shell: bash
