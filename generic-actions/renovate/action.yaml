@@ -69,7 +69,7 @@ runs:
               "groupName": "service story-schematics"
             },
             {
-              "matchPackageNames": ["/^github.com\\/uptrace\\/bun$/","/^github.com\\/uptrace\\/bun\\/.*/"],
+              "matchPackageNames": ["/.*github.com\\/uptrace\\/bun.*/"],
               "groupName": "uptrace/bun"
             },
             {
