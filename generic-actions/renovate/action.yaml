@@ -57,6 +57,10 @@ runs:
               "rangeStrategy": "bump"
             },
             {
+              "matchPackageNames": ["/.*a-novel-kit\\/nodelib.*/"],
+              "groupName": "nodelib"
+            },
+            {
               "matchPackageNames": ["/.*a-novel\\/service-json-keys.*/"],
               "groupName": "service json keys"
             },
@@ -65,8 +69,16 @@ runs:
               "groupName": "service authentication"
             },
             {
-              "matchPackageNames": ["/.*a-novel\\/service-story-schematics.*/"],
-              "groupName": "service story-schematics"
+              "matchPackageNames": ["/.*a-novel\\/service-narrative-engine.*/"],
+              "groupName": "service narrative engine"
+            },
+            {
+              "matchPackageNames": ["/.*a-novel\\/platform-authentication.*/"],
+              "groupName": "platform authentication"
+            },
+            {
+              "matchPackageNames": ["/.*a-novel\\/platform-narrative-engine.*/"],
+              "groupName": "platform narrative engine"
             },
             {
               "matchPackageNames": ["/.*github.com\\/uptrace\\/bun.*/"],
