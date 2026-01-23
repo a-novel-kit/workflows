@@ -28,6 +28,11 @@ runs:
         token: ${{ steps.app_token.outputs.token }}
         docker-network: ${{ job.container.network }}
       env:
+        # npm post upgrade tasks require the installation of private npm packages, which is
+        # not supported in postUpgradeTasks. This forces the renovate process to run full
+        # installation from the main process (which has access to the correct token), so
+        # all the node modules are available to the post upgrade tasks.
+        RENOVATE_SKIP_INSTALLS: false
         RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
         RENOVATE_PR_HOURLY_LIMIT: 0
