@@ -14,7 +14,7 @@ runs:
   steps:
     - name: fetch metadata
       id: metadata
-      uses: dependabot/fetch-metadata@d7267f607e9d3fb96fc2fbe83e0af444713e90b7
+      uses: dependabot/fetch-metadata@e74077de530ef48d09568e2268558f6093a85509
       with:
         github-token: "${{ inputs.github_token }}"
     - name: enable auto-merge
