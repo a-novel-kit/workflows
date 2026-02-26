@@ -1,0 +1,25 @@
+name: auto-merge bot
+description: Activate auto-merge for a pull request.
+
+inputs:
+  pull_request:
+    required: true
+    description: The URL of the pull request to be merged.
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: "composite"
+  steps:
+    - name: fetch metadata
+      id: metadata
+      uses: dependabot/fetch-metadata@d7267f607e9d3fb96fc2fbe83e0af444713e90b7
+      with:
+        github-token: "${{ inputs.github_token }}"
+    - name: enable auto-merge
+      shell: bash
+      run: gh pr merge --auto --merge "$PR_URL"
+      env:
+        PR_URL: ${{ inputs.pull_request }}
+        GH_TOKEN: ${{ inputs.github_token }}
