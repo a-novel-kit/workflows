@@ -1,0 +1,57 @@
+name: audit
+
+inputs:
+  github_token:
+    required: true
+    description: The GitHub token to use for the action.
+  app_private_key:
+    required: true
+    description: The Github App private key.
+  app_id:
+    required: true
+    description: The Github App ID.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: a-novel-kit/workflows/node-actions/setup-node@master
+      id: app_token
+      with:
+        app_id: ${{ inputs.app_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+        github_token: ${{ inputs.github_token }}
+    - name: get github app user id
+      id: app_user_id
+      shell: bash
+      run: echo "user_id=$(gh api "/users/${{ steps.app_token.outputs.app_login }}" --jq .id)" >> "$GITHUB_OUTPUT"
+      env:
+        GH_TOKEN: ${{ steps.app_token.outputs.token }}
+    - name: run audit
+      shell: bash
+      run: |
+        pnpm audit --fix
+        pnpm format
+        pnpm i --no-frozen-lockfile
+    - name: check diff
+      id: check_diff
+      shell: bash
+      run: |
+        if [ -z "$(git status --porcelain -- ${{ inputs.pathspec }})" ];
+        then
+          echo "diff=0" >> $GITHUB_OUTPUT
+        else 
+          echo "diff=1" >> $GITHUB_OUTPUT
+        fi
+    - name: publish audit update
+      if: steps.check_diff.outputs.diff == '1'
+      shell: bash
+      run: |
+        git config url."https:///x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf https://github.com/
+        git config user.name "${{ steps.app_token.outputs.app_login }}"
+        git config user.email "${{ steps.app_user_id.outputs.user_id }}+${{ steps.app_token.outputs.app_login }}@users.noreply.github.com"
+
+        git add .
+        git commit -m "chore(security): audit fix"
+        git push
+      env:
+        GH_TOKEN: ${{ steps.app_token.outputs.token }}
