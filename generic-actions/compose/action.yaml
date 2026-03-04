@@ -20,7 +20,7 @@ runs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ inputs.github_token }}
-    - uses: docker/setup-qemu-action@v3
+    - uses: docker/setup-qemu-action@v4
     - name: run containers
       shell: bash
       run: |
