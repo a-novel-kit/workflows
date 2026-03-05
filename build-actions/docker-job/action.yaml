@@ -70,7 +70,7 @@ runs:
         username: ${{ github.actor }}
         password: ${{ inputs.github_token }}
     - uses: docker/setup-qemu-action@v4
-    - uses: docker/build-push-action@v6
+    - uses: docker/build-push-action@v7
       with:
         context: ${{ inputs.context }}
         load: true
@@ -117,7 +117,7 @@ runs:
           docker logs test-container
           exit 1
         fi
-    - uses: docker/build-push-action@v6
+    - uses: docker/build-push-action@v7
       if: ${{ success() }}
       id: build
       with:
