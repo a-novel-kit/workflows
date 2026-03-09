@@ -32,6 +32,10 @@ inputs:
     required: false
     description: The file patterns to filter, appended to filter_patterns.
     default: ""
+  modfile:
+    required: false
+    description: The go.mod file to use.
+    default: go.mod
 
 outputs:
   artifact-id:
@@ -62,7 +66,7 @@ runs:
     - name: run tests
       shell: bash
       run: |
-        go tool gotestsum --jsonfile ${{ inputs.test_file }} --format pkgname \
+        go tool -modfile=${{ inputs.modfile }} gotestsum --jsonfile ${{ inputs.test_file }} --format pkgname \
           -- -count=1 -cover -coverprofile=${{ inputs.coverage_file }} -json ${{ env.MODULES }}
 
         go tool cover -func ${{ inputs.coverage_file }}
