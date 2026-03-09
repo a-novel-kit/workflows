@@ -25,4 +25,3 @@ runs:
         args: --output.checkstyle.path=${{ inputs.golangci_lint_file }}
         version: latest
         working-directory: ${{ inputs.working-directory }}
-        install-mode: goinstall
