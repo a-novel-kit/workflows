@@ -38,7 +38,7 @@ runs:
         prefix="pnpm@"
 
         echo "ver=${pnpmVer#$prefix}" >> $GITHUB_OUTPUT
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@v5
       with:
         version: ${{ steps.pnpm_version.outputs.ver }}
     - uses: actions/setup-node@v6
