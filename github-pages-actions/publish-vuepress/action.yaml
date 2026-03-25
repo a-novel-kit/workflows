@@ -49,4 +49,4 @@ runs:
         path: ${{ inputs.build_path }}
     - uses: actions/configure-pages@v5
     - id: deployment
-      uses: actions/deploy-pages@v4
+      uses: actions/deploy-pages@v5
