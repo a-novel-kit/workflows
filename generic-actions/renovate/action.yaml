@@ -50,16 +50,23 @@ runs:
         RENOVATE_PACKAGE_RULES: |
           [
             {
-              "description": "Automerge updates",
-              "matchPackageNames": ["!major"],
+              "description": "Automerge everything except major updates",
+              "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
               "automerge": true
             },
             {
-              "description": "Always bump go version",
+              "description": "Bump the go directive, grouped with the golang base image",
               "matchManagers": ["gomod"],
               "matchDepNames": ["go"],
               "matchDepTypes": ["golang"],
-              "rangeStrategy": "bump"
+              "rangeStrategy": "bump",
+              "groupName": "go toolchain"
+            },
+            {
+              "description": "Keep the golang base image in the same PR as the go directive",
+              "matchManagers": ["dockerfile", "docker-compose"],
+              "matchDepNames": ["docker.io/library/golang"],
+              "groupName": "go toolchain"
             },
             {
               "matchPackageNames": ["/.*a-novel-kit\\/nodelib.*/"],
