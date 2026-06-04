@@ -96,7 +96,7 @@ runs:
             {
               "description": "Consolidate non-major npm updates into one PR per repo. They all edit the shared pnpm-lock.yaml, so as separate PRs they conflict pairwise and the merge queue can only land one per cycle. This rule is last so it supersedes the per-name/monorepo groups for non-major npm updates; major npm updates keep their named groups and individual review.",
               "matchManagers": ["npm"],
-              "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+              "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
               "groupName": "javascript dependencies"
             }
           ]
