@@ -33,7 +33,12 @@ runs:
         # installation from the main process (which has access to the correct token), so
         # all the node modules are available to the post upgrade tasks.
         RENOVATE_SKIP_INSTALLS: false
-        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
+        # Default to a tight pnpm allowlist (install / format / dedupe) so the postUpgradeTasks
+        # run without permitting arbitrary `pnpm exec` / `pnpm dlx`. The `( |$)` suffix matches
+        # the command followed by args OR on its own (e.g. bare `pnpm i`). Callers that pass an
+        # empty `allowed_commands` would otherwise silently skip the tasks, leaving unformatted
+        # pnpm-workspace.yaml and stale lockfiles. Callers can still override.
+        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands || '["^pnpm (install|i|format|dedupe)( |$)"]' }}
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
         RENOVATE_PR_HOURLY_LIMIT: 0
         LOG_LEVEL: debug
@@ -53,6 +58,11 @@ runs:
               "description": "Automerge everything except major updates",
               "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
               "automerge": true
+            },
+            {
+              "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to the npm manager (which is what Renovate uses for pnpm: pnpm-lock.yaml, workspaces, catalogs) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
+              "matchManagers": ["npm"],
+              "minimumReleaseAge": "3 days"
             },
             {
               "description": "Bump the go directive, grouped with the golang base image",
