@@ -33,7 +33,15 @@ runs:
         # installation from the main process (which has access to the correct token), so
         # all the node modules are available to the post upgrade tasks.
         RENOVATE_SKIP_INSTALLS: false
-        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
+        # Default to allowing pnpm so the postUpgradeTasks (pnpm format / pnpm i) actually run.
+        # Callers that pass an empty `allowed_commands` would otherwise silently skip them,
+        # leaving unformatted pnpm-workspace.yaml and stale lockfiles.
+        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands || '["^pnpm "]' }}
+        # Match pnpm's minimumReleaseAge supply-chain policy (defined in nodelib-config) so
+        # Renovate never opens/rebases a PR for a package too fresh to pass `pnpm install`.
+        # Keep this >= pnpm's value; otherwise lockfile regeneration and CI lint fail on
+        # just-published versions.
+        RENOVATE_MINIMUM_RELEASE_AGE: "3 days"
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
         RENOVATE_PR_HOURLY_LIMIT: 0
         LOG_LEVEL: debug
