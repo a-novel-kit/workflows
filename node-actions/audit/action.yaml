@@ -28,8 +28,10 @@ runs:
         GH_TOKEN: ${{ steps.app_token.outputs.token }}
     - name: run audit
       shell: bash
+      # --fix requires a mode since pnpm 11; "override" pins vulnerable
+      # transitive deps via package.json overrides without moving direct deps.
       run: |
-        pnpm audit --fix
+        pnpm audit --fix=override
         pnpm format
         pnpm i --no-frozen-lockfile
     - name: check diff
