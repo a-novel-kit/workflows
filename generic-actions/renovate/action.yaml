@@ -43,10 +43,19 @@ runs:
         RENOVATE_PR_HOURLY_LIMIT: 0
         LOG_LEVEL: debug
         RENOVATE_SECRETS: '{"GITHUB_TOKEN": "${{ inputs.github_token }}"}'
+        # Fetch public deps through the CDN-backed module proxy (reliable, cached) and
+        # fall back to direct only when the proxy can't serve a version. Plain "direct"
+        # made `go mod tidy` resolve every dependency from origin, which intermittently
+        # failed on vanity-import hosts (e.g. gonum.org reset the connection mid-fetch),
+        # aborting the tidy and leaving go.sum un-regenerated after a go.mod bump.
+        # GOPRIVATE keeps our own a-novel / a-novel-kit modules off the proxy and sumdb,
+        # so freshly tagged internal versions are fetched straight from GitHub without
+        # waiting for proxy.golang.org to index them.
         RENOVATE_CUSTOM_ENV_VARIABLES: |
           {
             "GITHUB_TOKEN": "'{{ secrets.GITHUB_TOKEN }}'",
-            "GOPROXY": "direct"
+            "GOPROXY": "https://proxy.golang.org,direct",
+            "GOPRIVATE": "github.com/a-novel,github.com/a-novel-kit"
           }
         RENOVATE_ALLOW_SCRIPTS: true
         RENOVATE_ASSIGN_AUTOMERGE: true
