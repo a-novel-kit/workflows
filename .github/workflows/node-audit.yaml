@@ -1,0 +1,20 @@
+name: run node audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  node-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./node-actions/audit
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          app_private_key: ${{ secrets.PUBLISH_BOT_PRIVATE_KEY }}
+          app_id: ${{ vars.PUBLISH_BOT_ID }}
