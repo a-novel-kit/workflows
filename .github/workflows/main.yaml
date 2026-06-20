@@ -20,7 +20,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: a-novel-kit/workflows/node-actions/lint-node@master
+      - uses: actions/checkout@v7
+      - uses: ./node-actions/lint-node
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
