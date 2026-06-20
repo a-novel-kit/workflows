@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"]
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "Group every a-novel-kit/workflows action bump into one PR — all the composite actions are the same repo, released as a unit, so their pinned refs must move together.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["a-novel-kit/workflows"],
+      "groupName": "a-novel-kit/workflows"
+    }
+  ]
 }
