@@ -7,7 +7,8 @@
     "format": "pnpm run format:prettier",
     "format:prettier": "prettier --write . --config prettier.config.js",
     "lint": "pnpm run lint:prettier",
-    "lint:prettier": "prettier --check . --config prettier.config.js"
+    "lint:prettier": "prettier --check . --config prettier.config.js",
+    "prepublish:doc": "a-novel publish stamp 'a-novel-kit/workflows/[^@]+@' '*/*/action.yaml'"
   },
   "devDependencies": {
     "prettier": "^3.6.2",
