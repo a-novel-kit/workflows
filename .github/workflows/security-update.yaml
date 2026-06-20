@@ -2,8 +2,10 @@ name: run security update
 
 on:
   workflow_dispatch:
+  # An hour after node-audit, so its lockfile fix is committed first and gets
+  # picked up by this release — and the two never race to push to master.
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 1 * * *"
 
 jobs:
   security-update:
@@ -18,7 +20,9 @@ jobs:
       # the runner, so install it first (Go is preinstalled; setup-go puts
       # $GOBIN on PATH for the action's publish step).
       - uses: actions/setup-go@v5
-      - run: go install github.com/a-novel-kit/stack/cli/cmd/a-novel@latest
+      # Pinned, not @latest: reproducible, and guarantees the multi-file stamp
+      # glob support (cli/v1.0.2+). Bump intentionally on a new CLI release.
+      - run: go install github.com/a-novel-kit/stack/cli/cmd/a-novel@v1.0.2
       - uses: ./node-actions/security-update
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
