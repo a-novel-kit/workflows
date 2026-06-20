@@ -11,6 +11,7 @@ jobs:
       pull-requests: write
     if: ${{ github.event.pull_request.user.login != vars.DEPENDENCY_BOT_LOGIN }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/assign-bot@master
+      - uses: actions/checkout@v7
+      - uses: ./generic-actions/assign-bot
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

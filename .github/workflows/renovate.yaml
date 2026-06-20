@@ -8,7 +8,8 @@ jobs:
   renovate:
     runs-on: ubuntu-latest
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/renovate@master
+      - uses: actions/checkout@v7
+      - uses: ./generic-actions/renovate
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
