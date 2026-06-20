@@ -8,7 +8,8 @@
     "format:prettier": "prettier --write . --config prettier.config.js",
     "lint": "pnpm run lint:prettier",
     "lint:prettier": "prettier --check . --config prettier.config.js",
-    "prepublish:doc": "a-novel publish stamp 'a-novel-kit/workflows/[^@]+@' '*/*/action.yaml'"
+    "prepublish:doc": "a-novel publish stamp 'a-novel-kit/workflows/[^@]+@' '*/*/action.yaml'",
+    "publish:patch": "pnpm version patch --no-git-tag-version && pnpm run prepublish:doc && git add -A && V=$(node -p \"require('./package.json').version\") && git commit -qm \"$V\" && git tag \"v$V\" && git push origin HEAD && git push origin \"v$V\""
   },
   "devDependencies": {
     "prettier": "^3.6.2",
