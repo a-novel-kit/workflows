@@ -11,6 +11,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: a-novel-kit/workflows/publish-actions/auto-release@master
+      # Check out the tagged commit and run the local action from it, so the
+      # release is cut with this repo's own action at the tag — reproducible,
+      # and with no unpinned cross-repo @master self-reference.
+      - uses: actions/checkout@v7
+      - uses: ./publish-actions/auto-release
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
