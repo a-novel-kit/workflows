@@ -92,6 +92,11 @@ runs:
               "groupName": "nodelib"
             },
             {
+              "description": "Group every a-novel-kit/workflows action together — the composite actions are one repo released as a unit, so consumers must bump all their pinned refs at once.",
+              "matchPackageNames": ["/.*a-novel-kit\\/workflows.*/"],
+              "groupName": "a-novel-kit workflows"
+            },
+            {
               "matchPackageNames": ["/.*a-novel\\/service-json-keys.*/"],
               "groupName": "service json keys"
             },
