@@ -30,6 +30,12 @@ runs:
       shell: bash
       # --fix requires a mode since pnpm 11; "override" pins vulnerable
       # transitive deps via package.json overrides without moving direct deps.
+      env:
+        # `pnpm audit --fix` writes new overrides then runs an install to apply
+        # them; under CI pnpm defaults that install to --frozen-lockfile, which
+        # then fails ERR_PNPM_LOCKFILE_CONFIG_MISMATCH against the just-changed
+        # overrides. Let the lockfile update here — it is committed below.
+        npm_config_frozen_lockfile: "false"
       run: |
         pnpm audit --fix=override
         pnpm format
