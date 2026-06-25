@@ -1,9 +1,10 @@
 name: auto release
+description: Create a GitHub release for the pushed tag with auto-generated notes.
 
 inputs:
   github_token:
     required: true
-    description: The GitHub token to use for deleting old images
+    description: The GitHub token used to create the release.
 
 runs:
   using: "composite"

@@ -1,4 +1,5 @@
 name: test node
+description: Set up Node, run the package's test script, and upload the coverage report.
 
 inputs:
   test_action:
@@ -10,10 +11,10 @@ inputs:
     description: The GitHub token to use for the action.
   app_private_key:
     required: true
-    description: The Github App private key.
+    description: The GitHub App private key.
   app_id:
     required: true
-    description: The Github App ID.
+    description: The GitHub App ID.
   coverage_artifact:
     required: false
     description: The name of the artifact to store the coverage report.
@@ -40,7 +41,7 @@ runs:
     - name: run test
       shell: bash
       run: pnpm run ${{ inputs.test_action }}
-    - name: Archive code coverage results
+    - name: archive code coverage results
       id: upload-artifact
       uses: actions/upload-artifact@v7
       with:

@@ -1,4 +1,5 @@
 name: self-hosted renovate
+description: Run a self-hosted Renovate pass against the repository, authenticated as the bot.
 
 inputs:
   allowed_commands:

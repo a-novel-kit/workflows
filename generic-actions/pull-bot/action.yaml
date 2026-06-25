@@ -1,4 +1,5 @@
 name: pull bot
+description: Generate a GitHub App token and check out the repository authenticated as the bot.
 
 inputs:
   app_private_key:
@@ -19,7 +20,7 @@ inputs:
 outputs:
   token:
     description: The bot token.
-    value: ${{ steps.get_token.outputs.token  }}
+    value: ${{ steps.get_token.outputs.token }}
   app_login:
     description: The login name of the bot.
     value: ${{ steps.get_token.outputs.app-slug }}[bot]

@@ -4,7 +4,7 @@ description: Automatically approves a pull request. Make sure to only enable thi
 inputs:
   pull_request:
     required: true
-    description: The URL of the pull request to be merged.
+    description: The URL of the pull request to be approved.
   github_token:
     required: true
     description: The GitHub token to use for the action.

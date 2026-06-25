@@ -1,4 +1,5 @@
 name: go report card
+description: Refresh the repository's goreportcard.com report.
 
 runs:
   using: "composite"

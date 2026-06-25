@@ -1,10 +1,7 @@
 name: lint go
+description: Run golangci-lint and write a checkstyle report.
 
 inputs:
-  golangci_lint_artifact:
-    required: false
-    description: The name of the artifact to store the lint report.
-    default: go-lint
   golangci_lint_file:
     required: false
     description: The name of the lint report file.

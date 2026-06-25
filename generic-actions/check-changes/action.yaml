@@ -17,7 +17,7 @@ inputs:
 
 outputs:
   diff:
-    description: "Whether or not there are uncommitted changes in the pathspec"
+    description: "Set to 1 when there are uncommitted changes in the pathspec; empty otherwise."
     value: ${{ steps.check_diff.outputs.diff }}
 
 runs:
@@ -30,7 +30,7 @@ runs:
         if [ -z "$(git status --porcelain -- ${{ inputs.pathspec }})" ];
         then
           exit 0
-        else 
+        else
           echo "diff=1" >> $GITHUB_OUTPUT
         fi
     - name: fail if changes

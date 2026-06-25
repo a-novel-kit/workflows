@@ -1,4 +1,5 @@
 name: publish vuepress page
+description: Build a VuePress site and deploy it to GitHub Pages.
 
 inputs:
   cmd:
