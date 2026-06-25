@@ -12,11 +12,11 @@ When you add or change an action, keep it self-describing:
 
 - **`name` and `description`** are the first thing a reader sees, and the action catalog in the [README](./README.md) is written by hand from them. Keep both accurate, and update the README whenever they change.
 - **Give every input a `description`**, plus a `default` when there's a sensible one — that way a caller only has to pass the values it actually wants to override. Reserve `required: true` for inputs the action genuinely cannot run without.
-- **Surface anything a caller might need back** — a token, an artifact id, a computed flag — as an `output` wired to the step that produces it. A useful result left unexposed is effectively lost.
+- **Surface anything a caller might need back** — a token, an artifact ID, a computed flag — as an `output` wired to the step that produces it. A useful result left unexposed is effectively lost.
 
 ## How versions are released and consumed
 
-The whole repository is versioned as one unit: a single `v*` git tag (for example `v1.0.3`) covers every action at once. There are no per-action version numbers.
+The whole repository is versioned as one unit: a single `v*` Git tag (for example `v1.0.3`) covers every action at once. There are no per-action version numbers.
 
 **Releasing.** Pushing a `v*` tag is what creates a release — the `publish-actions/auto-release` action turns that tag into a GitHub Release with auto-generated notes. Because everything ships together, one action may depend on another in this repo, but it must reference it by its **pinned tag** (`a-novel-kit/workflows/<group>/<name>@<tag>`), never a relative path. That keeps a release internally consistent: every action in `v1.0.3` calls the `v1.0.3` version of its siblings, rather than silently picking up whatever currently sits on `master`.
 
