@@ -14,9 +14,9 @@ Reusable composite GitHub Actions powering A-Novel CI/CD.
 
 ## What this is
 
-`workflows` is the shared catalog of reusable composite GitHub Actions that standardize lint, test, build, publish, and security tasks across every repo in the **a-novel** and **a-novel-kit** organizations. Instead of copying CI logic from one repo to the next, each project pulls these actions in with `uses:` and pins them to a release tag — currently `v1.0.3`.
+`workflows` is the shared catalog of reusable composite GitHub Actions that standardize CI and release tasks across every repo in the **a-novel** and **a-novel-kit** organizations. Instead of copying CI logic from one repo to the next, each project pulls these actions in with `uses:` and pins them to a release tag — currently `v1.0.3`.
 
-Each action lives at `<group>/<name>/action.yaml` and is a self-contained composite step. The groups (`build-actions`, `generic-actions`, `github-pages-actions`, `go-actions`, `node-actions`, `publish-actions`) map to the kind of work the action does; the full list is in the [Action catalog](#action-catalog) below.
+Each action lives at `<group>/<name>/action.yaml` and is a self-contained composite step, grouped by the kind of work it does; the full list is in the [Action catalog](#action-catalog) below.
 
 ## Using an action
 
