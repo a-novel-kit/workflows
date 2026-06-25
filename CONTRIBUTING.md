@@ -4,7 +4,7 @@ Platform setup and day-to-day commands are in the [developer onboarding guide](h
 
 ## How an action is structured
 
-Each action is a [composite action](https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action): a small, reusable building block that bundles several steps behind a single `uses:` reference, so a caller runs the whole thing in one line. Its definition lives at `<group>/<name>/action.yaml`, and the `<group>` says what kind of work it does — `build-actions` build container images, `go-actions` and `node-actions` drive the Go and Node toolchains, `generic-actions` are language-agnostic helpers (bots, Renovate, Codecov), and `publish-actions` / `github-pages-actions` ship releases and docs.
+Each action is a [composite action](https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action): a small, reusable building block that bundles several steps behind a single `uses:` reference, so a caller runs the whole thing in one line. Its definition lives at `<group>/<name>/action.yaml`, where `<group>` collects actions by the kind of work they do — the [Action catalog](./README.md#action-catalog) in the README lists every group and what's in it.
 
 Inside an `action.yaml`, the `runs:` block is the list of steps the action performs. A step either calls another action (`uses:`) or runs a shell script (`run:`, with `shell: bash`). A caller passes values _in_ through the action's `inputs:` and reads results _out_ through its `outputs:`.
 
