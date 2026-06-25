@@ -1,11 +1,7 @@
 name: lint go
-description: Run golangci-lint and write a checkstyle report.
+description: Run golangci-lint over the Go module.
 
 inputs:
-  golangci_lint_file:
-    required: false
-    description: The name of the lint report file.
-    default: golangci-lint-report.xml
   working-directory:
     required: false
     description: The working directory to run the scan from.
@@ -22,6 +18,5 @@ runs:
         go-version-file: ${{ inputs.working-directory && format('{0}/go.mod', inputs.working-directory) || 'go.mod' }}
     - uses: golangci/golangci-lint-action@v9
       with:
-        args: --output.checkstyle.path=${{ inputs.golangci_lint_file }}
         version: latest
         working-directory: ${{ inputs.working-directory }}

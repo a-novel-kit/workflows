@@ -4,10 +4,10 @@ description: Generate a GitHub App token and check out the repository authentica
 inputs:
   app_private_key:
     required: true
-    description: The Github App private key.
+    description: The GitHub App private key.
   app_id:
     required: true
-    description: The Github App ID.
+    description: The GitHub App ID.
   fetch_depth:
     required: false
     description: Number of commits to fetch. 0 indicates all history for all branches and tags.
