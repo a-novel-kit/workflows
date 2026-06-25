@@ -38,10 +38,10 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `build-actions`
 
-| Action       | Purpose                                                       |
-| ------------ | ------------------------------------------------------------- |
-| `docker`     | Build an image and verify it runs **healthy** (long service). |
-| `docker-job` | Build an image and verify it **exits 0** (one-shot job).      |
+| Action       | Purpose                                                             |
+| ------------ | ------------------------------------------------------------------- |
+| `docker`     | Build an image and verify it runs **healthy** (long-lived service). |
+| `docker-job` | Build an image and verify it **exits 0** (one-shot job).            |
 
 ### `generic-actions`
 
@@ -52,7 +52,7 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `auto-merge-bot` | Enable auto-merge on a PR.                                         |
 | `check-changes`  | Detect uncommitted changes in a pathspec; optionally fail.         |
 | `codecov`        | Upload the coverage artifact to Codecov.                           |
-| `pull-bot`       | Check out the repo authenticated as the bot.                       |
+| `pull-bot`       | Mint a bot App token and check out the repo authenticated as it.   |
 | `renovate`       | Run self-hosted Renovate as the bot.                               |
 
 ### `github-pages-actions`
