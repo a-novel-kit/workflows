@@ -10,7 +10,7 @@ When adding or changing an action:
 
 - Keep `name` and `description` accurate — the README catalog is derived from them by hand.
 - Give every `inputs:` entry a `description` and a `default` where sensible; expose results as `outputs`.
-- When one action calls another here, reference it by pinned tag (`a-novel-kit/workflows/<group>/<name>@v1.0.3`), never a relative path, so each release is self-consistent.
+- When one action calls another here, reference it by pinned tag (`a-novel-kit/workflows/<group>/<name>@<tag>`), never a relative path, so each release is self-consistent.
 
 ## How versions are tagged
 
