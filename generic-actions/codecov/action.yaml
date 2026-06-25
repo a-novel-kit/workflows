@@ -4,16 +4,16 @@ description: Uploads code coverage reports to Codecov.
 inputs:
   coverage_artifact:
     required: false
-    description: The name of the artifact to store the coverage report.
+    description: The name of the artifact to download the coverage report from.
   coverage_artifact_ids:
     required: false
-    description: The ids of the coverage report file.
+    description: The IDs of the artifacts to download.
   coverage_files:
     required: false
-    description: The name of the coverage report file.
+    description: The coverage report file(s) to upload.
   codecov_token:
     required: true
-    description: The codecov token used to upload coverage reports
+    description: The codecov token used to upload coverage reports.
 
 runs:
   using: "composite"

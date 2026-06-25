@@ -1,4 +1,5 @@
 name: lint node
+description: Set up Node and run the package's lint script.
 
 inputs:
   lint_action:
@@ -10,10 +11,10 @@ inputs:
     description: The GitHub token to use for the action.
   app_private_key:
     required: true
-    description: The Github App private key.
+    description: The GitHub App private key.
   app_id:
     required: true
-    description: The Github App ID.
+    description: The GitHub App ID.
 
 runs:
   using: "composite"

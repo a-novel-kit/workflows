@@ -1,12 +1,13 @@
 name: pull bot
+description: Generate a GitHub App token and check out the repository authenticated as the bot.
 
 inputs:
   app_private_key:
     required: true
-    description: The Github App private key.
+    description: The GitHub App private key.
   app_id:
     required: true
-    description: The Github App ID.
+    description: The GitHub App ID.
   fetch_depth:
     required: false
     description: Number of commits to fetch. 0 indicates all history for all branches and tags.
@@ -19,7 +20,7 @@ inputs:
 outputs:
   token:
     description: The bot token.
-    value: ${{ steps.get_token.outputs.token  }}
+    value: ${{ steps.get_token.outputs.token }}
   app_login:
     description: The login name of the bot.
     value: ${{ steps.get_token.outputs.app-slug }}[bot]

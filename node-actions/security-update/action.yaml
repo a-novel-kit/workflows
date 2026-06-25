@@ -1,4 +1,5 @@
 name: security update node
+description: Publish a patch release for accumulated security fixes when the latest release is old enough.
 
 inputs:
   publish_action:
@@ -10,10 +11,10 @@ inputs:
     description: The GitHub token to use for the action.
   app_private_key:
     required: true
-    description: The Github App private key.
+    description: The GitHub App private key.
   app_id:
     required: true
-    description: The Github App ID.
+    description: The GitHub App ID.
   min_days_since_last_release:
     required: false
     description: The minimum number of days since the last release to trigger a security update.

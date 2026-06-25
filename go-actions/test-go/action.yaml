@@ -1,10 +1,7 @@
 name: test go
+description: Run the Go test suite across the workspace with coverage and upload the report.
 
 inputs:
-  test_args:
-    required: false
-    description: The arguments to pass to the test command.
-    default: -p 1 -race
   test_artifact:
     required: false
     description: The name of the artifact to store the test report.
