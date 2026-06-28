@@ -11,10 +11,10 @@ inputs:
   release_type:
     required: true
     description: Semver bump to apply — patch, minor, or major.
-  app_id:
+  client_id:
     required: true
     description: >
-      [Agent] App id. Needs contents:write plus a branch/tag-protection bypass,
+      [Agent] App client id. Needs contents:write plus a branch/tag-protection bypass,
       since the bump commit lands on the protected default branch and the tag is
       protected (v*).
   app_private_key:
@@ -56,7 +56,7 @@ runs:
       id: token
       uses: actions/create-github-app-token@v3
       with:
-        app-id: ${{ inputs.app_id }}
+        client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
         repositories: ${{ github.event.repository.name }}
