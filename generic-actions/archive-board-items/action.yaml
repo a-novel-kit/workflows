@@ -1,0 +1,114 @@
+name: archive board items
+description: >
+  Archive a repository's "Awaiting release" items from the org "Tasks" project.
+  Run it from the release workflow when the repo publishes (everything on master
+  ships, so its awaiting-release work is now released), or — for repos that never
+  publish (e.g. .github) — on merge to the default branch, to clear shipped work
+  off the board automatically. Idempotent and safe to re-run.
+
+inputs:
+  app_id:
+    required: true
+    description: >
+      App ID for the org's [Agent] bot. The default GITHUB_TOKEN cannot see
+      org-level Projects v2, so a bot token is required.
+  app_private_key:
+    required: true
+    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  status:
+    required: false
+    default: Awaiting release
+    description: Archive this repo's items whose Status equals this value.
+  project_id:
+    required: true
+    description: >
+      Node id of the org "Tasks" board (e.g. PVT_…). Passed in directly — inline
+      it per-org in the caller, the same way app_id is — so the action needs no
+      title lookup. Find it with: gh project view <n> --owner <org> --format json.
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", log what would be archived without archiving anything.
+
+runs:
+  using: composite
+  steps:
+    # Mint a token that can write the org's Projects v2 — and nothing else.
+    # The [Agent] App can do more (issues/PRs), but we request only the org
+    # Projects scope, so a leak of this step's token is bounded to board edits.
+    - name: Mint org-Projects token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        permission-organization-projects: write
+
+    - name: Archive this repo's awaiting-release items
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO_FULL: ${{ github.repository }}
+        STATUS: ${{ inputs.status }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        # The org "Tasks" board id is passed in directly — no title lookup.
+        proj_id="$PROJECT_ID"
+        if [ -z "$proj_id" ]; then
+          echo "::error::project_id is required (the org \"Tasks\" board node id)"
+          exit 1
+        fi
+
+        # Page the board, keeping this repo's still-on-board items in $STATUS.
+        #    isArchived guards idempotency: an already-archived item is skipped,
+        #    so a re-run (or overlapping triggers) never double-archives.
+        items_q='
+          query($proj:ID!,$cursor:String){ node(id:$proj){ ... on ProjectV2{
+            items(first:100, after:$cursor){
+              pageInfo{ hasNextPage endCursor }
+              nodes{ id isArchived
+                status: fieldValueByName(name:"Status"){
+                  ... on ProjectV2ItemFieldSingleSelectValue{ name } }
+                content{
+                  ... on Issue{ repository{ nameWithOwner } number url }
+                  ... on PullRequest{ repository{ nameWithOwner } number url } } } } } } }'
+
+        matches=$(mktemp)
+        cursor=""
+        while :; do
+          args=(-F proj="$proj_id")
+          [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+          resp=$(gh api graphql -f query="$items_q" "${args[@]}")
+          echo "$resp" | jq -c --arg repo "$REPO_FULL" --arg status "$STATUS" '
+            .data.node.items.nodes[]
+            | select(
+                (.isArchived | not)
+                and .status.name == $status
+                and (.content.repository.nameWithOwner // "") == $repo)
+            | {id, number: .content.number, url: .content.url}' >> "$matches"
+          [ "$(echo "$resp" | jq -r '.data.node.items.pageInfo.hasNextPage')" = "true" ] || break
+          cursor=$(echo "$resp" | jq -r '.data.node.items.pageInfo.endCursor')
+        done
+
+        count=$(grep -c '' "$matches" || true)
+        echo "Found ${count:-0} '$STATUS' item(s) for $REPO_FULL." | tee -a "$GITHUB_STEP_SUMMARY"
+        [ "${count:-0}" -eq 0 ] && exit 0
+
+        # Archive each match (or just report, under dry-run).
+        archive_m='mutation($proj:ID!,$item:ID!){
+          archiveProjectV2Item(input:{projectId:$proj,itemId:$item}){ item{ id } } }'
+        while IFS= read -r row; do
+          id=$(echo "$row" | jq -r '.id')
+          num=$(echo "$row" | jq -r '.number')
+          url=$(echo "$row" | jq -r '.url')
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "- [dry-run] would archive #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            gh api graphql -f query="$archive_m" -F proj="$proj_id" -F item="$id" >/dev/null
+            echo "- archived #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+        done < "$matches"
