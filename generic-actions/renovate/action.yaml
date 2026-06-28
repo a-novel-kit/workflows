@@ -21,7 +21,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.2.2
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.3.0
       id: app_token
       with:
         app_id: ${{ inputs.app_id }}
