@@ -14,6 +14,13 @@ inputs:
   client_id:
     required: false
     description: GitHub App client id (recommended).
+  ref:
+    required: false
+    description: >
+      Ref to check out (forwarded to pull-bot). Defaults to github.head_ref; pass a
+      release tag when publishing from a dispatched release so the build is the
+      bumped commit, not the pre-bump default branch.
+    default: ""
 
 outputs:
   token:
@@ -32,6 +39,7 @@ runs:
         app_id: ${{ inputs.app_id }}
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
+        ref: ${{ inputs.ref }}
     - uses: pnpm/action-setup@v6
     - uses: actions/setup-node@v6
       with:
