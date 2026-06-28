@@ -1,0 +1,166 @@
+name: release core
+description: >
+  Cut a release in CI: bump the version (pnpm, workspace-aware), refresh doc
+  version refs (prepublish:doc / `a-novel publish stamp`), commit, tag, push,
+  and create the GitHub Release — and output the computed version for the
+  downstream build/publish jobs. Replaces the local `a-novel publish version`
+  and the tag-push `auto-release`. The release-type selector and the protected
+  `release` environment live in the caller (the per-repo release workflow).
+
+inputs:
+  release_type:
+    required: true
+    description: Semver bump to apply — patch, minor, or major.
+  app_id:
+    required: true
+    description: >
+      [Agent] App id. Needs contents:write plus a branch/tag-protection bypass,
+      since the bump commit lands on the protected default branch and the tag is
+      protected (v*).
+  app_private_key:
+    required: true
+    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  dry_run:
+    required: false
+    default: "false"
+    description: >
+      When "true", bump and report the version/tag but do NOT commit, tag, push,
+      or release — the working tree is reverted. Lets a release be rehearsed
+      safely before the bot has push rights.
+
+outputs:
+  version:
+    description: The bumped version (e.g. 1.2.3).
+    value: ${{ steps.cut.outputs.version }}
+  tag:
+    description: The release tag — vX.Y.Z, or <subdir>/vX.Y.Z for a sub-directory Go module.
+    value: ${{ steps.cut.outputs.tag }}
+
+runs:
+  using: composite
+  steps:
+    # Token that can push the bump commit + tag and create the release. Scoped
+    # to this repo and to contents only — the [Agent] App can do more.
+    - name: Mint push token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ inputs.app_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+
+    # Bot-authenticated checkout so the later push carries the bot's rights;
+    # full history + tags so the tag and release notes resolve correctly.
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        token: ${{ steps.token.outputs.token }}
+        ref: ${{ github.ref_name }}
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Setup node
+      uses: actions/setup-node@v4
+      with:
+        node-version: lts/*
+    - name: Enable pnpm
+      shell: bash
+      run: corepack enable
+
+    # Only repos that stamp docs (a prepublish:doc script) need the a-novel CLI.
+    - name: Detect prepublish:doc
+      id: stamp
+      shell: bash
+      run: |
+        if node -e "process.exit(require('./package.json').scripts?.['prepublish:doc']?0:1)" 2>/dev/null; then
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "needed=false" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Setup Go
+      if: ${{ steps.stamp.outputs.needed == 'true' }}
+      uses: actions/setup-go@v5
+      with:
+        go-version: stable
+    - name: Install a-novel CLI (for stamp)
+      if: ${{ steps.stamp.outputs.needed == 'true' }}
+      shell: bash
+      run: |
+        go install github.com/a-novel-kit/stack/cli/cmd/a-novel@latest
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+    - name: Cut release
+      id: cut
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        APP_SLUG: ${{ steps.token.outputs.app-slug }}
+        RELEASE_TYPE: ${{ inputs.release_type }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        BRANCH: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+
+        case "$RELEASE_TYPE" in
+          patch | minor | major) ;;
+          *) echo "::error::release_type must be patch, minor, or major (got '$RELEASE_TYPE')"; exit 1 ;;
+        esac
+
+        git config user.name "${APP_SLUG}[bot]"
+        git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+
+        # Workspace-aware bump. In CI only this repo is checked out, so the
+        # gitignored-sibling filtering the local CLI needed does not apply.
+        # pnpm skips its own commit/tag in both forms — this action owns those.
+        if grep -q '^packages:' pnpm-workspace.yaml 2>/dev/null; then
+          pnpm version "$RELEASE_TYPE" --recursive
+        else
+          pnpm version "$RELEASE_TYPE" --no-git-tag-version
+        fi
+
+        # Refresh vX.Y.Z references in docs/config to the new version, before the
+        # commit — the kept `a-novel publish stamp`, invoked via prepublish:doc.
+        pnpm run --if-present prepublish:doc
+
+        version=$(node -p "require('./package.json').version")
+
+        # Tag prefix: a sub-directory Go module releases as <dir>/vX.Y.Z (that is
+        # how Go resolves it); a root module or a JS-only repo uses plain vX.Y.Z.
+        # The pathspec also matches lookalikes (cargo.mod), so require an exact
+        # go.mod basename. No bash arrays here — keep it portable and testable.
+        gomods=$(git ls-files '*go.mod' | grep -E '(^|/)go\.mod$' || true)
+        count=$(printf '%s' "$gomods" | grep -c . || true)
+        prefix=""
+        if [ "$count" -gt 1 ]; then
+          echo "::error::multiple Go modules — no single release tag; tag manually:"
+          printf '%s\n' "$gomods"
+          exit 1
+        elif [ "$count" -eq 1 ]; then
+          d=$(dirname "$gomods")
+          [ "$d" != "." ] && prefix="$d/"
+        fi
+        tag="${prefix}v${version}"
+
+        {
+          echo "version=$version"
+          echo "tag=$tag"
+        } >> "$GITHUB_OUTPUT"
+        echo "Release **$tag** (bump: $RELEASE_TYPE)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "- [dry-run] bumped to $version; would tag \`$tag\`, push to \`$BRANCH\`, and release — no mutation." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          git checkout -- . 2>/dev/null || true
+          exit 0
+        fi
+
+        git add -A
+        git commit -m "$version"
+        git tag "$tag"
+        git push origin "HEAD:$BRANCH"
+        git push origin "refs/tags/$tag"
+        gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+          --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes
+        echo "- ✓ released \`$tag\`" | tee -a "$GITHUB_STEP_SUMMARY"
