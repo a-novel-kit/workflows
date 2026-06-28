@@ -9,6 +9,13 @@ inputs:
   image_name:
     required: true
     description: The name of the image to build.
+  version:
+    required: false
+    description: >
+      Explicit release version (e.g. 1.2.3) for the dispatched release flow. When
+      set, the image is tagged vX.Y.Z / vX.Y / vX / latest from it instead of from
+      the git ref (the workflow runs on the default branch, not the tag). Leave
+      empty for the legacy tag-push flow, which keeps the ref-derived tags.
   run_args:
     required: false
     description: Args to use for the test run of the image.
@@ -49,19 +56,32 @@ runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v7
+    # Derive vX.Y / vX from an explicit version (the dispatched release passes one
+    # because the workflow runs on the default branch, where the ref isn't a tag).
+    - id: ver
+      if: ${{ inputs.version != '' }}
+      shell: bash
+      run: |
+        v="${{ inputs.version }}"
+        echo "minor=${v%.*}" >> "$GITHUB_OUTPUT"
+        echo "major=${v%%.*}" >> "$GITHUB_OUTPUT"
     - id: meta
       uses: docker/metadata-action@v6
       with:
         images: ghcr.io/${{ inputs.image_name }}
         tags: |
-          # Default tags
-          type=schedule,pattern=nightly
-          type=ref,event=branch
-          type=ref,event=tag
-          # Versioning tags
-          type=semver,pattern=v{{version}}
-          type=semver,pattern=v{{major}}.{{minor}}
-          type=semver,pattern=v{{major}}
+          # Ref-derived tags (legacy tag-push flow) — off when a version is passed.
+          type=schedule,pattern=nightly,enable=${{ inputs.version == '' }}
+          type=ref,event=branch,enable=${{ inputs.version == '' }}
+          type=ref,event=tag,enable=${{ inputs.version == '' }}
+          type=semver,pattern=v{{version}},enable=${{ inputs.version == '' }}
+          type=semver,pattern=v{{major}}.{{minor}},enable=${{ inputs.version == '' }}
+          type=semver,pattern=v{{major}},enable=${{ inputs.version == '' }}
+          # Explicit-version tags (dispatched release flow).
+          type=raw,value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
+          type=raw,value=v${{ steps.ver.outputs.minor }},enable=${{ inputs.version != '' }}
+          type=raw,value=v${{ steps.ver.outputs.major }},enable=${{ inputs.version != '' }}
+          type=raw,value=latest,enable=${{ inputs.version != '' }}
         flavor: latest=auto
     - uses: docker/setup-buildx-action@v4
     - uses: docker/login-action@v4
