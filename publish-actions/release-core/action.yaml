@@ -1,6 +1,6 @@
 name: release core
 description: >
-  Cut a release in CI: bump the version (pnpm, workspace-aware), refresh doc
+  Cut a release in CI: bump the version (workspace-aware, no pnpm), refresh doc
   version refs (prepublish:doc / `a-novel publish stamp`), commit, tag, push,
   and create the GitHub Release — and output the computed version for the
   downstream build/publish jobs. Replaces the local `a-novel publish version`
@@ -114,6 +114,7 @@ runs:
         RELEASE_TYPE: ${{ inputs.release_type }}
         DRY_RUN: ${{ inputs.dry_run }}
         BRANCH: ${{ github.ref_name }}
+        STAMP_NEEDED: ${{ steps.stamp.outputs.needed }}
       run: |
         set -euo pipefail
 
@@ -125,23 +126,24 @@ runs:
         git config user.name "${APP_SLUG}[bot]"
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
-        # Workspace-aware bump. In CI only this repo is checked out, so the
-        # gitignored-sibling filtering the local CLI needed does not apply.
-        # pnpm skips its own commit/tag in both forms — this action owns those.
-        #
-        # --config.trustLockfile=true skips pnpm's supply-chain verification pass:
-        # a version bump installs nothing, so re-checking minimumReleaseAge over the
-        # already-verified lockfile would only risk failing a release on a too-fresh
-        # transitive dep (it fails on bigger lockfiles, e.g. the stack/CLI repo).
-        if grep -q '^packages:' pnpm-workspace.yaml 2>/dev/null; then
-          pnpm version "$RELEASE_TYPE" --recursive --config.trustLockfile=true
-        else
-          pnpm version "$RELEASE_TYPE" --no-git-tag-version --config.trustLockfile=true
-        fi
+        # Bump the root + every workspace member package.json with a small Node
+        # script instead of `pnpm version`. In CI's cold pnpm store `pnpm version`
+        # runs pnpm's supply-chain verification ("Verifying lockfile against
+        # supply-chain policies") and fails the release whenever any transitive
+        # dep is younger than minimumReleaseAge — a race that has nothing to do
+        # with cutting a release, and the `--config.*` flags don't reach that
+        # path. A version bump needs no dependency resolution (a package's own
+        # version isn't recorded in the lockfile), so the script just rewrites the
+        # version field — no resolution, no supply-chain pass. See bump.cjs.
+        node "$GITHUB_ACTION_PATH/bump.cjs"
 
         # Refresh vX.Y.Z references in docs/config to the new version, before the
-        # commit — the kept `a-novel publish stamp`, invoked via prepublish:doc.
-        pnpm run --if-present prepublish:doc
+        # commit — `a-novel publish stamp`, invoked via the prepublish:doc script.
+        # Gated on the detector so a repo without that script never invokes pnpm
+        # here (and so cannot trip the supply-chain pass either).
+        if [ "$STAMP_NEEDED" = "true" ]; then
+          pnpm run prepublish:doc
+        fi
 
         version=$(node -p "require('./package.json').version")
 
