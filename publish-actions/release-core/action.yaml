@@ -39,6 +39,17 @@ outputs:
 runs:
   using: composite
   steps:
+    # Releases run from the default branch only — reject a dispatch (or a
+    # workflow_call) from any other ref before minting a token or mutating
+    # anything. Pushing the bump tag from a feature branch would be wrong.
+    - name: Guard — default branch only
+      shell: bash
+      run: |
+        if [ "${{ github.ref_name }}" != "${{ github.event.repository.default_branch }}" ]; then
+          echo "::error::releases run from the default branch (${{ github.event.repository.default_branch }}) only — got '${{ github.ref_name }}'"
+          exit 1
+        fi
+
     # Token that can push the bump commit + tag and create the release. Scoped
     # to this repo and to contents only — the [Agent] App can do more.
     - name: Mint push token
@@ -62,7 +73,7 @@ runs:
         fetch-tags: true
 
     - name: Setup node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: lts/*
     - name: Enable pnpm
@@ -81,9 +92,12 @@ runs:
         fi
     - name: Setup Go
       if: ${{ steps.stamp.outputs.needed == 'true' }}
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version: stable
+        # Nothing in this repo's Go (if any) is built here — we only `go install`
+        # the a-novel CLI — so skip the module cache and its "no go.sum" warning.
+        cache: false
     - name: Install a-novel CLI (for stamp)
       if: ${{ steps.stamp.outputs.needed == 'true' }}
       shell: bash

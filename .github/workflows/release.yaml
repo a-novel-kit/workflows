@@ -32,10 +32,12 @@ on:
 
 run-name: "🚀 release ${{ inputs.release_type }}${{ inputs.dry_run && ' (dry-run)' || '' }}"
 
-# One release at a time per repo, so two runs can't race the version bump.
-concurrency:
-  group: release-${{ github.repository }}
-  cancel-in-progress: false
+# No concurrency lock, on purpose. If two releases are triggered at once both
+# compute the same next tag; the first push wins and the second is rejected
+# (non-fast-forward / tag already exists) and fails in the release job below,
+# before any build job runs — so accidental double-triggers can't double-release.
+# A concurrency *queue* would instead serialize them and let the second cut a
+# second release. The protected `release` environment is the human gate on top.
 
 jobs:
   release:
