@@ -1,27 +1,66 @@
 name: release
 
+# Releases are cut from the GitHub UI (Actions ▸ release ▸ pick a type ▸ Run),
+# not from a developer's terminal. workflow_call exposes the same inputs so an
+# agent can drive an identical release headlessly later. The protected `release`
+# environment is the "who can publish" gate (configure its required reviewers).
 on:
-  push:
-    tags:
-      - "**"
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Version bump to cut
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: Bump & report only — no commit, tag, push, or release
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      release_type:
+        required: true
+        type: string
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+
+run-name: "🚀 release ${{ inputs.release_type }}${{ inputs.dry_run && ' (dry-run)' || '' }}"
+
+# One release at a time per repo, so two runs can't race the version bump.
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.core.outputs.version }}
+      tag: ${{ steps.core.outputs.tag }}
     steps:
-      # Check out the tagged commit and run the local action from it, so the
-      # release is cut with this repo's own action at the tag — reproducible,
-      # and with no unpinned cross-repo @master self-reference.
+      # Initial checkout makes the local ./publish-actions/* actions available;
+      # release-core re-checks-out with the bot token to push.
       - uses: actions/checkout@v7
-      - uses: ./publish-actions/auto-release
+      - id: core
+        uses: ./publish-actions/release-core
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      # Everything on master just shipped, so clear this repo's awaiting-release
-      # work off the org board. Uses the [Agent] bot (App id inlined per org, as
-      # in bot-comment.yaml) since GITHUB_TOKEN can't see org Projects.
-      - uses: ./generic-actions/archive-board-items
+          release_type: ${{ inputs.release_type }}
+          dry_run: ${{ inputs.dry_run }}
+          app_id: ${{ github.repository_owner == 'a-novel' && '3549319' || '3549379' }}
+          app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
+      # Everything on master just shipped — clear this repo's awaiting-release
+      # items off the board. Skipped on a dry run (nothing was released).
+      - if: ${{ !inputs.dry_run }}
+        uses: ./generic-actions/archive-board-items
         with:
           app_id: ${{ github.repository_owner == 'a-novel' && '3549319' || '3549379' }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
