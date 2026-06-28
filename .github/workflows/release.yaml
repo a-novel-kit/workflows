@@ -18,3 +18,10 @@ jobs:
       - uses: ./publish-actions/auto-release
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+      # Everything on master just shipped, so clear this repo's awaiting-release
+      # work off the org board. Uses the [Agent] bot (App id inlined per org, as
+      # in bot-comment.yaml) since GITHUB_TOKEN can't see org Projects.
+      - uses: ./generic-actions/archive-board-items
+        with:
+          app_id: ${{ github.repository_owner == 'a-novel' && '3549319' || '3549379' }}
+          app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
