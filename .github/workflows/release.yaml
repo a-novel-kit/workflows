@@ -57,13 +57,13 @@ jobs:
         with:
           release_type: ${{ inputs.release_type }}
           dry_run: ${{ inputs.dry_run }}
-          app_id: ${{ github.repository_owner == 'a-novel' && '3549319' || '3549379' }}
+          app_id: ${{ vars.AGENT_BOT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
       # Everything on master just shipped — clear this repo's awaiting-release
       # items off the board. Skipped on a dry run (nothing was released).
       - if: ${{ !inputs.dry_run }}
         uses: ./generic-actions/archive-board-items
         with:
-          app_id: ${{ github.repository_owner == 'a-novel' && '3549319' || '3549379' }}
+          app_id: ${{ vars.AGENT_BOT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
           project_id: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
