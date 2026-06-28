@@ -7,10 +7,10 @@ description: >
   off the board automatically. Idempotent and safe to re-run.
 
 inputs:
-  app_id:
+  client_id:
     required: true
     description: >
-      App ID for the org's [Agent] bot. The default GITHUB_TOKEN cannot see
+      Client id for the org's [Agent] bot. The default GITHUB_TOKEN cannot see
       org-level Projects v2, so a bot token is required.
   app_private_key:
     required: true
@@ -23,7 +23,7 @@ inputs:
     required: true
     description: >
       Node id of the org "Tasks" board (e.g. PVT_…). Passed in directly — inline
-      it per-org in the caller, the same way app_id is — so the action needs no
+      it per-org in the caller, the same way client_id is — so the action needs no
       title lookup. Find it with: gh project view <n> --owner <org> --format json.
   dry_run:
     required: false
@@ -40,7 +40,7 @@ runs:
       id: token
       uses: actions/create-github-app-token@v3
       with:
-        app-id: ${{ inputs.app_id }}
+        client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
         permission-organization-projects: write
