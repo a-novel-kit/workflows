@@ -19,10 +19,12 @@ inputs:
     required: false
     default: Awaiting release
     description: Archive this repo's items whose Status equals this value.
-  project_title:
-    required: false
-    default: Tasks
-    description: Title of the org board to operate on (one "Tasks" board per org).
+  project_id:
+    required: true
+    description: >
+      Node id of the org "Tasks" board (e.g. PVT_…). Passed in directly — inline
+      it per-org in the caller, the same way app_id is — so the action needs no
+      title lookup. Find it with: gh project view <n> --owner <org> --format json.
   dry_run:
     required: false
     default: "false"
@@ -47,28 +49,21 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
-        OWNER: ${{ github.repository_owner }}
         REPO_FULL: ${{ github.repository }}
         STATUS: ${{ inputs.status }}
-        PROJECT_TITLE: ${{ inputs.project_title }}
+        PROJECT_ID: ${{ inputs.project_id }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: |
         set -euo pipefail
 
-        # 1. Resolve the org's project id by title — one "Tasks" board per org.
-        proj_id=$(gh api graphql -f query='
-          query($org:String!){ organization(login:$org){
-            projectsV2(first:50){ nodes{ id title } } } }' \
-          -F org="$OWNER" \
-          | jq -r --arg t "$PROJECT_TITLE" \
-              '.data.organization.projectsV2.nodes[] | select(.title==$t) | .id' \
-          | head -n1)
+        # The org "Tasks" board id is passed in directly — no title lookup.
+        proj_id="$PROJECT_ID"
         if [ -z "$proj_id" ]; then
-          echo "::error::no org project titled '$PROJECT_TITLE' under '$OWNER'"
+          echo "::error::project_id is required (the org \"Tasks\" board node id)"
           exit 1
         fi
 
-        # 2. Page the board, keeping this repo's still-on-board items in $STATUS.
+        # Page the board, keeping this repo's still-on-board items in $STATUS.
         #    isArchived guards idempotency: an already-archived item is skipped,
         #    so a re-run (or overlapping triggers) never double-archives.
         items_q='
@@ -103,7 +98,7 @@ runs:
         echo "Found ${count:-0} '$STATUS' item(s) for $REPO_FULL." | tee -a "$GITHUB_STEP_SUMMARY"
         [ "${count:-0}" -eq 0 ] && exit 0
 
-        # 3. Archive each match (or just report, under dry-run).
+        # Archive each match (or just report, under dry-run).
         archive_m='mutation($proj:ID!,$item:ID!){
           archiveProjectV2Item(input:{projectId:$proj,itemId:$item}){ item{ id } } }'
         while IFS= read -r row; do
