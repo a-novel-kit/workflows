@@ -128,10 +128,15 @@ runs:
         # Workspace-aware bump. In CI only this repo is checked out, so the
         # gitignored-sibling filtering the local CLI needed does not apply.
         # pnpm skips its own commit/tag in both forms — this action owns those.
+        #
+        # --config.trustLockfile=true skips pnpm's supply-chain verification pass:
+        # a version bump installs nothing, so re-checking minimumReleaseAge over the
+        # already-verified lockfile would only risk failing a release on a too-fresh
+        # transitive dep (it fails on bigger lockfiles, e.g. the stack/CLI repo).
         if grep -q '^packages:' pnpm-workspace.yaml 2>/dev/null; then
-          pnpm version "$RELEASE_TYPE" --recursive
+          pnpm version "$RELEASE_TYPE" --recursive --config.trustLockfile=true
         else
-          pnpm version "$RELEASE_TYPE" --no-git-tag-version
+          pnpm version "$RELEASE_TYPE" --no-git-tag-version --config.trustLockfile=true
         fi
 
         # Refresh vX.Y.Z references in docs/config to the new version, before the
