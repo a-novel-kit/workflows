@@ -18,6 +18,14 @@ inputs:
   client_id:
     required: false
     description: GitHub App client id (recommended).
+  ref:
+    required: false
+    description: >
+      Ref to check out and publish from. Leave empty for the legacy tag-push flow
+      (the ref is already the tag). In the dispatched release flow, pass the new
+      release tag (needs.release.outputs.tag) so the published package carries the
+      bumped version, not the pre-bump default branch.
+    default: ""
 
 runs:
   using: "composite"
@@ -29,6 +37,7 @@ runs:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
         github_token: ${{ inputs.github_token }}
+        ref: ${{ inputs.ref }}
     - name: build
       shell: bash
       run: pnpm run ${{ inputs.build_action }}

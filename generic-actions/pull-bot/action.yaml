@@ -19,6 +19,14 @@ inputs:
     required: false
     description: Whether to fetch tags, even if fetch-depth > 0.
     default: "false"
+  ref:
+    required: false
+    description: >
+      Ref (branch, tag, or SHA) to check out. Defaults to github.head_ref — the PR
+      branch on a pull_request event. Pass an explicit ref when the trigger isn't a
+      PR: e.g. a dispatched release passes the new release tag so the checkout is the
+      bumped commit, not the pre-bump default branch.
+    default: ""
 
 outputs:
   token:
@@ -51,7 +59,7 @@ runs:
     - uses: actions/checkout@v7
       with:
         token: ${{ steps.token_client.outputs.token || steps.token_app.outputs.token }}
-        ref: ${{ github.head_ref }}
+        ref: ${{ inputs.ref != '' && inputs.ref || github.head_ref }}
         # Make sure the value of GITHUB_TOKEN will not be persisted in repo's config
         persist-credentials: false
         fetch-depth: ${{ inputs.fetch_depth }}
