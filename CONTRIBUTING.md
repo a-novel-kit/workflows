@@ -1,6 +1,6 @@
 # Contributing to workflows
 
-Platform setup and day-to-day commands are in the [developer onboarding guide](https://github.com/a-novel-kit/.github/blob/master/README.md). This file covers what's specific to `workflows`.
+The platform taxonomy — repository kinds, where the reusable **composite actions** sit in the tooling layer, and the versioning model — lives in the [libraries, tooling & platform concepts](https://github.com/a-novel-kit/.github/blob/master/CONTRIBUTING.md); this file covers what's specific to `workflows`. Platform setup and day-to-day commands are in the [developer onboarding guide](https://github.com/a-novel-kit/.github/blob/master/README.md).
 
 Everything here is a [composite action](https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action); GitHub's docs cover the [`runs` / `inputs` / `outputs` syntax](https://docs.github.com/en/actions/sharing-automations/creating-actions/metadata-syntax-for-github-actions). The rest of this file is the conventions particular to this repo.
 

@@ -14,9 +14,9 @@ Reusable composite GitHub Actions powering A-Novel CI/CD.
 
 ## What this is
 
-The shared CI/CD building blocks for every **a-novel** and **a-novel-kit** repo. Rather than copy CI logic between repos, each project pulls these actions in with `uses:`, pinned to a release tag.
+The shared CI/CD building blocks for every **a-novel** and **a-novel-kit** repo. Each is a **composite action**: rather than copy CI logic between repos, a project pulls these composite actions in with `uses:`, pinned to a release tag.
 
-Each action lives at `<group>/<name>/action.yaml`, grouped by the kind of work it does. The [Action catalog](#action-catalog) lists them all.
+Each composite action lives at `<group>/<name>/action.yaml`, grouped by the kind of work it does. The [Action catalog](#action-catalog) lists them all.
 
 ## Using an action
 
