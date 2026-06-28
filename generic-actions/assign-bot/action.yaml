@@ -1,5 +1,8 @@
 name: assign bot
-description: Automatically assigns the author of a pull request to the PR.
+description: >
+  Assign a pull request to its author, or — when the author is a bot/app
+  (Renovate, Dependabot), which can't be assigned — to the repository's code
+  owner, so dependency PRs still land in a human's queue.
 
 inputs:
   github_token:
@@ -11,15 +14,47 @@ runs:
   steps:
     - name: assign author
       shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        AUTHOR: ${{ github.event.pull_request.user.login }}
+        AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
       run: |
-        echo "Assigning author to PR"
-        echo "PR author: ${{ github.event.pull_request.user.login }}"
-        echo "PR number: ${{ github.event.pull_request.number }}"
-        echo "Assigning author to PR"
+        # Pick the assignee. A human author owns their own PR. A bot/app author
+        # (Renovate, Dependabot) can't be assigned — GitHub rejects assigning an
+        # agent with an App installation token (HTTP 403) — so fall back to the
+        # repo's code owner, so dependency PRs still land in a human's queue.
+        # Assignees don't gate merge, so this never blocks the bot's auto-merge.
+        if [ "$AUTHOR_TYPE" != "Bot" ]; then
+          assignees="$AUTHOR"
+        else
+          # Resolve the catch-all (*) owners from CODEOWNERS, read via the API
+          # since this workflow has no checkout. GitHub's precedence is
+          # .github/ > root > docs/, and the last matching rule wins. Only @user
+          # owners can be assignees (a @org/team can't), so keep those and drop @.
+          assignees=""
+          for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+            content=$(gh api "repos/$REPO/contents/$path" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null) || true
+            [ -n "$content" ] || continue
+            assignees=$(printf '%s\n' "$content" | grep -E '^\*[[:space:]]' | tail -1 \
+              | tr ' \t' '\n\n' | grep -E '^@[A-Za-z0-9-]+$' | sed 's/^@//' | paste -sd, -)
+            break
+          done
+          if [ -z "$assignees" ]; then
+            echo "Author $AUTHOR is a $AUTHOR_TYPE and no assignable code owner found — skipping."
+            exit 0
+          fi
+          echo "Author $AUTHOR is a $AUTHOR_TYPE — assigning code owner(s) instead."
+        fi
+
+        echo "Assigning [$assignees] to PR #$PR"
+        args=()
+        old_ifs=$IFS
+        IFS=,
+        for a in $assignees; do args+=(-f "assignees[]=$a"); done
+        IFS=$old_ifs
         gh api --method POST \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          /repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/assignees \
-          -f "assignees[]=${{ github.event.pull_request.user.login }}"
-      env:
-        GH_TOKEN: ${{ inputs.github_token }}
+          "/repos/$REPO/issues/$PR/assignees" "${args[@]}"
