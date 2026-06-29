@@ -139,10 +139,16 @@ runs:
 
         # Refresh vX.Y.Z references in docs/config to the new version, before the
         # commit — `a-novel publish stamp`, invoked via the prepublish:doc script.
-        # Gated on the detector so a repo without that script never invokes pnpm
-        # here (and so cannot trip the supply-chain pass either).
+        # Gated on the detector so a repo without that script never invokes pnpm.
+        #
+        # PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false stops pnpm from running an
+        # install before the script. The stamp only needs the a-novel CLI (already
+        # installed), never node_modules; that pre-run install would otherwise need
+        # npm-registry auth (private @a-novel deps -> 401) and re-run the
+        # supply-chain verification. It's an env var (not a --config flag) so the
+        # script's nested `pnpm` calls inherit it; npm_config_* is ignored by pnpm.
         if [ "$STAMP_NEEDED" = "true" ]; then
-          pnpm run prepublish:doc
+          PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm run prepublish:doc
         fi
 
         version=$(node -p "require('./package.json').version")
