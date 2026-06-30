@@ -11,9 +11,6 @@ inputs:
   app_private_key:
     required: true
     description: The GitHub App private key.
-  app_id:
-    required: false
-    description: (legacy) numeric App id — prefer client_id, which avoids the app-id deprecation warning.
   client_id:
     required: false
     description: GitHub App client id (recommended).
@@ -24,7 +21,6 @@ runs:
     - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.3.1
       id: app_token
       with:
-        app_id: ${{ inputs.app_id }}
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
     - name: self-hosted renovate

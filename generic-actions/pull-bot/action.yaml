@@ -5,9 +5,6 @@ inputs:
   app_private_key:
     required: true
     description: The GitHub App private key.
-  app_id:
-    required: false
-    description: (legacy) numeric App id — prefer client_id, which avoids the app-id deprecation warning.
   client_id:
     required: false
     description: GitHub App client id (recommended).
@@ -31,34 +28,25 @@ inputs:
 outputs:
   token:
     description: The bot token.
-    value: ${{ steps.token_client.outputs.token || steps.token_app.outputs.token }}
+    value: ${{ steps.token_client.outputs.token }}
   app_login:
     description: The login name of the bot.
-    value: ${{ steps.token_client.outputs.app-slug || steps.token_app.outputs.app-slug }}[bot]
+    value: ${{ steps.token_client.outputs.app-slug }}[bot]
 
 runs:
   using: "composite"
   steps:
-    # Two mints, so the client-id path passes NO app-id: the deprecation warning
-    # fires whenever app-id is present in `with:` (even empty), so it can only be
-    # avoided by omitting it. Legacy callers passing app_id keep working.
-    - name: get app token (client id)
+    # Mint the bot token from the App client id; passing no app-id avoids the
+    # actions/create-github-app-token app-id deprecation warning.
+    - name: get app token
       id: token_client
-      if: ${{ inputs.client_id != '' }}
       uses: actions/create-github-app-token@v3
       with:
         private-key: ${{ inputs.app_private_key }}
         client-id: ${{ inputs.client_id }}
-    - name: get app token (legacy app id)
-      id: token_app
-      if: ${{ inputs.client_id == '' }}
-      uses: actions/create-github-app-token@v3
-      with:
-        private-key: ${{ inputs.app_private_key }}
-        app-id: ${{ inputs.app_id }}
     - uses: actions/checkout@v7
       with:
-        token: ${{ steps.token_client.outputs.token || steps.token_app.outputs.token }}
+        token: ${{ steps.token_client.outputs.token }}
         ref: ${{ inputs.ref != '' && inputs.ref || github.head_ref }}
         # Make sure the value of GITHUB_TOKEN will not be persisted in repo's config
         persist-credentials: false
