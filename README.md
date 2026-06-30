@@ -71,14 +71,13 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `node-actions`
 
-| Action            | Purpose                                                |
-| ----------------- | ------------------------------------------------------ |
-| `audit`           | Run `pnpm audit --fix` and commit the fixes.           |
-| `build-node`      | Run the package's build script (default `build`).      |
-| `lint-node`       | Run the package's lint script (default `lint`).        |
-| `security-update` | Publish a patch release for security fixes, age-gated. |
-| `setup-node`      | Set up Node + pnpm (GitHub registry) and install.      |
-| `test-node`       | Run the package's tests and upload coverage.           |
+| Action       | Purpose                                           |
+| ------------ | ------------------------------------------------- |
+| `audit`      | Run `pnpm audit --fix` and commit the fixes.      |
+| `build-node` | Run the package's build script (default `build`). |
+| `lint-node`  | Run the package's lint script (default `lint`).   |
+| `setup-node` | Set up Node + pnpm (GitHub registry) and install. |
+| `test-node`  | Run the package's tests and upload coverage.      |
 
 ### `publish-actions`
 
