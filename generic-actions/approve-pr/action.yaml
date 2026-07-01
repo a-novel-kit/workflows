@@ -53,11 +53,13 @@ runs:
         permission-contents: read
         permission-pull-requests: write
 
-    # approve-bot runs `gh pr checkout`, so a base checkout must exist first.
-    # persist-credentials:false — the minted token is passed explicitly, never
-    # baked into the git remote.
+    # approve-bot runs `gh pr checkout`, so a base checkout must exist first. Use
+    # the minted token so the action stays on its least-privilege token and never
+    # depends on the default token's contents permission; persist-credentials:false
+    # keeps it out of the git config (approve-bot passes it to gh explicitly).
     - uses: actions/checkout@v7
       with:
+        token: ${{ steps.token.outputs.token }}
         persist-credentials: false
 
     - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.3.2
