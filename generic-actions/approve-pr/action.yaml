@@ -1,0 +1,68 @@
+name: approve-pr
+description: >
+  Gate-2 override: let a repo ADMIN record the approval a PR author can't give
+  themselves. A manual, audited path — an admin reviews the PR, then dispatches
+  this, and the [Agent] App (a distinct identity from the author) submits the
+  approval. Refuses to run for anyone who is not a repo admin, so a plain
+  write-access user can't use it to self-approve their own PR. Wraps the existing
+  `generic-actions/approve-bot`. See a-novel-kit/.github#50.
+
+inputs:
+  client_id:
+    required: true
+    description: Client id of the org's [Agent] App (the AGENT_BOT_CLIENT_ID var).
+  app_private_key:
+    required: true
+    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY secret.
+  pull_request:
+    required: true
+    description: URL (or number) of the pull request to approve.
+
+runs:
+  using: composite
+  steps:
+    # Fail closed unless the triggering actor is a repo admin. workflow_dispatch is
+    # open to anyone with WRITE access, so this — not the trigger ACL — is the real
+    # Gate-2 control. Uses the default GITHUB_TOKEN: the collaborator-permission
+    # endpoint needs only Metadata:read, which every token carries and can't be
+    # stripped, so no Administration scope is required.
+    - name: Require admin
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO_FULL: ${{ github.repository }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        # `|| echo ""` keeps a failed lookup from tripping `set -e` — an empty
+        # permission then falls through to the admin check and fails closed.
+        perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
+        if [ "$perm" != "admin" ]; then
+          echo "::error::approve-pr is admin-only; @${ACTOR} has permission '${perm:-none}'."
+          exit 1
+        fi
+        echo "@${ACTOR} is a repo admin — recording an [Agent] approval." | tee -a "$GITHUB_STEP_SUMMARY"
+
+    # Mint a token scoped to ONLY what an approval needs: read the repo (so the
+    # nested approve-bot can `gh pr checkout`) plus write the PR review.
+    - name: Mint approval token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        permission-contents: read
+        permission-pull-requests: write
+
+    # approve-bot runs `gh pr checkout`, so a base checkout must exist first.
+    # persist-credentials:false — the minted token is passed explicitly, never
+    # baked into the git remote.
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.3.2
+      with:
+        pull_request: ${{ inputs.pull_request }}
+        github_token: ${{ steps.token.outputs.token }}

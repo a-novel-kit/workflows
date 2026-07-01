@@ -45,15 +45,18 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `generic-actions`
 
-| Action           | Purpose                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| `approve-bot`    | Auto-approve a PR (skips if already approved); trusted users only. |
-| `assign-bot`     | Assign the PR author to their own PR.                              |
-| `auto-merge-bot` | Enable auto-merge on a PR.                                         |
-| `check-changes`  | Detect uncommitted changes in a pathspec; optionally fail.         |
-| `codecov`        | Upload the coverage artifact to Codecov.                           |
-| `pull-bot`       | Mint a bot App token and check out the repo authenticated as it.   |
-| `renovate`       | Run self-hosted Renovate as the bot.                               |
+| Action                | Purpose                                                            |
+| --------------------- | ------------------------------------------------------------------ |
+| `approve-bot`         | Auto-approve a PR (skips if already approved); trusted users only. |
+| `approve-pr`          | Admin-only: record an [Agent] approval on a PR (Gate-2 override).  |
+| `archive-board-items` | Archive the repo's "Awaiting release" board items on release.      |
+| `assign-bot`          | Assign the PR author to their own PR.                              |
+| `auto-merge-bot`      | Enable auto-merge on a PR.                                         |
+| `check-changes`       | Detect uncommitted changes in a pathspec; optionally fail.         |
+| `codecov`             | Upload the coverage artifact to Codecov.                           |
+| `merge-gate`          | Required "may this PR merge?" check (skeleton: always passes).     |
+| `pull-bot`            | Mint a bot App token and check out the repo authenticated as it.   |
+| `renovate`            | Run self-hosted Renovate as the bot.                               |
 
 ### `github-pages-actions`
 
