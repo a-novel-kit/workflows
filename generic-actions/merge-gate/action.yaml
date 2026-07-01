@@ -1,9 +1,10 @@
 name: merge-gate
 description: >
   Posts the `merge-gate` check-run — the single "may this PR merge?" status check
-  — on the triggering pull request. It runs as a GitHub App rather than the
-  workflow's own identity so the check's integration id is fixed regardless of
-  what decides the outcome, letting a ruleset require it by that id.
+  — on the triggering pull request, or on the merge-queue group when the PR is in
+  the merge queue. It runs as a GitHub App rather than the workflow's own identity
+  so the check's integration id is fixed regardless of what decides the outcome,
+  letting a ruleset require it by that id.
 
 inputs:
   client_id:
@@ -36,14 +37,18 @@ runs:
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
         REPO_FULL: ${{ github.repository }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         PR_URL: ${{ inputs.pull_request }}
       run: |
         set -euo pipefail
 
-        # The check must anchor to the PR head commit the ruleset evaluates.
+        # Anchor the check to the head commit the ruleset evaluates: the PR head on
+        # a pull_request event, or the merge-queue group's head on a merge_group
+        # event. The queue validates required checks on the group, so merge-gate
+        # must post there too — otherwise a queued PR waits out the check timeout
+        # and is dropped.
         if [ -z "${HEAD_SHA:-}" ]; then
-          echo "::error::merge-gate must run on a pull_request event (no head SHA)."
+          echo "::error::merge-gate must run on a pull_request or merge_group event (no head SHA)."
           exit 1
         fi
 
