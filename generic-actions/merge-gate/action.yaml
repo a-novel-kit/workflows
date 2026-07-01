@@ -1,36 +1,27 @@
 name: merge-gate
 description: >
-  The single required "may this PR merge?" status check. Stage 2 ships it as a
-  SKELETON that always reports success: its only job today is to reliably post a
-  `merge-gate` check-run — as the [Agent] App, so the ruleset can require it by a
-  stable integration id — without ever blocking a merge. The real predicates,
-  epic-atomicity (every cross-repo sibling sub-issue PR is mergeable) and the
-  draft/review state, land in Stage 3, which changes only the `conclusion`
-  computed below — never the poster or the wiring. See a-novel-kit/.github#50.
+  Posts the `merge-gate` check-run — the single "may this PR merge?" status check
+  — on the triggering pull request. It runs as a GitHub App rather than the
+  workflow's own identity so the check's integration id is fixed regardless of
+  what decides the outcome, letting a ruleset require it by that id.
 
 inputs:
   client_id:
     required: true
-    description: >
-      Client id of the org's [Agent] App (the AGENT_BOT_CLIENT_ID var). The check
-      is posted as the App — a stable integration id — so the required-status-check
-      match in the ruleset stays put when Stage 3 swaps in the real logic.
+    description: Client id of a GitHub App with the checks write permission.
   app_private_key:
     required: true
-    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY secret.
+    description: Private key (PEM) of that App.
   pull_request:
     required: false
     default: ${{ github.event.pull_request.html_url }}
-    description: >
-      URL of the PR under evaluation, for the check output and Stage-3 logic.
-      Defaults to the PR that triggered the workflow.
+    description: URL of the PR under evaluation. Defaults to the PR that triggered the run.
 
 runs:
   using: composite
   steps:
-    # Mint a token scoped to ONLY checks:write — a leak of this step's token can
-    # write check-runs and nothing else (no issues, PRs, or contents). This
-    # request fails until the [Agent] App is granted Checks:write (.github#59).
+    # Mint a token scoped to checks:write only — a leak is bounded to writing
+    # check-runs, nothing else.
     - name: Mint checks-write token
       id: token
       uses: actions/create-github-app-token@v3
@@ -40,7 +31,7 @@ runs:
         owner: ${{ github.repository_owner }}
         permission-checks: write
 
-    - name: Post merge-gate check (skeleton — always success)
+    - name: Post merge-gate check
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -56,17 +47,17 @@ runs:
           exit 1
         fi
 
-        # Stage 2: unconditional success. Stage 3 computes the conclusion from the
-        # epic-atomicity + draft/review predicates and fills a real summary.
-        summary="Skeleton gate (Stage 2): always passes so the required check never blocks a merge. Epic-atomicity and draft/review predicates land in Stage 3 (a-novel-kit/.github#50). PR: ${PR_URL:-<none>}"
+        # TODO: placeholder that always passes. Replace the hard-coded success
+        # with the real merge-eligibility decision and a summary explaining it.
+        summary="No merge conditions are enforced yet — this check always passes. PR: ${PR_URL:-<none>}"
 
         # Build the payload with jq so a summary containing quotes can't break the
-        # JSON (defensive — Stage 3 summaries will be dynamic).
+        # JSON.
         jq -n \
           --arg sha "$HEAD_SHA" \
           --arg summary "$summary" \
           '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: "success",
-            output: {title: "merge-gate skeleton — always passing", summary: $summary}}' \
+            output: {title: "merge-gate", summary: $summary}}' \
           | gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
 
         echo "Posted merge-gate=success on ${REPO_FULL}@${HEAD_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"

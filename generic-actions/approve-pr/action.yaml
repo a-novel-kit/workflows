@@ -1,19 +1,18 @@
 name: approve-pr
 description: >
-  Gate-2 override: let a repo ADMIN record the approval a PR author can't give
-  themselves. A manual, audited path — an admin reviews the PR, then dispatches
-  this, and the [Agent] App (a distinct identity from the author) submits the
-  approval. Refuses to run for anyone who is not a repo admin, so a plain
-  write-access user can't use it to self-approve their own PR. Wraps the existing
-  `generic-actions/approve-bot`. See a-novel-kit/.github#50.
+  Records a bot approval on a pull request on behalf of a repo admin. A PR author
+  can't approve their own PR, so an admin reviews it and dispatches this; the
+  approval is then submitted by the App, a separate identity. Refuses to run for
+  anyone who is not a repo admin, so it can't be turned into a self-approval.
+  Wraps `approve-bot`.
 
 inputs:
   client_id:
     required: true
-    description: Client id of the org's [Agent] App (the AGENT_BOT_CLIENT_ID var).
+    description: Client id of a GitHub App with the contents read and pull-requests write permissions.
   app_private_key:
     required: true
-    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY secret.
+    description: Private key (PEM) of that App.
   pull_request:
     required: true
     description: URL (or number) of the pull request to approve.
@@ -21,11 +20,10 @@ inputs:
 runs:
   using: composite
   steps:
-    # Fail closed unless the triggering actor is a repo admin. workflow_dispatch is
-    # open to anyone with WRITE access, so this — not the trigger ACL — is the real
-    # Gate-2 control. Uses the default GITHUB_TOKEN: the collaborator-permission
-    # endpoint needs only Metadata:read, which every token carries and can't be
-    # stripped, so no Administration scope is required.
+    # Fail closed unless the actor who dispatched this is a repo admin —
+    # workflow_dispatch is open to anyone with write access, so this check is what
+    # keeps it admin-only. The collaborator-permission endpoint needs only
+    # Metadata:read (always present), so the default token suffices.
     - name: Require admin
       shell: bash
       env:
