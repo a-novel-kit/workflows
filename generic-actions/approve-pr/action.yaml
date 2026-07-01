@@ -1,10 +1,11 @@
 name: approve-pr
 description: >
-  Records a bot approval on a pull request on behalf of a repo admin. A PR author
-  can't approve their own PR, so an admin reviews it and dispatches this; the
-  approval is then submitted by the App, a separate identity. Refuses to run for
-  anyone who is not a repo admin, so it can't be turned into a self-approval.
-  Wraps `approve-bot`.
+  Approves a pull request through the App on a repo admin's behalf — in practice,
+  an admin approving their own PR. Self-approval is normally forbidden because it
+  makes review pointless, but it is tolerated for admins as an escape hatch: to act
+  under urgency, or to set things up when no other contributor is available to
+  review. The admin check keeps it to that case, refusing to run for anyone who is
+  not a repo admin. Wraps `approve-bot`.
 
 inputs:
   client_id:
