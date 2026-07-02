@@ -52,11 +52,14 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `archive-board-items` | Archive the repo's "Awaiting release" board items on release.      |
 | `assign-bot`          | Assign the PR author to their own PR.                              |
 | `auto-merge-bot`      | Enable auto-merge on a PR.                                         |
+| `board-write`         | Set one board field (single-select/date) for an issue/PR as [Agent] — the single write path. |
 | `check-changes`       | Detect uncommitted changes in a pathspec; optionally fail.         |
 | `codecov`             | Upload the coverage artifact to Codecov.                           |
-| `merge-gate`          | Required "may this PR merge?" check (skeleton: always passes).     |
+| `derive-status`       | Derive a Task's board Status from its PR's current state (single writer). |
+| `merge-gate`          | Required "may this PR merge?" check (epic-atomicity + draft/review). |
 | `pull-bot`            | Mint a bot App token and check out the repo authenticated as it.   |
 | `renovate`            | Run self-hosted Renovate as the bot.                               |
+| `rollup-board`        | Roll an epic's Status + Start date up from its children.           |
 
 ### `github-pages-actions`
 

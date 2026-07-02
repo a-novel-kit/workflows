@@ -54,7 +54,7 @@ runs:
         import json, os, subprocess, sys
 
         PROJECT = os.environ["PROJECT_ID"]
-        DRY = os.environ.get("DRY_RUN", "true") != "false"  # default read-only
+        DRY = os.environ.get("DRY_RUN", "true").strip().lower() != "false"  # default read-only; fail-safe to dry
         summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a") if os.environ.get("GITHUB_STEP_SUMMARY") else None
 
         def emit(line):
@@ -75,9 +75,6 @@ runs:
                 raise SystemExit("::error::rollup-board: GraphQL errors: %s" % out["errors"])
             return out
 
-        ORDER = ["Backlog", "Triage", "Ready", "In progress", "In review", "Done", "Awaiting release", "Applied"]
-        RANK = {s: i for i, s in enumerate(ORDER)}
-
         # Resolve the Status + Start date fields once.
         fq = ('query($p:ID!){node(id:$p){... on ProjectV2{fields(first:50){nodes{'
               '... on ProjectV2FieldCommon{id name} ... on ProjectV2SingleSelectField{id name options{id name}}}}}}}')
@@ -87,6 +84,14 @@ runs:
         if not sfield or not dfield:
             raise SystemExit("::error::rollup-board: board is missing a Status or Start date field")
         opt = {o["name"]: o["id"] for o in sfield.get("options", [])}
+
+        # Rank statuses by the board's own option order (its canonical progression), so
+        # the rollup never drifts from what the board actually defines.
+        ORDER = [o["name"] for o in sfield.get("options", [])]
+        RANK = {s: i for i, s in enumerate(ORDER)}
+        for needed in ("Done", "In progress"):
+            if needed not in RANK:
+                raise SystemExit("::error::rollup-board: board Status is missing the %r option" % needed)
 
         # Page the board.
         iq = ('query($proj:ID!,$cursor:String){node(id:$proj){... on ProjectV2{'
@@ -118,7 +123,7 @@ runs:
                 pk = "%s#%s" % (p["repository"]["nameWithOwner"], p["number"])
                 children.setdefault(pk, []).append(it)
             typ = (c.get("issueType") or {}).get("name")
-            if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ != "Initiative":
+            if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ in ("Epic", "Feature"):
                 epics.append(it)
 
         def rollup_status(kids):
