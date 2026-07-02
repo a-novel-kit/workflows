@@ -1,0 +1,165 @@
+name: rollup-board
+description: >
+  Roll each epic's board Status + Start date up from its direct children, as the
+  [Agent] App. For every epic on the board it aggregates its children's statuses into
+  one epic status — all-terminal → the least-advanced terminal (an epic isn't released
+  until every child is); any child active, or a mix of done and not-done → In progress;
+  all pre-work → the most-ready — and sets the epic's Start date to the earliest child's.
+  Deep trees converge over successive runs (it rolls up direct children each pass), so
+  it is eventually consistent under the periodic reconcile sweep that invokes it.
+
+  Ships read-only: with dry_run "true" (the default) it only logs what it would change,
+  so the aggregation can be validated against the live board before it starts moving
+  statuses. Initiatives (lifecycle Tracking/Applied) are left alone — only Epics/Features
+  roll up.
+
+inputs:
+  client_id:
+    required: true
+    description: Client id for the org's [Agent] bot (org Projects write).
+  app_private_key:
+    required: true
+    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  project_id:
+    required: true
+    description: Node id of the org "Tasks" board (PVT_…). Passed in per-org by the caller.
+  dry_run:
+    required: false
+    default: "true"
+    description: >
+      When "true" (default), log the rollups it would make without writing — the
+      read-only first mode. Set "false" once the aggregation is trusted.
+
+runs:
+  using: composite
+  steps:
+    - name: Mint org-Projects token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        permission-organization-projects: write
+
+    - name: Roll up epics
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json, os, subprocess, sys
+
+        PROJECT = os.environ["PROJECT_ID"]
+        DRY = os.environ.get("DRY_RUN", "true") != "false"  # default read-only
+        summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a") if os.environ.get("GITHUB_STEP_SUMMARY") else None
+
+        def emit(line):
+            print(line)
+            if summary:
+                summary.write(line + "\n")
+
+        def gh(query, **vars):
+            cmd = ["gh", "api", "graphql", "-f", "query=" + query]
+            for k, v in vars.items():
+                cmd += ["-F", "%s=%s" % (k, v)]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                sys.stderr.write(r.stderr)
+                raise SystemExit("::error::rollup-board: a GraphQL call failed")
+            out = json.loads(r.stdout)
+            if out.get("errors"):
+                raise SystemExit("::error::rollup-board: GraphQL errors: %s" % out["errors"])
+            return out
+
+        ORDER = ["Backlog", "Triage", "Ready", "In progress", "In review", "Done", "Awaiting release", "Applied"]
+        RANK = {s: i for i, s in enumerate(ORDER)}
+
+        # Resolve the Status + Start date fields once.
+        fq = ('query($p:ID!){node(id:$p){... on ProjectV2{fields(first:50){nodes{'
+              '... on ProjectV2FieldCommon{id name} ... on ProjectV2SingleSelectField{id name options{id name}}}}}}}')
+        fields = gh(fq, p=PROJECT)["data"]["node"]["fields"]["nodes"]
+        sfield = next((x for x in fields if x.get("name") == "Status"), None)
+        dfield = next((x for x in fields if x.get("name") == "Start date"), None)
+        if not sfield or not dfield:
+            raise SystemExit("::error::rollup-board: board is missing a Status or Start date field")
+        opt = {o["name"]: o["id"] for o in sfield.get("options", [])}
+
+        # Page the board.
+        iq = ('query($proj:ID!,$cursor:String){node(id:$proj){... on ProjectV2{'
+              'items(first:100,after:$cursor){pageInfo{hasNextPage endCursor}nodes{id '
+              'status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
+              'start:fieldValueByName(name:"Start date"){... on ProjectV2ItemFieldDateValue{date}} '
+              'content{... on Issue{number repository{nameWithOwner} issueType{name} '
+              'parent{number repository{nameWithOwner}} subIssues(first:1){totalCount}}}}}}}}')
+        items, cursor = [], ""
+        while True:
+            d = gh(iq, proj=PROJECT, **({"cursor": cursor} if cursor else {}))
+            pg = d["data"]["node"]["items"]
+            items += pg["nodes"]
+            if not pg["pageInfo"]["hasNextPage"]:
+                break
+            cursor = pg["pageInfo"]["endCursor"]
+
+        def st(it): return (it.get("status") or {}).get("name")
+        def sd(it): return (it.get("start") or {}).get("date")
+
+        # Group children by parent key; collect epic items (parents that aren't Initiatives).
+        children, epics = {}, []
+        for it in items:
+            c = it.get("content") or {}
+            if not c:
+                continue
+            p = c.get("parent")
+            if p:
+                pk = "%s#%s" % (p["repository"]["nameWithOwner"], p["number"])
+                children.setdefault(pk, []).append(it)
+            typ = (c.get("issueType") or {}).get("name")
+            if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ != "Initiative":
+                epics.append(it)
+
+        def rollup_status(kids):
+            rs = [RANK[st(k)] for k in kids if st(k) in RANK]
+            if not rs:
+                return None
+            mn, mx = min(rs), max(rs)
+            if mn >= RANK["Done"]:          # all terminal → least-advanced terminal
+                return ORDER[mn]
+            if mx >= RANK["In progress"]:   # any active, or a mix of done + not-done
+                return "In progress"
+            return ORDER[mx]                # all pre-work → most-ready
+
+        changes = 0
+        for e in epics:
+            c = e["content"]
+            ek = "%s#%s" % (c["repository"]["nameWithOwner"], c["number"])
+            kids = children.get(ek, [])
+            if not kids:
+                continue
+            starts = [sd(k) for k in kids if sd(k)]
+            plan = [("Status", st(e), rollup_status(kids), False),
+                    ("Start date", sd(e), (min(starts) if starts else None), True)]
+            for field, cur, new, is_date in plan:
+                if not new or new == cur:
+                    continue
+                if not is_date and new not in opt:
+                    emit("::warning::%s computed Status %r has no board option — skipping" % (ek, new))
+                    continue
+                changes += 1
+                emit("- %s %s %s: %s -> %s" % ("would set" if DRY else "set", ek, field, cur or "<unset>", new))
+                if DRY:
+                    continue
+                if is_date:
+                    gh('mutation($p:ID!,$i:ID!,$f:ID!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{date:"%s"}}){projectV2Item{id}}}' % new,
+                       p=PROJECT, i=e["id"], f=dfield["id"])
+                else:
+                    gh('mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}',
+                       p=PROJECT, i=e["id"], f=sfield["id"], o=opt[new])
+
+        emit("\nrollup-board: %d epic(s) scanned, %d change(s) (%s)." % (len(epics), changes, "DRY RUN — no writes" if DRY else "written"))
+        if summary:
+            summary.close()
+        PY
