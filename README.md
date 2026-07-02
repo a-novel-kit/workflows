@@ -92,6 +92,14 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `auto-release` | Turn a pushed tag into a GitHub release with notes.    |
 | `npm`          | Publish the workspace packages to the GitHub registry. |
 
+### Reusable workflows
+
+Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/workflows/<file>@<tag>` (not `<group>/<action>` — these are whole workflows, in `.github/workflows/`).
+
+| Workflow          | Purpose                                                                                   |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `reconcile-board` | Per-org board fail-safe sweep: epic rollup + Status drift re-derive + merge-gate re-post. |
+
 ## Contributing
 
 Setup and day-to-day commands are in the [developer onboarding guide](https://github.com/a-novel-kit/.github/blob/master/README.md); workflows-specific notes are in [CONTRIBUTING.md](./CONTRIBUTING.md).

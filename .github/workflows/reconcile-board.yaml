@@ -1,0 +1,149 @@
+# Reusable board reconcile sweep — the fail-safe that repairs board state the
+# event-driven automation can miss. Each org's `.github` repo calls this on a schedule
+# with a thin caller, so the sweep logic lives in ONE place. Three passes:
+#   - rollup:   roll each epic's Status + Start date up from its children (read-only by default).
+#   - rederive: re-derive every open Task PR's board Status, catching dropped derive events.
+#   - regate:   re-post merge-gate on every open epic-member PR, since a sibling changing
+#               in another repo emits no event to it.
+# The per-PR passes matrix over the org's open PRs (enumerated first, paginated) and call
+# the generic-actions cross-repo via their repo inputs. All board mutations still go through
+# the single-writer actions. The `when` (cron / concurrency) lives in the caller.
+name: reconcile-board
+
+on:
+  workflow_call:
+    inputs:
+      project_id:
+        required: true
+        type: string
+        description: Node id of the org "Tasks" board (PVT_…).
+      client_id:
+        required: true
+        type: string
+        description: The org's [Agent] bot App client id.
+      rollup_dry_run:
+        required: false
+        type: string
+        default: "true"
+        description: When "true" (default), the epic rollup only logs; set "false" to write.
+    secrets:
+      private_key:
+        required: true
+        description: The [Agent] bot App private key (PEM).
+
+jobs:
+  rollup:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.7.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          project_id: ${{ inputs.project_id }}
+          dry_run: ${{ inputs.rollup_dry_run }}
+
+  # Enumerate ALL the org's open PRs (paginated) → matrices for the two per-PR passes.
+  enumerate:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      tasks: ${{ steps.list.outputs.tasks }}
+      epic_prs: ${{ steps.list.outputs.epic_prs }}
+    steps:
+      - name: Mint read token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-issues: read
+          permission-pull-requests: read
+      - name: List open PRs
+        id: list
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:100, after:$cursor){
+            pageInfo{ hasNextPage endCursor }
+            nodes{ ... on PullRequest{ number headRefOid repository{ name }
+              closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } } }'
+          # Page every open PR — a fail-safe must not stop at the first 100.
+          nodes='[]'
+          cursor=""
+          while :; do
+            args=(-F q="org:$ORG is:pr is:open")
+            [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+            page=$(gh api graphql -f query="$q" "${args[@]}")
+            nodes=$(jq -cn --argjson a "$nodes" --argjson b "$(echo "$page" | jq -c '.data.search.nodes')" '$a + $b')
+            [ "$(echo "$page" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
+            cursor=$(echo "$page" | jq -r '.data.search.pageInfo.endCursor')
+          done
+          # tasks    = open PRs that close an issue → re-derive their Status.
+          # epic_prs = those where ANY closing issue has a parent epic → re-post merge-gate.
+          tasks=$(echo "$nodes" | jq -c '[.[]
+            | select(.number and (.closingIssuesReferences.nodes | length > 0))
+            | {repo: .repository.name, number, sha: .headRefOid}]')
+          epic_prs=$(echo "$nodes" | jq -c '[.[]
+            | select(.number and (([.closingIssuesReferences.nodes[].parent] | map(select(. != null)) | length) > 0))
+            | {repo: .repository.name, number, sha: .headRefOid}]')
+          {
+            echo "tasks=$tasks"
+            echo "epic_prs=$epic_prs"
+          } >> "$GITHUB_OUTPUT"
+
+  # Drift fail-safe: re-derive each open Task PR's Status (catches dropped derive events).
+  rederive:
+    needs: enumerate
+    if: ${{ needs.enumerate.outputs.tasks != '[]' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.enumerate.outputs.tasks) }}
+    steps:
+      - name: Mint read token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          # This run only reads one PR — scope the token to that repo, not the org.
+          repositories: ${{ matrix.pr.repo }}
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: read
+      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.7.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          project_id: ${{ inputs.project_id }}
+          repo: ${{ matrix.pr.repo }}
+          pull_request_number: ${{ matrix.pr.number }}
+          github_token: ${{ steps.token.outputs.token }}
+
+  # Staleness fail-safe: re-post merge-gate on each open epic-member PR — a sibling
+  # changing in another repo emits no event to it. merge-gate mints its own org-wide
+  # token (it walks siblings across repos), so no token is scoped here.
+  regate:
+    needs: enumerate
+    if: ${{ needs.enumerate.outputs.epic_prs != '[]' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.enumerate.outputs.epic_prs) }}
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.7.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          repo: ${{ matrix.pr.repo }}
+          pull_request_number: ${{ matrix.pr.number }}
+          head_sha: ${{ matrix.pr.sha }}
