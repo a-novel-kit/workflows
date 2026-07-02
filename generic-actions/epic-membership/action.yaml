@@ -1,0 +1,176 @@
+name: epic-membership
+description: >
+  Resolve an Epic's authorized member set: the OPEN pull requests carrying the
+  `epic:<N>` label across the workflow's org. This is the membership AUTHORITY for the
+  cross-repo landing machinery. Authority is the label itself, because GitHub only lets
+  a user with >= triage on a repo apply a label — so an `epic:<N>` label is a
+  permission-gated assertion that a PR belongs to the Epic. A PR-body `Closes` keyword
+  is author-controlled and NOT gated, so the older `closingIssuesReferences → parent →
+  subIssues` walk is demoted to a discovery hint (a way to SUGGEST the label) and is no
+  longer trusted to define the set here.
+
+  Read-only: it queries the label set and emits it. It mutates nothing — no check post,
+  no board write — so it takes no dry_run. The caller decides what to do with the set
+  (and, on error, whether to hold or fail-open); this action just reports.
+
+  TODO (follow-up, intentionally NOT built here to keep the MVP small): membership
+  should be the ACTIVATION SNAPSHOT, not the live label set — a timeline-fold where a PR
+  is a member iff its last `epic:<N>` label event at time <= the Epic's activation
+  timestamp is `labeled` (a pure fold over GET issues/{n}/timeline). That freezes the
+  set so a PR labelled after the Epic starts landing joins the NEXT wave instead of
+  re-freezing an in-flight one, and a reopened/relabelled sibling can't resurrect a
+  finished Epic. The MVP below uses the CURRENT open-PR label set, which is correct for
+  a single steady wave and is the input the snapshot fold will later consume.
+
+inputs:
+  epic_number:
+    required: true
+    description: >
+      The Epic issue number N. Used to build the authoritative label name `epic:<N>` to
+      search for; informational otherwise (this action does not read the Epic issue).
+  client_id:
+    required: true
+    description: Client id of the [Agent] App (issues + pull-requests read for the org-wide label search).
+  app_private_key:
+    required: true
+    description: Private key (PEM) of that App.
+
+outputs:
+  members:
+    description: >
+      Compact JSON array of the authorized members, one object per open `epic:<N>` PR:
+      {repo (nameWithOwner), number, headRefOid, isDraft, reviewDecision}. `[]` when the
+      Epic has no open labelled PRs.
+    value: ${{ steps.resolve.outputs.members }}
+  count:
+    description: Integer count of members (length of the array).
+    value: ${{ steps.resolve.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    # Mint an org-wide [Agent] token: the search spans every repo in the org, and the
+    # default GITHUB_TOKEN is single-repo, so it can't see sibling PRs in other repos.
+    # Set `owner` and omit `repositories` to install org-wide; request only the two read
+    # scopes the search needs (issues + pull-requests) and nothing else — this action
+    # never writes.
+    - name: Mint token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        permission-issues: read
+        permission-pull-requests: read
+
+    - name: Resolve the authorized member set
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        EPIC: ${{ inputs.epic_number }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${EPIC:-}" ]; then
+          echo "::error::epic_number is required"
+          exit 1
+        fi
+        # Coerce to an integer before it reaches the search grammar. `epic_number` builds
+        # the `label:"epic:${EPIC}"` qualifier, so a non-numeric value could close the
+        # quoted qualifier and inject further search terms — silently broadening the set.
+        # The label convention is numeric, so reject anything else outright.
+        if ! [[ "$EPIC" =~ ^[0-9]+$ ]]; then
+          echo "::error::epic_number must be an integer, got \"$EPIC\""
+          exit 1
+        fi
+
+        # The authority: open PRs carrying the permission-gated `epic:<N>` label,
+        # org-wide. `is:pr is:open` bounds the search to open PRs; the quoted label name
+        # matches the `epic:<N>` convention exactly (the colon needs the quotes);
+        # `org:${OWNER}` scopes the walk to the workflow's org (the owner is an
+        # Organization — a user account would need the `user:` qualifier instead).
+        # NOTE: GitHub's search index is eventually consistent, so a PR labelled or
+        # opened seconds ago may be missing from an otherwise-successful response (and a
+        # just-closed one briefly present); the caller must tolerate a transiently short
+        # set. The timeline-fold follow-up above closes this window by reading the Epic
+        # timeline live instead of the lagging index.
+        search="is:pr is:open label:\"epic:${EPIC}\" org:${OWNER}"
+
+        # Search returns the ISSUE union; PRs come through the PullRequest inline
+        # fragment. headRefOid is the current ready SHA the readiness gate anchors to.
+        q='query($q:String!,$cursor:String){
+          search(query:$q, type:ISSUE, first:100, after:$cursor){
+            pageInfo{ hasNextPage endCursor }
+            nodes{ ... on PullRequest{
+              number isDraft reviewDecision headRefOid
+              repository{ nameWithOwner } } } } }'
+
+        # Retry transient GraphQL failures a few times. Unlike merge-gate (which posts a
+        # required check and so must fail-OPEN to avoid deadlocking the queue), this is a
+        # read helper with no side effect: if the set can't be resolved we FAIL with a
+        # clear message and let the caller choose hold-vs-fail-open with full context.
+        fetch() { # $1=cursor  → prints the response JSON on success, nothing on failure
+          # -f (raw string) for every variable: all three are GraphQL String, and -f
+          # skips the typed coercion -F applies (bare true/false/numeric, leading @=file).
+          local args=(-f query="$q" -f q="$search")
+          [ -n "${1:-}" ] && args+=(-f cursor="$1")
+          local data
+          for attempt in 1 2 3; do
+            # Capture stdout+stderr together so a transport / auth / rate-limit / query
+            # error (gh writes those to stderr) survives to be echoed on final failure;
+            # on success gh prints only the response JSON, which the jq check validates.
+            if data=$(gh api graphql "${args[@]}" 2>&1) \
+              && echo "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
+              printf '%s' "$data"
+              return 0
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          # This runs in a command-substitution subshell, so the caller's ::error:: can't
+          # see $data — echo the underlying error to the run log here so the fail-closed
+          # exit is diagnosable (auth, rate limit, query validation, …).
+          printf 'epic-membership: GraphQL fetch failed after 3 attempts: %s\n' "$data" >&2
+          return 1
+        }
+
+        # Accumulate PR nodes across pages (an Epic can span more than 100 PRs) in a
+        # plain JSON string — no temp file, matching the pure-jq style of the sibling
+        # actions. `(.data.search.nodes // [])[]` tolerates a null `nodes` (so jq can't
+        # abort the graceful error path), and `.number != null` drops any non-PR row the
+        # ISSUE-union search might surface rather than emitting an empty object.
+        agg='[]'
+        cursor=""
+        while :; do
+          if ! resp=$(fetch "$cursor"); then
+            echo "::error::could not resolve epic:${EPIC} members — GraphQL search failed after retries (caller decides hold vs fail-open)"
+            exit 1
+          fi
+          page=$(printf '%s' "$resp" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')
+          agg=$(jq -s '.[0] + .[1]' <(printf '%s' "$agg") <(printf '%s' "$page"))
+          [ "$(printf '%s' "$resp" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
+          cursor=$(printf '%s' "$resp" | jq -r '.data.search.pageInfo.endCursor')
+        done
+
+        # Compact (jq -c) so the output is a single line — GITHUB_OUTPUT is line-based.
+        # Sorted by repo then number: GitHub's search order isn't stable, so an unsorted
+        # set churns downstream diffs/comparisons across runs. reviewDecision stays null
+        # when GitHub reports no decision yet; the caller reads head SHA + review live
+        # anyway, this is the discovery view.
+        members=$(printf '%s' "$agg" | jq -c '[.[] | {
+          repo: .repository.nameWithOwner,
+          number,
+          headRefOid,
+          isDraft,
+          reviewDecision
+        }] | sort_by(.repo, .number)')
+        count=$(printf '%s' "$members" | jq 'length')
+
+        {
+          echo "members=$members"
+          echo "count=$count"
+        } >> "$GITHUB_OUTPUT"
+        echo "Epic #${EPIC}: ${count} authorized member(s) (open \`epic:${EPIC}\` PR(s))." \
+          | tee -a "$GITHUB_STEP_SUMMARY"
