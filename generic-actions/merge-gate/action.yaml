@@ -90,8 +90,11 @@ runs:
           post_check success "In the merge queue — gated at enqueue."
           exit 0
         fi
+        # A head SHA but no PR (and not a merge_group) is a misconfigured caller — fail
+        # CLOSED rather than passing a required check on a real SHA with nothing
+        # evaluated (which would let it satisfy the ruleset unchecked).
         if [ -z "${PR_NUMBER:-}" ]; then
-          post_check success "No pull request in this event — nothing to gate."
+          post_check failure "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event — refusing to pass a required check without evaluating a PR."
           exit 0
         fi
 
