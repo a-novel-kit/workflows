@@ -128,6 +128,13 @@ runs:
               echo "::error::date field \"$FIELD\" needs a YYYY-MM-DD value, got \"$VALUE\""
               exit 1
             fi
+            # Reject a well-formed but impossible date (e.g. 2026-02-30) here, with a
+            # clear message, instead of letting the GraphQL mutation fail obscurely.
+            # A real date round-trips through `date -d`; a bad one errors or normalizes.
+            if [ "$(date -d "$VALUE" +%Y-%m-%d 2>/dev/null)" != "$VALUE" ]; then
+              echo "::error::\"$VALUE\" is not a real calendar date"
+              exit 1
+            fi
             value_frag="{date: \"$VALUE\"}"
             cur_frag='... on ProjectV2ItemFieldDateValue{ current: date }'
             ;;
@@ -138,13 +145,26 @@ runs:
         esac
 
         # 2. Resolve the content's item in THIS project; add it if missing (a derived
-        #    write on an un-boarded Task should board it, not vanish).
-        item_q='query($c:ID!){ node(id:$c){
-          ... on Issue{ projectItems(first:20){ nodes{ id project{ id } } } }
-          ... on PullRequest{ projectItems(first:20){ nodes{ id project{ id } } } } } }'
-        iresp=$(gh api graphql -f query="$item_q" -F c="$CONTENT_ID")
-        item_id=$(echo "$iresp" | jq -r --arg p "$PROJECT_ID" \
-          '[.data.node.projectItems.nodes[] | select(.project.id==$p) | .id][0] // empty')
+        #    write on an un-boarded Task should board it, not vanish). Page through
+        #    projectItems so a content that sits on many projects still matches —
+        #    idempotence must not hinge on the first page holding the target board.
+        item_q='query($c:ID!,$cursor:String){ node(id:$c){
+          ... on Issue{ projectItems(first:100, after:$cursor){
+            pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } }
+          ... on PullRequest{ projectItems(first:100, after:$cursor){
+            pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } } } }'
+        item_id=""
+        cursor=""
+        while :; do
+          args=(-F c="$CONTENT_ID")
+          [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+          iresp=$(gh api graphql -f query="$item_q" "${args[@]}")
+          item_id=$(echo "$iresp" | jq -r --arg p "$PROJECT_ID" \
+            '[.data.node.projectItems.nodes[] | select(.project.id==$p) | .id][0] // empty')
+          [ -n "$item_id" ] && break
+          [ "$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.hasNextPage')" = "true" ] || break
+          cursor=$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.endCursor')
+        done
 
         if [ -z "$item_id" ]; then
           if [ "$ADD_IF_MISSING" != "true" ]; then
