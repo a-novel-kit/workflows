@@ -54,11 +54,32 @@ runs:
           pullRequest(number:$num){
             state isDraft reviewDecision
             closingIssuesReferences(first:5){ nodes{ id number } } } } }'
-        pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR")
+        # A not-found / inaccessible PR makes the GraphQL call error; catch that here so
+        # it fails with a clear message rather than gh's raw error mid-pipeline.
+        if ! pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR"); then
+          echo "::error::could not query PR #$PR (not found, or the token lacks access)"
+          exit 1
+        fi
         state=$(echo "$pr" | jq -r '.data.repository.pullRequest.state')
         draft=$(echo "$pr" | jq -r '.data.repository.pullRequest.isDraft')
         review=$(echo "$pr" | jq -r '.data.repository.pullRequest.reviewDecision // ""')
-        issue_id=$(echo "$pr" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].id // empty')
+
+        # A missing/inaccessible PR resolves to null — fail with that, not a downstream
+        # "unexpected state 'null'".
+        if [ -z "$state" ] || [ "$state" = "null" ]; then
+          echo "::error::PR #$PR not found or inaccessible (check the number and token access)"
+          exit 1
+        fi
+
+        # A Task pairs with exactly one PR, so normally one closing ref. If a PR closes
+        # several, pick the lowest-numbered deterministically (not arbitrary node order)
+        # and warn — the reconcile sweep derives the others from their own PRs anyway.
+        refs=$(echo "$pr" | jq '.data.repository.pullRequest.closingIssuesReferences.nodes')
+        ref_count=$(echo "$refs" | jq 'length')
+        issue_id=$(echo "$refs" | jq -r 'sort_by(.number) | .[0].id // empty')
+        if [ "$ref_count" -gt 1 ]; then
+          echo "::warning::PR #$PR closes $ref_count issues; deriving the lowest-numbered. The reconcile sweep covers the rest."
+        fi
 
         # Pure function of the PR's CURRENT state — the reconcile sweep re-runs this
         # identically, so it must not depend on which event fired.
