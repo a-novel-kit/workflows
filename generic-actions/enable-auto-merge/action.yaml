@@ -1,0 +1,99 @@
+name: enable-auto-merge
+description: >
+  Enable native auto-merge on a pull request as the [Agent] App, so GitHub lands it once
+  every required check and approval is satisfied — the caller enables it once and walks
+  away instead of polling for green.
+
+  Enabling is safe while a required check is still RED: GitHub parks the request and
+  merges when the branch goes green (verified — enablePullRequestAutoMerge does not 422
+  on an unmet required check on our merge-queue repos). So a landing coordinator can
+  enable auto-merge once per sibling at ready-time and let the gate hold it.
+
+  Idempotent: if auto-merge is already enabled it is a no-op (decided by querying the
+  PR, not by parsing an error string). `--squash` is the only method the require-approval
+  ruleset allows; on a merge-queue repo the queue's own config takes over regardless, so
+  passing it is safe and explicit rather than a real method choice.
+
+inputs:
+  repo:
+    required: false
+    default: ${{ github.event.repository.name }}
+    description: >
+      Repository of the PR (name only; the owner is the workflow's org). Defaults to the
+      triggering repo; a cross-repo caller passes each sibling's repo.
+  pull_request_number:
+    required: true
+    description: Number of the PR to enable auto-merge on.
+  client_id:
+    required: true
+    description: Client id of the [Agent] App (pull-requests + contents write on the target repo).
+  app_private_key:
+    required: true
+    description: Private key (PEM) of that App.
+  dry_run:
+    required: false
+    default: "true"
+    description: >
+      When "true" (the default), log the intended enable without calling GitHub — the
+      read-only-first mode. Set "false" to actually enable auto-merge.
+
+runs:
+  using: composite
+  steps:
+    # Scope the token to just the target repo (least privilege). The [Agent] App is
+    # installed org-wide, so a cross-repo caller can enable on any sibling's repo by
+    # passing its name here.
+    - name: Mint token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ inputs.repo }}
+        permission-pull-requests: write
+        # `gh pr merge --auto` needs contents:write too — the only proven `--auto` enqueue
+        # in this repo (governance/auto-approve-dependabot) mints both. A later spike may
+        # confirm pull-requests:write alone suffices and narrow this.
+        permission-contents: write
+
+    - name: Enable auto-merge
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO_FULL: ${{ github.repository_owner }}/${{ inputs.repo }}
+        PR: ${{ inputs.pull_request_number }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${PR:-}" ]; then
+          echo "::error::pull_request_number is required"
+          exit 1
+        fi
+        target="${REPO_FULL}#${PR}"
+
+        # Idempotency by query, not by parsing an error string: is auto-merge already on?
+        already=$(gh pr view "$PR" --repo "$REPO_FULL" --json autoMergeRequest \
+          -q '.autoMergeRequest != null')
+
+        # DRY_RUN defaults on; only the literal "false" (any case) actually enables.
+        # Lowercase with tr, not ${VAR,,} — the latter is a Bash 4+ expansion that fails
+        # on Bash 3.x (e.g. macOS runners).
+        dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
+        if [ "$dry" != "false" ]; then
+          if [ "$already" = "true" ]; then
+            echo "auto-merge already enabled on ${target} — would no-op (DRY RUN)." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "would enable auto-merge on ${target} (DRY RUN)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
+        fi
+
+        if [ "$already" = "true" ]; then
+          echo "auto-merge already enabled on ${target} — no-op." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        gh pr merge "$PR" --repo "$REPO_FULL" --auto --squash
+        echo "auto-merge enabled on ${target}." | tee -a "$GITHUB_STEP_SUMMARY"
