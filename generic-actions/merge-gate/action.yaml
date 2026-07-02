@@ -86,7 +86,23 @@ runs:
               subIssues(first:100){ nodes{ number repository{ owner{ login } name }
                 closedByPullRequestsReferences(first:20, includeClosedPrs:false){ nodes{
                   number state isDraft reviewDecision repository{ nameWithOwner } } } } } } } } } } } }'
-        data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR_NUMBER")
+        # Retry transient GraphQL failures, then FAIL-OPEN if the walk can't be done:
+        # never leave the required check un-posted (that would time out the queue and
+        # drop the PR — worse than passing). A missed atomicity check is re-evaluated
+        # by the reconcile sweep and backstopped by the Stage-4 saga.
+        data=""
+        for attempt in 1 2 3; do
+          if data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR_NUMBER" 2>/dev/null) \
+            && ! echo "$data" | jq -e '.errors' >/dev/null 2>&1; then
+            break
+          fi
+          data=""
+          [ "$attempt" -lt 3 ] && sleep 2
+        done
+        if [ -z "$data" ]; then
+          post_check success "Couldn't evaluate the epic (GraphQL error after retries) — passing so the queue isn't blocked; the reconcile sweep re-checks."
+          exit 0
+        fi
 
         task=$(echo "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty')
         if [ -z "$task" ]; then
