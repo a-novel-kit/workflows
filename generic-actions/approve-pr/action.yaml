@@ -63,7 +63,7 @@ runs:
         token: ${{ steps.token.outputs.token }}
         persist-credentials: false
 
-    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.7.0
+    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.8.0
       with:
         pull_request: ${{ inputs.pull_request }}
         github_token: ${{ steps.token.outputs.token }}
