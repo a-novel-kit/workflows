@@ -26,6 +26,19 @@ inputs:
       Number of the PR to derive from. Defaults to the PR that triggered the run, which
       works for both pull_request and pull_request_review events; the reconcile sweep
       passes each open Task's PR explicitly.
+  repo:
+    required: false
+    default: ${{ github.event.repository.name }}
+    description: >
+      Repository of the PR (name only; the owner is the workflow's org). Defaults to the
+      triggering repo; the reconcile sweep passes another repo in the org to re-derive it.
+  github_token:
+    required: false
+    default: ${{ github.token }}
+    description: >
+      Token for reading the PR + its closing issue. Defaults to the job's token (fine for
+      a same-repo event); the reconcile sweep passes an org-wide [Agent] token so it can
+      read a PR in another repo of the org.
 
 runs:
   using: composite
@@ -38,9 +51,9 @@ runs:
       id: derive
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ inputs.github_token }}
         OWNER: ${{ github.repository_owner }}
-        REPO: ${{ github.event.repository.name }}
+        REPO: ${{ inputs.repo }}
         PR: ${{ inputs.pull_request_number }}
       run: |
         set -euo pipefail
