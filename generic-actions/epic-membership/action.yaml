@@ -119,13 +119,20 @@ runs:
           [ -n "${1:-}" ] && args+=(-f cursor="$1")
           local data
           for attempt in 1 2 3; do
-            if data=$(gh api graphql "${args[@]}" 2>/dev/null) \
-              && ! echo "$data" | jq -e '.errors' >/dev/null 2>&1; then
+            # Capture stdout+stderr together so a transport / auth / rate-limit / query
+            # error (gh writes those to stderr) survives to be echoed on final failure;
+            # on success gh prints only the response JSON, which the jq check validates.
+            if data=$(gh api graphql "${args[@]}" 2>&1) \
+              && echo "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
               printf '%s' "$data"
               return 0
             fi
             [ "$attempt" -lt 3 ] && sleep 2
           done
+          # This runs in a command-substitution subshell, so the caller's ::error:: can't
+          # see $data — echo the underlying error to the run log here so the fail-closed
+          # exit is diagnosable (auth, rate limit, query validation, …).
+          printf 'epic-membership: GraphQL fetch failed after 3 attempts: %s\n' "$data" >&2
           return 1
         }
 
@@ -148,15 +155,17 @@ runs:
         done
 
         # Compact (jq -c) so the output is a single line — GITHUB_OUTPUT is line-based.
-        # reviewDecision stays null when GitHub reports no decision yet; the caller reads
-        # head SHA + review live anyway, this is the discovery view.
+        # Sorted by repo then number: GitHub's search order isn't stable, so an unsorted
+        # set churns downstream diffs/comparisons across runs. reviewDecision stays null
+        # when GitHub reports no decision yet; the caller reads head SHA + review live
+        # anyway, this is the discovery view.
         members=$(printf '%s' "$agg" | jq -c '[.[] | {
           repo: .repository.nameWithOwner,
           number,
           headRefOid,
           isDraft,
           reviewDecision
-        }]')
+        }] | sort_by(.repo, .number)')
         count=$(printf '%s' "$members" | jq 'length')
 
         {
