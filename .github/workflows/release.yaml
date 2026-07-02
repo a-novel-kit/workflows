@@ -67,3 +67,8 @@ jobs:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
           project_id: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
+
+      # Surface the cut version in the run summary so a release run is
+      # identifiable by version at a glance (run-name carries only the bump type).
+      - if: ${{ !inputs.dry_run }}
+        run: echo "## 🚀 Released \`${{ steps.core.outputs.tag }}\` (${{ inputs.release_type }})" >> "$GITHUB_STEP_SUMMARY"
