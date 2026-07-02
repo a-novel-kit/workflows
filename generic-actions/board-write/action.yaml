@@ -43,6 +43,13 @@ inputs:
     description: >
       When "true" (default), add content to the board if it isn't a member yet, so a
       derived write can't silently no-op on an un-boarded item. "false" errors instead.
+  only_if_empty:
+    required: false
+    default: "false"
+    description: >
+      When "true", write only if the field is currently empty; a field that already
+      holds any value is left untouched. Use it for set-once fields like Start date, so
+      a re-run or the reconcile sweep can't overwrite the original stamp.
   dry_run:
     required: false
     default: "false"
@@ -81,6 +88,7 @@ runs:
         FIELD: ${{ inputs.field }}
         VALUE: ${{ inputs.value }}
         ADD_IF_MISSING: ${{ inputs.add_if_missing }}
+        ONLY_IF_EMPTY: ${{ inputs.only_if_empty }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: |
         set -euo pipefail
@@ -184,6 +192,17 @@ runs:
           fieldValueByName(name:\$field){ $cur_frag } } } }"
         cur=$(gh api graphql -f query="$cur_q" -F item="$item_id" -F field="$FIELD" \
           | jq -r '.data.node.fieldValueByName.current // empty')
+
+        # A set-once field (Start date): if it already holds anything, leave it — don't
+        # let a re-run or the sweep overwrite the original stamp.
+        if [ "$ONLY_IF_EMPTY" = "true" ] && [ -n "$cur" ]; then
+          echo "No change — \"$FIELD\" already set (\"$cur\") and only_if_empty." | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "item_id=$item_id"
+            echo "changed=false"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         if [ "$cur" = "$VALUE" ]; then
           echo "No change — \"$FIELD\" already \"$VALUE\" on item $item_id." | tee -a "$GITHUB_STEP_SUMMARY"
