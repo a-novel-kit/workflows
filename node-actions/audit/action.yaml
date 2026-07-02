@@ -15,7 +15,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.5.0
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.6.0
       id: app_token
       with:
         client_id: ${{ inputs.client_id }}
