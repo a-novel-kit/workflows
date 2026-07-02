@@ -1,0 +1,195 @@
+name: board-write
+description: >
+  The write half of the board automation: set ONE field (single-select or date) on a
+  Projects v2 board item, for a given issue or PR, as the [Agent] App. It resolves the
+  field + option node-ids and the item — adding the item to the board if it isn't a
+  member yet — and compares the current value before writing, so a re-run or an
+  overlapping trigger is a no-op rather than a redundant mutation. This is the single
+  privileged path that mutates the board; the status deriver and the rollup engine
+  both go through it, which is what keeps the board single-writer.
+
+inputs:
+  client_id:
+    required: true
+    description: >
+      Client id for the org's [Agent] bot. The default GITHUB_TOKEN cannot see
+      org-level Projects v2, so a bot token is required.
+  app_private_key:
+    required: true
+    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  project_id:
+    required: true
+    description: >
+      Node id of the org "Tasks" board (PVT_…). Passed in per-org by the caller — the
+      same way client_id is — so the action needs no title lookup. Find it with:
+      gh project view <n> --owner <org> --format json.
+  content_id:
+    required: true
+    description: >
+      Node id of the issue or PR whose board item to write. The caller resolves what to
+      write (e.g. a PR's linked issue); board-write finds that content's item in the
+      project.
+  field:
+    required: true
+    description: Name of the field to set, e.g. "Status" or "Start date".
+  value:
+    required: true
+    description: >
+      Target value. For a single-select field, the option NAME (e.g. "In progress").
+      For a date field, an ISO date (YYYY-MM-DD).
+  add_if_missing:
+    required: false
+    default: "true"
+    description: >
+      When "true" (default), add content to the board if it isn't a member yet, so a
+      derived write can't silently no-op on an un-boarded item. "false" errors instead.
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", log the change that would be made without writing it.
+
+outputs:
+  item_id:
+    description: Node id of the board item that was resolved (or added).
+    value: ${{ steps.write.outputs.item_id }}
+  changed:
+    description: '"true" if the field was mutated, "false" if it already held the value.'
+    value: ${{ steps.write.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    # Mint a token that can write the org's Projects v2 — and nothing else. The
+    # [Agent] App can do more (issues/PRs), but requesting only the org Projects scope
+    # bounds a leak of this step's token to board edits.
+    - name: Mint org-Projects token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        permission-organization-projects: write
+
+    - name: Write the field
+      id: write
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        CONTENT_ID: ${{ inputs.content_id }}
+        FIELD: ${{ inputs.field }}
+        VALUE: ${{ inputs.value }}
+        ADD_IF_MISSING: ${{ inputs.add_if_missing }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        for v in PROJECT_ID CONTENT_ID FIELD VALUE; do
+          if [ -z "${!v:-}" ]; then
+            echo "::error::$v is required"
+            exit 1
+          fi
+        done
+
+        # 1. Resolve the field on this board: its node id, type, and — for a
+        #    single-select — the option node-ids. A single-select field satisfies both
+        #    ProjectV2FieldCommon (id, dataType) and ProjectV2SingleSelectField
+        #    (options); a date field is a plain ProjectV2Field.
+        field_q='query($proj:ID!,$field:String!){ node(id:$proj){ ... on ProjectV2{
+          field(name:$field){
+            ... on ProjectV2FieldCommon{ id dataType }
+            ... on ProjectV2SingleSelectField{ options{ id name } } } } } }'
+        fresp=$(gh api graphql -f query="$field_q" -F proj="$PROJECT_ID" -F field="$FIELD")
+        field_id=$(echo "$fresp" | jq -r '.data.node.field.id // empty')
+        data_type=$(echo "$fresp" | jq -r '.data.node.field.dataType // empty')
+        if [ -z "$field_id" ]; then
+          echo "::error::field \"$FIELD\" not found on the board"
+          exit 1
+        fi
+
+        # Build the GraphQL value fragment to write, and the sub-selection that reads
+        # the item's CURRENT value of this field (for the compare-before-write). Both
+        # inlined values are safe to interpolate: a single-select option id is a GitHub
+        # node id, and a date is format-checked below.
+        case "$data_type" in
+          SINGLE_SELECT)
+            opt_id=$(echo "$fresp" | jq -r --arg v "$VALUE" \
+              '.data.node.field.options[] | select(.name==$v) | .id')
+            if [ -z "$opt_id" ]; then
+              echo "::error::\"$VALUE\" is not an option of single-select field \"$FIELD\""
+              exit 1
+            fi
+            value_frag="{singleSelectOptionId: \"$opt_id\"}"
+            cur_frag='... on ProjectV2ItemFieldSingleSelectValue{ current: name }'
+            ;;
+          DATE)
+            if ! echo "$VALUE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+              echo "::error::date field \"$FIELD\" needs a YYYY-MM-DD value, got \"$VALUE\""
+              exit 1
+            fi
+            value_frag="{date: \"$VALUE\"}"
+            cur_frag='... on ProjectV2ItemFieldDateValue{ current: date }'
+            ;;
+          *)
+            echo "::error::board-write handles single-select + date fields; \"$FIELD\" is $data_type"
+            exit 1
+            ;;
+        esac
+
+        # 2. Resolve the content's item in THIS project; add it if missing (a derived
+        #    write on an un-boarded Task should board it, not vanish).
+        item_q='query($c:ID!){ node(id:$c){
+          ... on Issue{ projectItems(first:20){ nodes{ id project{ id } } } }
+          ... on PullRequest{ projectItems(first:20){ nodes{ id project{ id } } } } } }'
+        iresp=$(gh api graphql -f query="$item_q" -F c="$CONTENT_ID")
+        item_id=$(echo "$iresp" | jq -r --arg p "$PROJECT_ID" \
+          '[.data.node.projectItems.nodes[] | select(.project.id==$p) | .id][0] // empty')
+
+        if [ -z "$item_id" ]; then
+          if [ "$ADD_IF_MISSING" != "true" ]; then
+            echo "::error::content is not on the board and add_if_missing=false"
+            exit 1
+          fi
+          add_m='mutation($proj:ID!,$c:ID!){
+            addProjectV2ItemById(input:{projectId:$proj,contentId:$c}){ item{ id } } }'
+          item_id=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$CONTENT_ID" \
+            | jq -r '.data.addProjectV2ItemById.item.id')
+          echo "Added content to the board (item $item_id)." | tee -a "$GITHUB_STEP_SUMMARY"
+        fi
+
+        # 3. Compare-before-write: read the item's current value for this field. Equal
+        #    means a re-run or overlapping trigger — no mutation, so no lost update.
+        cur_q="query(\$item:ID!,\$field:String!){ node(id:\$item){ ... on ProjectV2Item{
+          fieldValueByName(name:\$field){ $cur_frag } } } }"
+        cur=$(gh api graphql -f query="$cur_q" -F item="$item_id" -F field="$FIELD" \
+          | jq -r '.data.node.fieldValueByName.current // empty')
+
+        if [ "$cur" = "$VALUE" ]; then
+          echo "No change — \"$FIELD\" already \"$VALUE\" on item $item_id." | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "item_id=$item_id"
+            echo "changed=false"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # 4. Write it (or, under dry-run, just report).
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "- [dry-run] would set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "item_id=$item_id"
+            echo "changed=false"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        write_m="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{
+          projectId:\$proj, itemId:\$item, fieldId:\$field, value: $value_frag }){ projectV2Item{ id } } }"
+        gh api graphql -f query="$write_m" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$field_id" >/dev/null
+        echo "Set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." | tee -a "$GITHUB_STEP_SUMMARY"
+        {
+          echo "item_id=$item_id"
+          echo "changed=true"
+        } >> "$GITHUB_OUTPUT"
