@@ -1,29 +1,33 @@
 name: merge-gate
 description: >
-  Posts the `merge-gate` check-run — the single "may this PR merge?" status check
-  — on the triggering pull request, or on the merge-queue group when the PR is in
-  the merge queue. It runs as a GitHub App rather than the workflow's own identity
-  so the check's integration id is fixed regardless of what decides the outcome,
-  letting a ruleset require it by that id.
+  Posts the `merge-gate` check-run — the single "may this PR merge?" status — on the
+  triggering pull request, or on the merge-queue group. It runs as the [Agent] App
+  (not the workflow's own identity) so the check's integration id is fixed regardless
+  of what decides the outcome, letting a ruleset require it by that id.
+
+  On a pull_request event it enforces **epic-atomicity**: a PR whose Task is part of an
+  epic passes only when every OTHER open, in-org sibling Task's PR is also merge-ready
+  (non-draft + approved), so a set of concurrent cross-repo PRs land together instead
+  of partially. A PR that closes no issue, or whose Task has no parent epic, is
+  standalone and always passes. On a merge_group event (the queue) it re-affirms
+  success — the PR was already gated on its pull_request event to be enqueued; atomic
+  merge-time coordination is a later stage.
 
 inputs:
   client_id:
     required: true
-    description: Client id of a GitHub App with the checks write permission.
+    description: Client id of the [Agent] App (checks write, plus issues/PRs read for the epic walk).
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
-  pull_request:
-    required: false
-    default: ${{ github.event.pull_request.html_url }}
-    description: URL of the PR under evaluation. Defaults to the PR that triggered the run.
 
 runs:
   using: composite
   steps:
-    # Mint a token scoped to checks:write only — a leak is bounded to writing
-    # check-runs, nothing else.
-    - name: Mint checks-write token
+    # Mint an [Agent] token: checks:write to post the status, and org-wide issues +
+    # pull-requests read to walk the epic's sibling tasks across repos (the default
+    # GITHUB_TOKEN is single-repo, so it can't see cross-repo siblings).
+    - name: Mint token
       id: token
       uses: actions/create-github-app-token@v3
       with:
@@ -31,38 +35,103 @@ runs:
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
         permission-checks: write
+        permission-issues: read
+        permission-pull-requests: read
 
-    - name: Post merge-gate check
+    - name: Evaluate + post merge-gate
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
         REPO_FULL: ${{ github.repository }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-        PR_URL: ${{ inputs.pull_request }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        IN_QUEUE: ${{ github.event.merge_group.head_sha }}
       run: |
         set -euo pipefail
 
-        # Anchor the check to the head commit the ruleset evaluates: the PR head on
-        # a pull_request event, or the merge-queue group's head on a merge_group
-        # event. The queue validates required checks on the group, so merge-gate
-        # must post there too — otherwise a queued PR waits out the check timeout
-        # and is dropped.
+        # Anchor the check to the head the ruleset evaluates: the PR head on a
+        # pull_request event, or the merge-queue group's head on a merge_group event.
         if [ -z "${HEAD_SHA:-}" ]; then
           echo "::error::merge-gate must run on a pull_request or merge_group event (no head SHA)."
           exit 1
         fi
 
-        # TODO: placeholder that always passes. Replace the hard-coded success
-        # with the real merge-eligibility decision and a summary explaining it.
-        summary="No merge conditions are enforced yet — this check always passes. PR: ${PR_URL:-<none>}"
+        # Post the check-run as the App. jq builds the payload so a summary with quotes
+        # or newlines can't break the JSON.
+        post_check() { # $1=conclusion  $2=summary
+          jq -n --arg sha "$HEAD_SHA" --arg concl "$1" --arg summary "$2" \
+            '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: $concl,
+              output: {title: "merge-gate", summary: $summary}}' \
+            | gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
+          echo "merge-gate=$1 @ ${HEAD_SHA:0:12} — $2" | tee -a "$GITHUB_STEP_SUMMARY"
+        }
 
-        # Build the payload with jq so a summary containing quotes can't break the
-        # JSON.
-        jq -n \
-          --arg sha "$HEAD_SHA" \
-          --arg summary "$summary" \
-          '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: "success",
-            output: {title: "merge-gate", summary: $summary}}' \
-          | gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
+        # In the merge queue the PR already passed merge-gate on its pull_request event
+        # to be enqueued — re-affirm so the required check reports on the group.
+        if [ -n "${IN_QUEUE:-}" ] && [ -z "${PR_NUMBER:-}" ]; then
+          post_check success "In the merge queue — gated at enqueue."
+          exit 0
+        fi
+        if [ -z "${PR_NUMBER:-}" ]; then
+          post_check success "No pull request in this event — nothing to gate."
+          exit 0
+        fi
 
-        echo "Posted merge-gate=success on ${REPO_FULL}@${HEAD_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
+        # Walk PR → Task (closing issue) → parent epic → sibling tasks → their PRs.
+        q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
+          pullRequest(number:$num){ closingIssuesReferences(first:5){ nodes{ number
+            parent{ number repository{ owner{ login } name }
+              subIssues(first:100){ nodes{ number repository{ owner{ login } name }
+                closedByPullRequestsReferences(first:20, includeClosedPrs:false){ nodes{
+                  number state isDraft reviewDecision repository{ nameWithOwner } } } } } } } } } } } }'
+        # Retry transient GraphQL failures, then FAIL-OPEN if the walk can't be done:
+        # never leave the required check un-posted (that would time out the queue and
+        # drop the PR — worse than passing). A missed atomicity check is re-evaluated
+        # by the reconcile sweep and backstopped by the Stage-4 saga.
+        data=""
+        for attempt in 1 2 3; do
+          if data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR_NUMBER" 2>/dev/null) \
+            && ! echo "$data" | jq -e '.errors' >/dev/null 2>&1; then
+            break
+          fi
+          data=""
+          [ "$attempt" -lt 3 ] && sleep 2
+        done
+        if [ -z "$data" ]; then
+          post_check success "Couldn't evaluate the epic (GraphQL error after retries) — passing so the queue isn't blocked; the reconcile sweep re-checks."
+          exit 0
+        fi
+
+        task=$(echo "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty')
+        if [ -z "$task" ]; then
+          post_check success "PR #$PR_NUMBER closes no issue — standalone, nothing to coordinate."
+          exit 0
+        fi
+        parent=$(echo "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
+        if [ -z "$parent" ]; then
+          post_check success "Task #$task has no parent epic — standalone."
+          exit 0
+        fi
+
+        # OTHER open, in-org sibling PRs that are NOT merge-ready. `includeClosedPrs` is
+        # unreliable (it still returns merged PRs), so filter to state == OPEN here;
+        # scope to the epic's own org — cross-org atomicity is out of scope by design
+        # (the per-org [Agent] app can't read across orgs anyway).
+        unready=$(echo "$data" | jq -r --argjson task "$task" --arg org "$OWNER" '
+          .data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.subIssues.nodes[]
+          | select(.number != $task)
+          | select(.repository.owner.login == $org)
+          | .closedByPullRequestsReferences.nodes[]
+          | select(.state == "OPEN")
+          | select(.isDraft or (.reviewDecision != "APPROVED"))
+          | "  - \(.repository.nameWithOwner)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"')
+
+        if [ -z "$unready" ]; then
+          post_check success "Epic #$parent — every other open sibling PR is merge-ready (or none). Atomic merge OK."
+        else
+          count=$(printf '%s\n' "$unready" | grep -c '')
+          post_check failure "$(printf 'Epic #%s — holding for atomic merge: %s sibling PR(s) not ready:\n%s' \
+            "$parent" "$count" "$unready")"
+        fi
