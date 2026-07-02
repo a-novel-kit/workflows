@@ -1,22 +1,43 @@
 name: merge-gate
 description: >
   Posts the `merge-gate` check-run — the single "may this PR merge?" status — on the
-  triggering pull request, or on the merge-queue group. It runs as the [Agent] App
-  (not the workflow's own identity) so the check's integration id is fixed regardless
-  of what decides the outcome, letting a ruleset require it by that id.
+  triggering pull request, or on the merge-queue group. It runs as the [Agent] App (not
+  the workflow's own identity) so the check's integration id is fixed regardless of what
+  decides the outcome, letting a ruleset require it by that id.
 
-  On a pull_request event it enforces **epic-atomicity**: a PR whose Task is part of an
-  epic passes only when every OTHER open, in-org sibling Task's PR is also merge-ready
-  (non-draft + approved), so a set of concurrent cross-repo PRs land together instead
-  of partially. A PR that closes no issue, or whose Task has no parent epic, is
-  standalone and always passes. On a merge_group event (the queue) it re-affirms
-  success — the PR was already gated on its pull_request event to be enqueued; atomic
-  merge-time coordination is a later stage.
+  Membership is the `epic:<N>` LABEL, not the PR's `Closes` keyword. A PR belongs to Epic
+  N iff it carries the `epic:<N>` label — a label needs >= triage to apply, so it is a
+  permission-gated assertion of membership, whereas a `Closes` keyword is author-controlled
+  and cannot be trusted to define the set. For a labelled PR this action resolves the
+  Epic's authorized open sibling PRs (via the epic-membership action) and passes only when
+  EVERY member is merge-ready (non-draft + approved), so a set of concurrent cross-repo PRs
+  lands together instead of partially. The `Closes` walk survives only as a discovery HINT:
+  for an unlabelled PR whose closing issue has a parent Epic, the action suggests adding the
+  `epic:<N>` label but still treats the PR as standalone. A PR with no `epic:<N>` label is
+  standalone and always passes (the fast path — classified from the event payload alone, so
+  the flood of ordinary PRs never depends on an API call and can't be frozen by a blip).
+
+  Holds are posted as `conclusion: failure`, NEVER `neutral`. GitHub counts `neutral`
+  (alongside `success` and `skipped`) as a PASSING required check, so a neutral "hold" would
+  silently fail open and let a not-yet-ready set merge — the exact hazard this gate exists to
+  prevent. When readiness cannot be determined (the member resolve errored, or the label
+  search index has not caught up) the gate therefore posts `failure` to HOLD: a held PR only
+  waits — the reconcile sweep re-runs and flips it to `success` once the set is ready — and a
+  held PR is safe, while a wrongly-passed set is a premature partial landing. It never posts
+  `success` on uncertainty.
+
+  On a merge_group event the gate does NOT blindly re-affirm success. It recomputes readiness
+  over the Epic's member set on the group head, and posts `failure` — which dequeues the
+  group — if the set regressed since enqueue (a member went back to draft, or lost its
+  approval). A standalone PR in the queue re-affirms `success` (it was gated at enqueue).
 
 inputs:
   client_id:
     required: true
-    description: Client id of the [Agent] App (checks write, plus issues/PRs read for the epic walk).
+    description: >
+      Client id of the [Agent] App. Needs checks:write (post the status), plus issues +
+      pull-requests read (read a PR's labels and its `Closes` hint, and to mint the nested
+      epic-membership token). The App identity is what fixes the check's integration id.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -41,8 +62,11 @@ runs:
   using: composite
   steps:
     # Mint an [Agent] token: checks:write to post the status, and org-wide issues +
-    # pull-requests read to walk the epic's sibling tasks across repos (the default
-    # GITHUB_TOKEN is single-repo, so it can't see cross-repo siblings).
+    # pull-requests read. The read stays org-wide (not scoped to `repo`) on purpose: the
+    # `Closes` hint resolves a closing issue's PARENT Epic, which lives in another repo
+    # (the org's planning repo), so a repo-scoped token would resolve that parent to null
+    # and silently drop the "add the `epic:<N>` label" nudge. Membership itself needs no
+    # cross-repo read here — the nested epic-membership action mints its own org-wide token.
     - name: Mint token
       id: token
       uses: actions/create-github-app-token@v3
@@ -54,7 +78,11 @@ runs:
         permission-issues: read
         permission-pull-requests: read
 
-    - name: Evaluate + post merge-gate
+    # Classify the PR: standalone (post success + exit) or an Epic member (emit the Epic
+    # number for the resolve + evaluate steps). Standalone is decided from the event
+    # payload's labels with no API call, so an ordinary PR is immune to a GraphQL blip.
+    - name: Classify PR (standalone vs Epic member)
+      id: discover
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -64,6 +92,11 @@ runs:
         HEAD_SHA: ${{ inputs.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
         IN_QUEUE: ${{ github.event.merge_group.head_sha }}
+        MG_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        # The triggering PR's own labels, straight from the event payload (`[]` off a
+        # pull_request event). Lets the native path classify without touching the API.
+        EVENT_PR: ${{ github.event.pull_request.number }}
+        EVENT_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
       run: |
         set -euo pipefail
 
@@ -84,73 +117,180 @@ runs:
           echo "merge-gate=$1 @ ${HEAD_SHA:0:12} — $2" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
-        # In the merge queue the PR already passed merge-gate on its pull_request event
-        # to be enqueued — re-affirm so the required check reports on the group.
-        if [ -n "${IN_QUEUE:-}" ] && [ -z "${PR_NUMBER:-}" ]; then
-          post_check success "In the merge queue — gated at enqueue."
-          exit 0
-        fi
-        # A head SHA but no PR (and not a merge_group) is a misconfigured caller — fail
-        # CLOSED rather than passing a required check on a real SHA with nothing
-        # evaluated (which would let it satisfy the ruleset unchecked).
-        if [ -z "${PR_NUMBER:-}" ]; then
+        # empty = terminal (this step already posted the check); non-empty = the Epic
+        # number for the resolve + evaluate steps to gate against.
+        emit() { echo "epic_number=$1" >> "$GITHUB_OUTPUT"; }
+
+        # Read a PR's labels + its `Closes` parent (the discovery hint) in one query,
+        # retrying transient GraphQL errors. Prints the response JSON on success;
+        # returns 1 (nothing printed) after retries so the caller decides hold-vs-pass.
+        # A null `pullRequest` (a valid-looking number that resolves to nothing — a
+        # deleted PR, or a merge_group ref naming a PR not in this repo) comes back with
+        # no GraphQL `.errors`, so guard it explicitly and treat it as a fetch failure
+        # (return 1) — otherwise the later `.labels.nodes[]` would abort under `set -e`
+        # and leave NO check posted (a silent expected-check hang), instead of the
+        # caller's explicit `failure` HOLD.
+        fetch_pr() { # $1=pr number
+          local q data
+          q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
+               pullRequest(number:$num){
+                 labels(first:50){ nodes{ name } }
+                 closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } }'
+          for attempt in 1 2 3; do
+            if data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$1" 2>/dev/null) \
+              && echo "$data" | jq -e 'has("data") and (has("errors") | not) and (.data.repository.pullRequest != null)' >/dev/null 2>&1; then
+              printf '%s' "$data"
+              return 0
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          return 1
+        }
+
+        # A head SHA but neither a PR nor a merge_group is a misconfigured caller — fail
+        # CLOSED rather than passing a required check on a real SHA with nothing evaluated
+        # (which would let it satisfy the ruleset unchecked).
+        if [ -z "${IN_QUEUE:-}" ] && [ -z "${PR_NUMBER:-}" ]; then
           post_check failure "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event — refusing to pass a required check without evaluating a PR."
+          emit ""
           exit 0
         fi
 
-        # Walk PR → Task (closing issue) → parent epic → sibling tasks → their PRs.
-        q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
-          pullRequest(number:$num){ closingIssuesReferences(first:5){ nodes{ number
-            parent{ number repository{ owner{ login } name }
-              subIssues(first:100){ nodes{ number repository{ owner{ login } name }
-                closedByPullRequestsReferences(first:20, includeClosedPrs:false){ nodes{
-                  number state isDraft reviewDecision repository{ nameWithOwner } } } } } } } } } } } }'
-        # Retry transient GraphQL failures, then FAIL-OPEN if the walk can't be done:
-        # never leave the required check un-posted (that would time out the queue and
-        # drop the PR — worse than passing). A missed atomicity check is re-evaluated
-        # by the reconcile sweep and backstopped by the Stage-4 saga.
-        data=""
-        for attempt in 1 2 3; do
-          if data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR_NUMBER" 2>/dev/null) \
-            && ! echo "$data" | jq -e '.errors' >/dev/null 2>&1; then
-            break
+        # Which PR are we classifying? On a merge_group event the queued PR number is
+        # encoded in the group ref (refs/heads/gh-readonly-queue/<base>/pr-<N>-<sha>); a
+        # batch names one PR and we evaluate that PR's Epic (full-batch attribution is a
+        # later spike). Off the queue it is the input PR number.
+        if [ -n "${IN_QUEUE:-}" ]; then
+          classify_pr=$(printf '%s' "${MG_HEAD_REF:-}" | grep -oE 'pr-[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
+          if [ -z "$classify_pr" ]; then
+            # Can't identify the queued PR from the group ref — HOLD (a failing required
+            # check dequeues the group) rather than pass blind; the sweep re-checks the
+            # PR head, and the PR returns to the pool to re-enqueue.
+            post_check failure "merge_group head_ref \"${MG_HEAD_REF:-}\" — couldn't identify the queued PR to re-check its Epic; holding (dequeues) rather than passing blind."
+            emit ""
+            exit 0
           fi
-          data=""
-          [ "$attempt" -lt 3 ] && sleep 2
-        done
-        if [ -z "$data" ]; then
-          post_check success "Couldn't evaluate the epic (GraphQL error after retries) — passing so the queue isn't blocked; the reconcile sweep re-checks."
+        else
+          classify_pr="$PR_NUMBER"
+        fi
+
+        # Get this PR's labels (authority) and its `Closes` parent (hint). On the native
+        # pull_request event the labels are already in the payload, so classify with NO
+        # API call — the standalone fast path can't be frozen by a GraphQL outage. The
+        # sweep and merge_group paths have no PR payload, so read the labels via the API;
+        # if that read can't complete, HOLD rather than guess.
+        labels=""
+        parent=""
+        if [ -n "${EVENT_PR:-}" ] && [ "$classify_pr" = "${EVENT_PR}" ]; then
+          labels=$(printf '%s' "${EVENT_LABELS:-[]}")
+        else
+          if data=$(fetch_pr "$classify_pr"); then
+            labels=$(printf '%s' "$data" | jq -c '[.data.repository.pullRequest.labels.nodes[].name]')
+            parent=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
+          else
+            post_check failure "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — holding rather than passing a required check blind; the reconcile sweep re-checks."
+            emit ""
+            exit 0
+          fi
+        fi
+
+        # The membership authority: the `epic:<N>` label. First match wins (one Epic per
+        # PR by convention). A numeric-only match keeps the value safe for downstream use.
+        epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty' | grep -oE '[0-9]+' || true)
+
+        if [ -n "$epic" ]; then
+          # Labelled Epic member — hand off to epic-membership (the authority) + evaluate.
+          echo "PR #${classify_pr} carries \`epic:${epic}\` — resolving the authorized member set." | tee -a "$GITHUB_STEP_SUMMARY"
+          emit "$epic"
           exit 0
         fi
 
-        task=$(echo "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty')
-        if [ -z "$task" ]; then
-          post_check success "PR #$PR_NUMBER closes no issue — standalone, nothing to coordinate."
-          exit 0
+        # No `epic:<N>` label → standalone, always passes. The `Closes` walk is a HINT
+        # only: if the closing issue has a parent Epic, suggest adding the label (the
+        # native path skipped the API above, so do the best-effort walk now — a failure
+        # just drops the hint, the PR still passes).
+        if [ -n "${EVENT_PR:-}" ] && [ "$classify_pr" = "${EVENT_PR}" ]; then
+          if data=$(fetch_pr "$classify_pr"); then
+            parent=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
+          fi
         fi
-        parent=$(echo "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
-        if [ -z "$parent" ]; then
-          post_check success "Task #$task has no parent epic — standalone."
+
+        if [ -n "$parent" ]; then
+          post_check success "PR #${classify_pr} closes an issue under epic #${parent} but has no \`epic:${parent}\` label — treated as standalone. Add the \`epic:${parent}\` label to gate it for atomic cross-repo landing."
+        else
+          post_check success "PR #${classify_pr} has no \`epic:<N>\` label — standalone, nothing to coordinate."
+        fi
+        emit ""
+        exit 0
+
+    # Resolve the Epic's authorized member set — the open PRs carrying `epic:<N>`, org-wide.
+    # This is the membership AUTHORITY (the label, not the author-controlled `Closes` walk).
+    # Pinned remote ref, never `./`: a local path resolves against the CONSUMER repo's
+    # workspace, not this repo. continue-on-error so a resolve failure does not abort the
+    # composite — the evaluate step turns an empty/failed resolve into a HOLD, not a crash.
+    - name: Resolve authorized member set
+      id: membership
+      if: ${{ steps.discover.outputs.epic_number != '' }}
+      continue-on-error: true
+      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.8.2
+      with:
+        epic_number: ${{ steps.discover.outputs.epic_number }}
+        client_id: ${{ inputs.client_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+
+    # Recompute readiness over the member set and post the gate. Runs for the labelled-Epic
+    # path only; standalone / misconfig / hold cases were already posted by the classify step.
+    - name: Evaluate readiness + post merge-gate
+      if: ${{ steps.discover.outputs.epic_number != '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        REPO_FULL: ${{ github.repository_owner }}/${{ inputs.repo }}
+        HEAD_SHA: ${{ inputs.head_sha }}
+        EPIC: ${{ steps.discover.outputs.epic_number }}
+        MEMBERS: ${{ steps.membership.outputs.members }}
+        IN_QUEUE: ${{ github.event.merge_group.head_sha }}
+      run: |
+        set -euo pipefail
+
+        post_check() { # $1=conclusion  $2=summary
+          jq -n --arg sha "$HEAD_SHA" --arg concl "$1" --arg summary "$2" \
+            '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: $concl,
+              output: {title: "merge-gate", summary: $summary}}' \
+            | gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
+          echo "merge-gate=$1 @ ${HEAD_SHA:0:12} — $2" | tee -a "$GITHUB_STEP_SUMMARY"
+        }
+
+        where="on the PR head"
+        [ -n "${IN_QUEUE:-}" ] && where="on the merge-queue group head"
+
+        # epic-membership ran with continue-on-error: an EMPTY output means it FAILED to
+        # resolve (transport / rate-limit after its own retries); a resolved-but-empty set
+        # is "[]". Either way we can't confirm readiness for a PR we KNOW is labelled
+        # `epic:<N>` — it should appear in its own set, so "[]" means the label search index
+        # is still lagging. HOLD (failure), never pass: an uncertain set that turns out
+        # unready must not merge. The reconcile sweep re-runs and lands the set once ready.
+        if [ -z "${MEMBERS:-}" ] || [ "${MEMBERS}" = "[]" ]; then
+          post_check failure "Epic #${EPIC} — couldn't confirm the member set ${where} (resolve errored, or the label index is lagging); holding rather than passing on uncertainty. The reconcile sweep re-checks."
           exit 0
         fi
 
-        # OTHER open, in-org sibling PRs that are NOT merge-ready. `includeClosedPrs` is
-        # unreliable (it still returns merged PRs), so filter to state == OPEN here;
-        # scope to the epic's own org — cross-org atomicity is out of scope by design
-        # (the per-org [Agent] app can't read across orgs anyway).
-        unready=$(echo "$data" | jq -r --argjson task "$task" --arg org "$OWNER" '
-          .data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.subIssues.nodes[]
-          | select(.number != $task)
-          | select(.repository.owner.login == $org)
-          | .closedByPullRequestsReferences.nodes[]
-          | select(.state == "OPEN")
+        # A member is merge-ready iff non-draft AND approved. Merged siblings have already
+        # left the open set (epic-membership returns open PRs only), so an all-ready open
+        # set means the whole Epic is ready to land together. On a merge_group event this
+        # same recompute runs on the group head: if a member regressed since enqueue (back
+        # to draft, or approval dismissed) the set is no longer all-ready and the `failure`
+        # below dequeues the group. (Set-shrink — a member closed unmerged — is the
+        # partial-landing detector's job, not this gate's.)
+        unready=$(printf '%s' "$MEMBERS" | jq -r '.[]
           | select(.isDraft or (.reviewDecision != "APPROVED"))
-          | "  - \(.repository.nameWithOwner)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"')
+          | "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"')
 
+        total=$(printf '%s' "$MEMBERS" | jq 'length')
         if [ -z "$unready" ]; then
-          post_check success "Epic #$parent — every other open sibling PR is merge-ready (or none). Atomic merge OK."
+          post_check success "Epic #${EPIC} — all ${total} open member(s) merge-ready ${where}. Atomic landing OK."
         else
           count=$(printf '%s\n' "$unready" | grep -c '')
-          post_check failure "$(printf 'Epic #%s — holding for atomic merge: %s sibling PR(s) not ready:\n%s' \
-            "$parent" "$count" "$unready")"
+          post_check failure "$(printf 'Epic #%s — holding for atomic landing %s: %s of %s member(s) not ready:\n%s' \
+            "$EPIC" "$where" "$count" "$total" "$unready")"
         fi
