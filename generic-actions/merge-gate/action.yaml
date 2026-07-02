@@ -20,6 +20,22 @@ inputs:
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
+  repo:
+    required: false
+    default: ${{ github.event.repository.name }}
+    description: >
+      Repository whose PR to gate (name only; owner is the workflow's org). Defaults to the
+      triggering repo; the reconcile sweep passes another repo in the org to re-post there.
+  pull_request_number:
+    required: false
+    default: ${{ github.event.pull_request.number }}
+    description: Number of the PR to gate. Defaults to the triggering PR.
+  head_sha:
+    required: false
+    default: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+    description: >
+      Head SHA to anchor the check to. Defaults to the PR head (or the merge-queue group's
+      head); the sweep passes the sibling PR's current head when re-posting.
 
 runs:
   using: composite
@@ -42,11 +58,11 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
-        REPO_FULL: ${{ github.repository }}
+        REPO_FULL: ${{ github.repository_owner }}/${{ inputs.repo }}
         OWNER: ${{ github.repository_owner }}
-        REPO: ${{ github.event.repository.name }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ inputs.repo }}
+        HEAD_SHA: ${{ inputs.head_sha }}
+        PR_NUMBER: ${{ inputs.pull_request_number }}
         IN_QUEUE: ${{ github.event.merge_group.head_sha }}
       run: |
         set -euo pipefail
