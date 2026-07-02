@@ -1,0 +1,132 @@
+name: derive-status
+description: >
+  Derive a Task's board Status from its pull request's CURRENT state and write it as
+  the [Agent] App, so the board follows PR activity with a single writer. The mapping
+  is a pure function of the PR (draft / approved / merged / closed), NOT of the event
+  that fired — which is exactly why the reconcile sweep can re-run this same derivation
+  to repair drift from dropped or cross-repo events. On first activity it also stamps
+  the Task's Start date, once. The Task is resolved through the PR's closing-issue
+  reference; a PR that closes no issue is a no-op. Writes go through board-write, so
+  the board stays single-writer.
+
+inputs:
+  client_id:
+    required: true
+    description: Client id for the org's [Agent] bot (for the board write, via board-write).
+  app_private_key:
+    required: true
+    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  project_id:
+    required: true
+    description: Node id of the org "Tasks" board (PVT_…). Passed in per-org by the caller.
+  pull_request_number:
+    required: false
+    default: ${{ github.event.pull_request.number }}
+    description: >
+      Number of the PR to derive from. Defaults to the PR that triggered the run, which
+      works for both pull_request and pull_request_review events; the reconcile sweep
+      passes each open Task's PR explicitly.
+
+runs:
+  using: composite
+  steps:
+    # Read the PR and compute the target Status. Reads only (PR state + the closing
+    # issue), so this runs on the caller's default token — the caller grants
+    # contents:read + pull-requests:read; the [Agent] token is minted only for the
+    # write, inside board-write.
+    - name: Compute Status + resolve the Task
+      id: derive
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.event.repository.name }}
+        PR: ${{ inputs.pull_request_number }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${PR:-}" ]; then
+          echo "::error::no PR number — run on a pull_request / pull_request_review event, or pass pull_request_number"
+          exit 1
+        fi
+
+        q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
+          pullRequest(number:$num){
+            state isDraft reviewDecision
+            closingIssuesReferences(first:5){ nodes{ id number } } } } }'
+        pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR")
+        state=$(echo "$pr" | jq -r '.data.repository.pullRequest.state')
+        draft=$(echo "$pr" | jq -r '.data.repository.pullRequest.isDraft')
+        review=$(echo "$pr" | jq -r '.data.repository.pullRequest.reviewDecision // ""')
+        issue_id=$(echo "$pr" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].id // empty')
+
+        # Pure function of the PR's CURRENT state — the reconcile sweep re-runs this
+        # identically, so it must not depend on which event fired.
+        case "$state" in
+          MERGED) status="Awaiting release" ;;
+          CLOSED) status="Ready" ;; # closed unmerged → the attempt was abandoned; back to actionable
+          OPEN)
+            if [ "$draft" = "true" ]; then
+              status="In progress"
+            elif [ "$review" = "APPROVED" ]; then
+              status="Done"
+            else
+              status="In review"
+            fi
+            ;;
+          *)
+            echo "::error::unexpected PR state '$state'"
+            exit 1
+            ;;
+        esac
+
+        if [ -z "$issue_id" ]; then
+          echo "PR #$PR closes no issue — nothing to derive." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "has_issue=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # "activated" = the Task has genuinely started (any state past the pre-PR
+        # Backlog/Ready), which is when it earns a Start date. A reverted PR
+        # (closed-unmerged → Ready) is NOT activated, so it never back-stamps a date.
+        activated=false
+        case "$status" in
+          "In progress" | "In review" | "Done" | "Awaiting release") activated=true ;;
+        esac
+
+        {
+          echo "has_issue=true"
+          echo "issue_id=$issue_id"
+          echo "status=$status"
+          echo "activated=$activated"
+          echo "today=$(date -u +%Y-%m-%d)"
+        } >> "$GITHUB_OUTPUT"
+        echo "PR #$PR ($state, draft=$draft, review=${review:-none}) → \"$status\" on issue $issue_id." \
+          | tee -a "$GITHUB_STEP_SUMMARY"
+
+    # Write the derived Status. board-write mints the [Agent] token, resolves the item
+    # (adding it if absent), and compares before writing.
+    - name: Write Status
+      if: ${{ steps.derive.outputs.has_issue == 'true' }}
+      uses: ./generic-actions/board-write
+      with:
+        client_id: ${{ inputs.client_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+        project_id: ${{ inputs.project_id }}
+        content_id: ${{ steps.derive.outputs.issue_id }}
+        field: Status
+        value: ${{ steps.derive.outputs.status }}
+
+    # Stamp Start date once, on first activity. only_if_empty keeps a re-run or the
+    # sweep from moving an already-set start date.
+    - name: Stamp Start date (once)
+      if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.activated == 'true' }}
+      uses: ./generic-actions/board-write
+      with:
+        client_id: ${{ inputs.client_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+        project_id: ${{ inputs.project_id }}
+        content_id: ${{ steps.derive.outputs.issue_id }}
+        field: Start date
+        value: ${{ steps.derive.outputs.today }}
+        only_if_empty: "true"
