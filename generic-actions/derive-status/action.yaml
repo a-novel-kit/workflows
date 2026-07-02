@@ -139,10 +139,11 @@ runs:
           | tee -a "$GITHUB_STEP_SUMMARY"
 
     # Write the derived Status. board-write mints the [Agent] token, resolves the item
-    # (adding it if absent), and compares before writing.
+    # (adding it if absent), and compares before writing. Pinned external ref: a
+    # ./ path would resolve against the CONSUMER repo's workspace, not this repo.
     - name: Write Status
       if: ${{ steps.derive.outputs.has_issue == 'true' }}
-      uses: ./generic-actions/board-write
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.8.0
       with:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
@@ -155,7 +156,7 @@ runs:
     # sweep from moving an already-set start date.
     - name: Stamp Start date (once)
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.activated == 'true' }}
-      uses: ./generic-actions/board-write
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.8.0
       with:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
