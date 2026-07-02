@@ -33,10 +33,14 @@ on:
 
 jobs:
   rollup:
+    # Run AFTER rederive so epics aggregate fresh Task statuses, not stale ones — but
+    # still run when rederive is skipped (no task PRs) or failed; only a cancel stops it.
+    needs: rederive
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.7.0
+      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.8.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -118,7 +122,7 @@ jobs:
           permission-contents: read
           permission-issues: read
           permission-pull-requests: read
-      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.7.0
+      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.8.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -140,7 +144,7 @@ jobs:
       matrix:
         pr: ${{ fromJSON(needs.enumerate.outputs.epic_prs) }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.7.0
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.8.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
