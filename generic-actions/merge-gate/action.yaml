@@ -93,8 +93,9 @@ runs:
         PR_NUMBER: ${{ inputs.pull_request_number }}
         IN_QUEUE: ${{ github.event.merge_group.head_sha }}
         MG_HEAD_REF: ${{ github.event.merge_group.head_ref }}
-        # The triggering PR's own labels, straight from the event payload (`[]` off a
-        # pull_request event). Lets the native path classify without touching the API.
+        # The triggering PR's own labels, straight from the event payload: the full set on
+        # a pull_request event, empty on a merge_group / sweep run (there is no pull_request
+        # payload there). Lets the native pull_request path classify with no API call.
         EVENT_PR: ${{ github.event.pull_request.number }}
         EVENT_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
       run: |
@@ -134,7 +135,7 @@ runs:
           local q data
           q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
                pullRequest(number:$num){
-                 labels(first:50){ nodes{ name } }
+                 labels(first:100){ nodes{ name } pageInfo{ hasNextPage } }
                  closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } }'
           for attempt in 1 2 3; do
             if data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$1" 2>/dev/null) \
@@ -181,11 +182,13 @@ runs:
         # if that read can't complete, HOLD rather than guess.
         labels=""
         parent=""
+        labels_truncated=false
         if [ -n "${EVENT_PR:-}" ] && [ "$classify_pr" = "${EVENT_PR}" ]; then
           labels=$(printf '%s' "${EVENT_LABELS:-[]}")
         else
           if data=$(fetch_pr "$classify_pr"); then
             labels=$(printf '%s' "$data" | jq -c '[.data.repository.pullRequest.labels.nodes[].name]')
+            labels_truncated=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.labels.pageInfo.hasNextPage')
             parent=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
           else
             post_check failure "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — holding rather than passing a required check blind; the reconcile sweep re-checks."
@@ -197,6 +200,16 @@ runs:
         # The membership authority: the `epic:<N>` label. First match wins (one Epic per
         # PR by convention). A numeric-only match keeps the value safe for downstream use.
         epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty' | grep -oE '[0-9]+' || true)
+
+        # A gate must not fail open on a technicality: if the fetched label page was
+        # truncated (a PR with >100 labels — pathological) and no epic:<N> turned up in it,
+        # we cannot conclude "standalone" — HOLD instead. Only the API path can truncate;
+        # the native path reads the full label set from the event payload.
+        if [ -z "$epic" ] && [ "$labels_truncated" = "true" ]; then
+          post_check failure "PR #${classify_pr} has >100 labels; couldn't confirm it carries no \`epic:<N>\` label — holding rather than passing as standalone."
+          emit ""
+          exit 0
+        fi
 
         if [ -n "$epic" ]; then
           # Labelled Epic member — hand off to epic-membership (the authority) + evaluate.
