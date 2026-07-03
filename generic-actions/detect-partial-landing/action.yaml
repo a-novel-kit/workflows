@@ -1,72 +1,38 @@
 name: detect-partial-landing
 description: >
-  Stage-4 partial-landing detector for cross-repo Epic landings — the writer behind the
-  required `epic-freeze` check. It runs in TWO modes over ONE shared predicate (evaluate_epic),
-  so the two writers structurally cannot disagree:
+  Stage-4 partial-landing detector — the writer behind the required `epic-freeze` check.
+  THE HAZARD: merge-gate releases an `epic:<N>` sibling set to land together, but once landing STARTS
+  a sibling can silently drop out of its merge queue (flaky check, timeout, speculative rebuild) while
+  the others keep merging — a PARTIAL landing that breaks atomicity (INV-1) and that merge-gate can't
+  see (the dropped sibling is still non-draft + approved). This action is the fail-safe that freezes
+  the remaining siblings when the gap is REST-confirmed real.
 
-    - PER-PR (event-driven, the instant fast path). Fires from the epic-freeze.yaml poster on a
-      pull_request / merge_group event. Classifies the triggering PR and posts epic-freeze on its
-      head ONLY: success for a standalone PR (no `epic:<N>` label — decided from the event payload
-      with zero API) or a clear Epic, failure for a REST-confirmed frozen Epic, and success on ANY
-      uncertainty. Per-PR is the SATISFIABILITY guarantor — the sole writer for a brand-new head
-      with no prior check — so it fails OPEN: it must never strand a PR on "Expected — waiting for
-      status". It mints NO write token and never rolls a sibling forward.
+  It runs in TWO MODES over ONE shared, PURE predicate (evaluate_epic — no posting/mutation) so the
+  two writers structurally cannot disagree. PER-PR: event-driven fast path; classifies the triggering
+  PR and posts epic-freeze on its head only; fails OPEN (success on any uncertainty) so a fresh head
+  is never stranded on "Expected". SWEEP (~15 min, level-triggered floor): enumerates active Epics
+  org-wide, rolls strays forward within grace, freezes REST-confirmed partials, and backstops every
+  open non-member head; fails CLOSED. Both re-derive ground truth each pass — no stored state to drift.
 
-    - SWEEP (level-triggered floor, ~15 min, from reconcile-board). Enumerates active Epics
-      org-wide, evaluates each via the same evaluate_epic, rolls a stray forward within grace,
-      freezes a REST-confirmed partial, and — the universal backstop — posts epic-freeze=success on
-      every open NON-member head, so no PR the event stream missed is ever stuck Expected. The
-      sweep fails CLOSED: it posts nothing on Epic uncertainty (a prior check already exists there
-      and the next sweep re-derives). It re-derives ground truth from scratch each pass, so there
-      is no stored state to drift and a missed event self-corrects on the next sweep.
+  THE FREEZE IS A CHECK-RUN, not a status: an `epic-freeze` check-run (checks:write) posted
+  `conclusion: failure` — NEVER `neutral` (GitHub counts neutral as a passing required check) — on a
+  DIFFERENT context from `merge-gate` so the two required checks never clobber; posted on a live queue
+  head it dequeues the in-flight group. Default conclusion is `success`.
 
-  THE HAZARD. merge-gate holds every `epic:<N>` sibling until the whole set is merge-ready, then
-  releases them into their merge queues to land together. But once landing STARTS, a sibling can
-  silently drop out of its queue (a flaky check, a timeout, a speculative rebuild) while the others
-  keep merging — a PARTIAL landing that breaks the atomicity invariant (INV-1). merge-gate cannot
-  see this: the dropped sibling is still non-draft and approved, so merge-gate still says `success`.
-  This action is the fail-safe that watches for that gap and, when it is REST-confirmed real,
-  FREEZES the remaining siblings.
-
-  THE FREEZE IS A CHECK-RUN. There is no `statuses:write` and no stored state. The freeze is an
-  `epic-freeze` check-run (checks:write, which the [Agent] App holds) posted `conclusion: failure`
-  — deliberately a DIFFERENT context name from `merge-gate` so the two required checks never
-  clobber each other. `epic-freeze` is a required check (see checks.yaml `always`), so a `failure`
-  blocks the PR AND — posted on a live merge-queue entry's head — dequeues the in-flight group.
-  `failure`, NEVER `neutral`: GitHub counts `neutral` as a PASSING required check, which would fail
-  open. The default conclusion is `success`: the check answers "is this Epic member currently
-  frozen for a partial landing?" — no for almost every member, almost always.
-
-  THE PREDICATE (evaluate_epic — shared, PURE, no posting or mutation). Per Epic — WIDENED resolve:
-  search the label in THREE passes (is:merged, is:closed is:unmerged, is:open) so the
-  closed-unmerged blind spot the open-only membership authority cannot see is covered. LIVE queue:
-  read each sibling repo's `mergeQueue(branch:<base>)` for which open siblings are STILL queued and
-  each entry's live head SHA (there is no REST equivalent). PREDICATE — a real partial landing iff
-  |merged| >= 1 AND (a REST-confirmed closed-unmerged member exists OR a REST-confirmed
-  genuinely-open sibling is NOT a live queue entry and the grace window measured from the first
-  sibling's merge has elapsed). Every stray and every trip reason is re-read via REST (fail-closed
-  against search-index lag) before it can contribute to a freeze; the decision returns
-  clear / frozen / error, and both mode wrappers post from that identical result.
-
-  RECOVER, don't roll back. The SWEEP rolls a landable stray forward (re-enabling native
-  auto-merge) only while within grace, so a transient drop self-heals with NO freeze. After grace
-  with no recovery it freezes; it UNFREEZES (re-posts `success` on the same open-sibling heads) the
-  instant the Epic is whole again — latest-check-of-a-name wins. Unfreeze NEVER re-enables
-  auto-merge: dequeue disabled it on purpose, so a frozen sibling cannot thrash, and RESUMING a
-  frozen landing is a human's / a-novel-kit/workflows#235's call, not the detector's. It NEVER
-  reverts a merged PR. `dry_run` defaults on: it LOGS every intended freeze / unfreeze / re-enqueue
-  without calling GitHub, for a read-only-first rollout.
+  RECOVER, don't roll back: the sweep re-enqueues a landable stray within grace (self-heals, no
+  freeze), freezes after grace, and unfreezes (re-posts `success`) once the Epic is whole. Unfreeze
+  NEVER re-enables auto-merge — dequeue disabled it on purpose so a frozen sibling can't thrash;
+  resuming a frozen landing is a human's call (a-novel-kit/workflows#235). Never reverts a merged PR.
+  `dry_run` defaults on: logs every intended freeze / unfreeze / re-enqueue without calling GitHub.
 
 inputs:
   client_id:
     required: true
     description: >
-      Client id of the [Agent] App. In SWEEP mode this action mints THREE least-privilege org-wide
-      tokens from it: issues+pull-requests read (enumerate / resolve / live-queue / REST reads),
-      checks:write (post the epic-freeze check-run), and pull-requests+contents write (roll a stray
-      forward via auto-merge). In PER-PR mode it mints only the first two (read + checks) — the
-      write token is gated to the sweep, so a per-PR run can never re-enqueue. The App identity is
-      what fixes the check's integration id so a ruleset can require it.
+      Client id of the [Agent] App. SWEEP mints THREE least-privilege org-wide tokens: issues+PR read,
+      checks:write, and PR+contents write (roll a stray forward). PER-PR mints only the first two — the
+      write token is gated to the sweep. The App identity fixes the check's integration id so a ruleset
+      can require it.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -74,49 +40,46 @@ inputs:
     required: false
     default: ${{ github.repository_owner }}
     description: >
-      Organisation login to sweep (the label search is scoped `org:<org>` and every token is
-      installed on this owner). Defaults to the workflow's org. Used by both modes (per-PR still
-      resolves the Epic's siblings org-wide).
+      Organisation login to sweep — the label search is scoped `org:<org>` and every token is installed
+      here. Used by both modes (per-PR resolves the Epic's siblings org-wide too). Defaults to the
+      workflow's org.
   repo:
     required: false
     default: ${{ github.event.repository.name }}
     description: >
-      PER-PR only. Repository (name only; owner is `org`) whose PR / merge-group to evaluate.
-      Defaults to the triggering repo. Ignored by the sweep, which enumerates the whole org.
+      PER-PR only. Repository (name only; owner is `org`) whose PR / merge-group to evaluate; ignored by
+      the sweep. Defaults to the triggering repo.
   pull_request_number:
     required: false
     default: ${{ github.event.pull_request.number }}
     description: >
-      PER-PR only, and the MODE selector: when non-empty (or the event is `merge_group`) the action
-      runs per-PR; otherwise it runs the sweep. Defaults to the triggering PR; empty on a sweep run.
+      PER-PR only, and the MODE selector: non-empty (or a `merge_group` event) runs per-PR, otherwise
+      the sweep. Defaults to the triggering PR; empty on a sweep run.
   head_sha:
     required: false
     default: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
     description: >
-      PER-PR only. Head SHA to anchor the epic-freeze check to — the PR head, or the merge-queue
-      group's head on a `merge_group` event (the head the queue re-evaluates required checks on).
+      PER-PR only. Head SHA to anchor the epic-freeze check to — the PR head, or the merge-queue group's
+      head on a `merge_group` event.
   grace_minutes:
     required: false
     default: "45"
     description: >
-      Grace window, in minutes, measured from the FIRST sibling's merge time. While within it, a
-      stray (de-queued) open sibling is rolled forward (re-enqueued) by the sweep, not frozen; only
-      a stray still out past the window trips the freeze. A member closed WITHOUT merging trips
-      immediately, regardless of grace (it cannot be rolled forward). Must be an integer.
+      Grace window (minutes) from the FIRST sibling's merge. Within it a stray open sibling is rolled
+      forward by the sweep, not frozen; only a stray still out past the window trips the freeze. A member
+      closed WITHOUT merging trips immediately regardless of grace. Must be an integer.
   dry_run:
     required: false
     default: "true"
     description: >
-      When "true" (the default), log every intended freeze / unfreeze / re-enqueue without calling
-      GitHub — the read-only-first mode. Set "false" to actually post check-runs and re-enqueue.
+      When "true" (default), log every intended freeze / unfreeze / re-enqueue without calling GitHub.
+      Set "false" to actually post check-runs and re-enqueue.
 
 runs:
   using: composite
   steps:
-    # ---- MODE selector (computed once, before the tokens). Per-PR iff a pull_request_number was
-    # supplied (the epic-freeze.yaml poster, whose default is the triggering PR) OR the event is a
-    # merge_group (queue temp commit); otherwise the sweep. Gating the WRITE-token mint on this
-    # keeps a per-PR run to checks:write + reads only — it can never re-enqueue.
+    # MODE, computed once before the tokens: per-PR iff a pull_request_number was supplied OR the event
+    # is a merge_group; else the sweep. Gating the write-token mint on this keeps per-PR to checks+reads.
     - name: Select mode (per-PR vs sweep)
       id: mode
       shell: bash
@@ -133,11 +96,9 @@ runs:
           echo "detect-partial-landing: SWEEP mode."
         fi
 
-    # ---- Least-privilege org-wide tokens. The sweep spans every repo in the org, so the default
-    # single-repo GITHUB_TOKEN cannot see sibling PRs; separate tokens keep each capability scoped
-    # (reads can never post a check, the checks token can never merge, etc.). A per-repo write token
-    # is not possible here because a composite action cannot loop `create-github-app-token` over the
-    # repos it discovers at runtime — so the write token is org-wide, matching how merge-gate mints.
+    # Least-privilege org-wide tokens: the sweep spans the whole org, so the single-repo GITHUB_TOKEN
+    # can't see sibling PRs; separate tokens keep each capability scoped. Org-wide (not per-repo) because
+    # a composite action can't loop `create-github-app-token` over repos discovered at runtime.
     - name: Mint read token
       id: read
       uses: actions/create-github-app-token@v3
@@ -157,8 +118,7 @@ runs:
         owner: ${{ inputs.org }}
         permission-checks: write
 
-    # SWEEP ONLY. Per-PR mode does no roll-forward, so it must never hold a write scope. Gating the
-    # mint (not just the call site) means a per-PR run never even acquires contents/PR write.
+    # SWEEP ONLY — gating the mint (not just the call site) means a per-PR run never even acquires write.
     - name: Mint enqueue token
       id: write
       if: ${{ steps.mode.outputs.mode == 'sweep' }}
@@ -167,18 +127,16 @@ runs:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ inputs.org }}
-        # `gh pr merge --auto` needs contents:write in addition to pull-requests:write — the same
-        # pair enable-auto-merge mints.
+        # `gh pr merge --auto` needs contents:write alongside pull-requests:write.
         permission-pull-requests: write
         permission-contents: write
 
     - name: Detect + reconcile partial landings
       shell: bash
       env:
-        # Default GH_TOKEN is the READ token: every helper that only reads uses bare `gh`. The
-        # checks / write tokens are applied INLINE (GH_TOKEN=... gh ...) at the two mutating call
-        # sites, so read helpers can never accidentally hold a write scope. WRITE_TOKEN is empty in
-        # per-PR mode (its mint step was skipped) — reenqueue is never called there.
+        # Default GH_TOKEN = READ token (bare `gh` for every read helper); the checks / write tokens are
+        # applied INLINE at the two mutating call sites, so read helpers can't hold a write scope.
+        # WRITE_TOKEN is empty in per-PR mode (its mint step was skipped).
         GH_TOKEN: ${{ steps.read.outputs.token }}
         CHECKS_TOKEN: ${{ steps.checks.outputs.token }}
         WRITE_TOKEN: ${{ steps.write.outputs.token }}
@@ -186,17 +144,17 @@ runs:
         ORG: ${{ inputs.org }}
         GRACE_MINUTES: ${{ inputs.grace_minutes }}
         DRY_RUN: ${{ inputs.dry_run }}
-        # PER-PR inputs + event payload (used only when MODE=per-pr).
-        OWNER: ${{ github.repository_owner }}
+        # PER-PR inputs + event payload (used only when MODE=per-pr). OWNER/REPO_FULL derive from `org`
+        # (the single source of truth matching the minted tokens), not github.repository_owner.
+        OWNER: ${{ inputs.org }}
         REPO: ${{ inputs.repo }}
-        REPO_FULL: ${{ github.repository_owner }}/${{ inputs.repo }}
+        REPO_FULL: ${{ inputs.org }}/${{ inputs.repo }}
         HEAD_SHA: ${{ inputs.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
         IN_QUEUE: ${{ github.event.merge_group.head_sha }}
         MG_HEAD_REF: ${{ github.event.merge_group.head_ref }}
-        # The triggering PR's own number + labels, straight from the event payload: present on a
-        # pull_request event, empty on merge_group / sweep. Lets the standalone fast-path classify
-        # with NO API call, so the flood of ordinary PRs is immune to a GraphQL blip.
+        # The triggering PR's own number + labels from the event payload (present on pull_request, empty
+        # on merge_group / sweep). Lets the standalone fast-path classify with NO API call.
         EVENT_PR: ${{ github.event.pull_request.number }}
         EVENT_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
       run: |
@@ -213,8 +171,8 @@ runs:
           exit 1
         fi
 
-        # dry_run defaults on; only the literal "false" (any case) actually mutates GitHub.
-        # Lowercase via tr (portable), not ${VAR,,} (bash-4 only) — matches enable-auto-merge.
+        # dry_run defaults on; only the literal "false" (any case) mutates. Lowercase via tr (portable),
+        # not ${VAR,,} (bash-4 only) — matches enable-auto-merge.
         dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
 
         now_epoch=$(date -u +%s)
@@ -222,9 +180,7 @@ runs:
 
         # ---- Shared GraphQL documents ----------------------------------------------------
 
-        # PR search node — one shape reused for BOTH enumeration (needs labels) and the three
-        # per-Epic resolve passes (need head/merge/base/draft). The extra label data on the
-        # resolve passes is harmless.
+        # PR search node — one shape reused by enumeration and the three per-Epic resolve passes.
         SEARCH_Q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
@@ -233,9 +189,8 @@ runs:
               repository{ nameWithOwner }
               labels(first:100){ nodes{ name } } } } } }'
 
-        # Live merge-queue read. `mergeQueue` is null when the branch has no queue configured
-        # → jq's `// []` yields an empty entry set. `headOid` is the entry's live head commit
-        # (the temp merge commit the queue is testing); it differs from the PR's own head.
+        # Live merge-queue read. `mergeQueue` is null when the branch has no queue configured (jq `// []`
+        # → empty set). `headOid` is the entry's live temp-merge head, which differs from the PR's head.
         MQ_Q='query($owner:String!,$repo:String!,$base:String!){
           repository(owner:$owner,name:$repo){
             mergeQueue(branch:$base){
@@ -248,9 +203,8 @@ runs:
 
         # ---- Read helpers (all use the default READ GH_TOKEN) ----------------------------
 
-        # Page an ISSUE search to completion, retrying transient GraphQL errors. Prints the
-        # aggregated PR-node JSON array on success; returns 1 (and logs to stderr) on failure so
-        # the caller can fail-closed.
+        # Page an ISSUE search to completion, retrying transient GraphQL errors. Prints the aggregated
+        # PR-node JSON array on success; returns 1 (logs to stderr) on failure so the caller fails closed.
         search_prs() { # $1 = search query string
           local search="$1" cursor="" agg='[]' data page ok
           while :; do
@@ -259,8 +213,8 @@ runs:
             for attempt in 1 2 3; do
               args=(-f query="$SEARCH_Q" -f q="$search")
               [ -n "$cursor" ] && args+=(-f cursor="$cursor")
-              # Capture stdout+stderr together so a transport/auth/rate-limit error survives to be
-              # logged; on success gh prints only the response JSON, which jq validates.
+              # Capture stdout+stderr together so a transport/auth/rate-limit error survives to be logged;
+              # on success gh prints only the response JSON, which jq validates.
               if data=$(gh api graphql "${args[@]}" 2>&1) \
                 && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
                 ok=true
@@ -280,8 +234,8 @@ runs:
           printf '%s' "$agg"
         }
 
-        # Live queue entries for one (owner, repo, base). Prints a JSON array of
-        # {number, state, headOid}; returns 1 on failure (caller fails closed for the Epic).
+        # Live queue entries for one (owner, repo, base): a JSON array of {number, state, headOid};
+        # returns 1 on failure (caller fails closed for the Epic).
         merge_queue_entries() { # $1=owner $2=repo $3=base
           local data
           for attempt in 1 2 3; do
@@ -298,8 +252,8 @@ runs:
           return 1
         }
 
-        # Direct REST read of a PR — the fail-closed ground-truth check the search index can lag
-        # behind. Prints "<state> <merged>" (e.g. "closed true", "open false"); returns 1 on error.
+        # Direct REST read of a PR — fail-closed ground truth the search index can lag behind. Prints
+        # "<state> <merged>" (e.g. "closed true", "open false"); returns 1 on error.
         rest_pr_state() { # $1=owner/repo $2=number
           local data
           for attempt in 1 2 3; do
@@ -313,9 +267,8 @@ runs:
           return 1
         }
 
-        # PER-PR: read one PR's labels by number (merge_group / repost path). Prints the label-name
-        # JSON array on success; returns 1 after retries (caller fails OPEN). A null pullRequest
-        # (deleted PR, or a merge_group ref naming a PR not in this repo) is treated as a failure.
+        # PER-PR: read one PR's labels by number (merge_group / repost path). Prints the label-name JSON
+        # array; returns 1 after retries (caller fails OPEN). A null pullRequest is treated as a failure.
         fetch_pr_labels() { # $1 = pr number
           local data
           for attempt in 1 2 3; do
@@ -331,12 +284,10 @@ runs:
 
         # ---- Post helpers (dry-run aware; the CHECKS token posts) -------------------------
 
-        # Post an epic-freeze check-run. jq builds the payload so a summary with quotes / newlines
-        # can't break the JSON. FIX 3: guard the POST explicitly (do not rely on `set -e`, which is
-        # disabled inside a function called under `||`). In SWEEP mode a failed POST is a per-target
-        # `::warning::` and we continue to the next head; in PER-PR mode (single head) we surface it
-        # as a failed run — the required check genuinely did not post, better red-and-retryable than
-        # a silent set-e abort.
+        # Post an epic-freeze check-run (jq builds the payload so quotes / newlines can't break the JSON).
+        # Guard the POST explicitly — `set -e` is disabled inside a function called under `||`: in SWEEP a
+        # failed POST is a per-target `::warning::` and we continue; in PER-PR (single head) we surface it
+        # as a failed run (better red-and-retryable than a silent abort).
         post_check() { # $1=owner/repo $2=sha $3=conclusion $4=summary
           local payload
           payload=$(jq -n --arg sha "$2" --arg concl "$3" --arg summary "$4" \
@@ -354,8 +305,8 @@ runs:
           return 1
         }
 
-        # dry-run gate around post_check. Returns post_check's status so a per-PR POST failure
-        # propagates (fails the run); in sweep mode post_check already swallowed it to a warning.
+        # dry-run gate around post_check; returns its status so a per-PR POST failure propagates (in
+        # sweep mode post_check already swallowed it to a warning).
         freeze_post() { # $1=owner/repo $2=sha $3=conclusion $4=summary
           if [ "$dry" != "false" ]; then
             echo "would post epic-freeze=$3 @ $1 ${2:0:12} — $4 (DRY RUN)" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -364,11 +315,10 @@ runs:
           post_check "$1" "$2" "$3" "$4"
         }
 
-        # Re-enqueue a stray by enabling native auto-merge (the enable-auto-merge path),
-        # idempotently: query first, enable only if off. Uses the WRITE token (sweep only). A
-        # failure is a warning, not fatal — the next sweep retries (grace-bounded). `--squash`
-        # matches the merge method across a-novel / a-novel-kit repos (squash-only); if a repo
-        # enables merge/rebase, this flag would need to follow that repo's method.
+        # Re-enqueue a stray by enabling native auto-merge, idempotently (query first, enable only if
+        # off). Uses the WRITE token (sweep only); a failure is a warning and the next sweep retries.
+        # `--squash` matches the org-wide squash-only merge method; a repo on merge/rebase would need it
+        # to follow that method.
         reenqueue() { # $1=owner/repo $2=number
           local target="$1#$2" already
           if [ "$dry" != "false" ]; then
@@ -389,11 +339,10 @@ runs:
         }
 
         # ---- evaluate_epic — the PURE, shared decision (no posting, no mutation) ----------
-        # Sets EV_DECISION ∈ {clear, frozen, error} (+ EV_REASON when frozen) and the EV_* data
-        # both wrappers post from. Never returns non-zero: on any resolve/queue/REST error it
-        # leaves EV_DECISION=error (initialised below) and returns — robust whether or not `set -e`
-        # is active at the call site. Both the sweep and per-PR wrappers call THIS, so the predicate
-        # structurally cannot drift between the two writers.
+        # Sets EV_DECISION ∈ {clear, frozen, error} (+ EV_REASON when frozen) and the EV_* data both
+        # wrappers post from. Never returns non-zero — any resolve/queue/REST error leaves
+        # EV_DECISION=error (robust whether or not `set -e` is active). Shared by both writers, so the
+        # predicate structurally cannot drift between them.
         evaluate_epic() { # $1 = Epic number (already validated numeric)
           EV_DECISION=error; EV_REASON=""
           EV_OPEN='[]'; EV_QUEUE='[]'; EV_STRAYS='[]'
@@ -401,8 +350,8 @@ runs:
           local EPIC="$1"
           local base_q="label:\"epic:${EPIC}\" org:${ORG}"
 
-          # WIDENED resolve: three passes. is:closed is:unmerged = closed WITHOUT merging (the blind
-          # spot); is:merged and is:open complete the picture. Any failure → EV_DECISION stays error.
+          # WIDENED resolve, three passes: is:closed is:unmerged catches the closed-without-merge blind
+          # spot; is:merged and is:open complete the picture. Any failure → EV_DECISION stays error.
           local merged closed_unmerged open
           if ! merged=$(search_prs "is:pr is:merged $base_q"); then return 0; fi
           if ! closed_unmerged=$(search_prs "is:pr is:closed is:unmerged $base_q"); then return 0; fi
@@ -413,9 +362,9 @@ runs:
           EV_CLOSED_COUNT=$(printf '%s' "$closed_unmerged" | jq 'length')
           EV_OPEN_COUNT=$(printf '%s' "$open" | jq 'length')
 
-          # LIVE queue membership for every distinct (repo, base) among the OPEN siblings. Ref names
-          # cannot contain spaces (git forbids them), so a space-joined pair is a safe `read` split.
-          # fd 4 (process substitution) keeps this loop's input clear of the gh calls inside it.
+          # LIVE queue membership for every distinct (repo, base) among the OPEN siblings. Ref names can't
+          # contain spaces (git forbids them), so a space-joined pair splits safely; fd 4 keeps this
+          # loop's input clear of the gh calls inside it.
           local queue='[]' repos_bases rb_repo rb_base owner_only repo_only entries
           repos_bases=$(printf '%s' "$open" | jq -r '[.[] | "\(.repository.nameWithOwner) \(.baseRefName)"] | unique | .[]')
           while read -r rb_repo rb_base <&4; do
@@ -427,8 +376,8 @@ runs:
             queue=$(jq -s '.[0] + .[1]' <(printf '%s' "$queue") <(printf '%s' "$entries"))
           done 4< <(printf '%s\n' "$repos_bases")
 
-          # The org queue holds unrelated PRs too — keep only entries that ARE open siblings, so we
-          # never dequeue a non-member.
+          # The org queue holds unrelated PRs too — keep only entries that ARE open siblings, so we never
+          # dequeue a non-member.
           queue=$(printf '%s' "$queue" | jq -c --argjson open "$open" '
             [ .[] | . as $e
               | select( ($open | map(select(.repository.nameWithOwner == $e.repo and .number == $e.number)) | length) > 0 ) ]')
@@ -440,14 +389,10 @@ runs:
             [ .[] | . as $pr
               | select( ($q | map(select(.repo == $pr.repository.nameWithOwner and .number == $pr.number)) | length) == 0 ) ]')
 
-          # FIX 1b: REST-confirm each candidate stray is genuinely "open false" (state open, not
-          # merged) before it counts — parity with the closed-unmerged path's REST hardening, so a
-          # search index that still lists a since-merged/closed PR as an open sibling cannot invent
-          # a stray. A REST error on any candidate → EV_DECISION stays error (fail closed/open by
-          # wrapper). Keeps the full node (with isDraft) so the sweep roll-forward can skip drafts.
-          # A stray only matters once a landing is in progress (>=1 merged) — both the predicate and
-          # the roll-forward require it. When merged=0, skip the (potentially large) per-sibling
-          # REST-confirm entirely: those strays cannot contribute to a freeze anyway.
+          # REST-confirm each candidate stray is genuinely "open false" before it counts (parity with the
+          # closed-unmerged path), so a lagging index can't invent a stray; a REST error → EV_DECISION
+          # stays error. Keep the full node (with isDraft) so roll-forward can skip drafts. A stray only
+          # matters once landing is in progress (>=1 merged); when merged=0, skip the per-sibling REST.
           local confirmed_keys='[]' rs_repo rs_num st
           if [ "$EV_MERGED_COUNT" -ge 1 ]; then
             while read -r rs_repo rs_num <&4; do
@@ -465,9 +410,9 @@ runs:
           fi
           EV_STRAY_COUNT=$(printf '%s' "$EV_STRAYS" | jq 'length')
 
-          # GRACE window measured from the FIRST sibling merge (ISO-8601 UTC sorts chronologically,
-          # so `min` is the earliest). If it cannot be parsed, be conservative: treat grace as NOT
-          # elapsed so a stray never trips on an unknown age.
+          # GRACE window measured from the FIRST sibling merge (ISO-8601 UTC sorts chronologically, so
+          # `min` is earliest). Unparseable → be conservative: treat grace as NOT elapsed, so a stray
+          # never trips on an unknown age.
           local first_merged_at first_epoch grace_elapsed=false
           first_merged_at=$(printf '%s' "$merged" | jq -r '[.[].mergedAt] | map(select(. != null)) | min // empty')
           if [ -n "$first_merged_at" ]; then
@@ -480,9 +425,8 @@ runs:
           echo "epic #$EPIC: merged=$EV_MERGED_COUNT closed_unmerged=$EV_CLOSED_COUNT open=$EV_OPEN_COUNT stray=$EV_STRAY_COUNT grace_elapsed=$grace_elapsed" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
-          # PREDICATE. A partial landing needs >=1 merged sibling (nothing has landed yet
-          # otherwise). Then: a closed-unmerged member trips immediately; a (REST-confirmed) stray
-          # only trips once grace has elapsed.
+          # PREDICATE: needs >=1 merged sibling (nothing has landed otherwise); then a closed-unmerged
+          # member trips immediately, a (REST-confirmed) stray only once grace has elapsed.
           local is_partial=false
           if [ "$EV_MERGED_COUNT" -ge 1 ]; then
             if [ "$EV_CLOSED_COUNT" -ge 1 ]; then
@@ -497,8 +441,8 @@ runs:
             return 0
           fi
 
-          # PARTIAL candidate → FAIL-CLOSED confirmation on REST truth before a merge-blocking
-          # freeze. (a) confirm at least one "merged" member really merged.
+          # PARTIAL candidate → fail-closed REST confirmation before a merge-blocking freeze.
+          # (a) confirm at least one "merged" member really merged.
           local confirmed_merged=false m_repo m_num
           while read -r m_repo m_num <&4; do
             [ -n "$m_repo" ] || continue
@@ -511,7 +455,7 @@ runs:
           fi
 
           # (b) establish the concrete trip reason on REST truth. Strays were already REST-confirmed
-          # (Fix 1b); the closed-unmerged path re-reads here for parity.
+          # above; the closed-unmerged path re-reads here for parity.
           local trip_reason="" c_repo c_num confirmed_closed=false
           if [ "$EV_CLOSED_COUNT" -ge 1 ]; then
             while read -r c_repo c_num <&4; do
@@ -536,12 +480,12 @@ runs:
 
         # ---- SWEEP wrappers ---------------------------------------------------------------
 
-        # CLEAR: roll a landable stray forward while within grace (merged>=1 means a set is actively
-        # landing; the clear decision guarantees grace has NOT elapsed for any stray), then post
-        # epic-freeze=success on every open sibling head. That success IS the default state of the
-        # required check AND the UNFREEZE (Fix 2): re-derived each sweep, it re-posts success on the
-        # same open-head set a prior freeze touched, clearing a stale freeze the instant the Epic is
-        # whole (latest-check-of-a-name wins). Queue heads self-expire, so they need no success.
+        # CLEAR: roll landable strays forward while within grace (merged>=1 = a set actively landing; the
+        # clear decision guarantees grace has NOT elapsed for any stray), then post epic-freeze=success on
+        # every open sibling head. That success IS the default state of the required check AND the
+        # UNFREEZE: re-derived each sweep, it re-posts success on the same open-head set a prior freeze
+        # touched, clearing a stale freeze the instant the Epic is whole (latest-check-of-a-name wins).
+        # Queue heads self-expire, so they need no success.
         sweep_post_clear() { # $1 = epic
           local epic="$1"
           if [ "$EV_MERGED_COUNT" -ge 1 ] && [ "$EV_STRAY_COUNT" -ge 1 ]; then
@@ -564,10 +508,10 @@ runs:
           done 5< <(printf '%s' "$EV_OPEN" | jq -r '.[] | "\(.repository.nameWithOwner) \(.headRefOid)"')
         }
 
-        # FROZEN: post epic-freeze=failure once per (repo, sha) over the DEDUPLICATED union (Fix 1a)
-        # of every open sibling's CURRENT head (blocks it entering the queue / merging) and every
-        # live queue entry's head (fails a required check there → dequeues the in-flight group).
-        # Re-derived each sweep, so the freeze follows new commits and clears once whole.
+        # FROZEN: post epic-freeze=failure once per (repo, sha) over the DEDUPLICATED union of every open
+        # sibling's CURRENT head (blocks it entering the queue / merging) and every live queue entry's
+        # head (fails a required check there → dequeues the in-flight group). Re-derived each sweep, so
+        # the freeze follows new commits and clears once whole.
         sweep_post_freeze() { # $1 = epic
           local epic="$1"
           echo "epic #$epic: PARTIAL LANDING confirmed ($EV_REASON) — freezing $EV_OPEN_COUNT open sibling(s) + queue heads." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -595,10 +539,9 @@ runs:
           esac
         }
 
-        # STANDALONE backstop (non-optional). The universal satisfiability floor: after the epic
-        # loop, post epic-freeze=success on every open PR head that carries NO epic:<N> label — so a
-        # standalone PR whose `opened` webhook never fired (the PR class LEAST likely to get a
-        # follow-up event) is still covered and never strands on "Expected". Idempotent (latest-wins).
+        # STANDALONE backstop (universal satisfiability floor): after the epic loop, post
+        # epic-freeze=success on every open PR head that carries NO epic:<N> label — so a standalone PR
+        # whose `opened` webhook never fired is still covered and never strands on "Expected". Idempotent.
         standalone_sweep() {
           local standalone count s_repo s_sha
           standalone=$(printf '%s' "$all_open" | jq -c '
@@ -624,22 +567,21 @@ runs:
             exit 1
           fi
 
-          # Distinct Epic numbers from the permission-gated `epic:<N>` labels. The jq `test` applies
-          # the injection guard; the per-Epic loop re-checks numeric-ness.
+          # Distinct Epic numbers from the `epic:<N>` labels; the jq `test` is the injection guard, the
+          # per-Epic loop re-checks numeric-ness.
           local epics
           epics=$(printf '%s' "$all_open" | jq -r '
             [ .[] | (.labels.nodes // [])[].name | select(test("^epic:[0-9]+$")) | ltrimstr("epic:") ]
             | unique | .[]')
 
-          # Universal satisfiability backstop FIRST: post epic-freeze=success on every open
-          # NON-member head. Running it BEFORE the epic loop means any epic-pass success/failure
-          # posts LAST and wins on a head both could touch (a lagging label index) — flipping a
-          # contested head to fail-closed. Always runs, even with no active Epics.
+          # Backstop FIRST: running it BEFORE the epic loop means any epic-pass success/failure posts LAST
+          # and wins on a head both could touch (a lagging label index) — flipping a contested head to
+          # fail-closed. Always runs, even with no active Epics.
           standalone_sweep
 
           if [ -n "$epics" ]; then
-            # fd 3 isolates the outer loop's input from every gh call inside sweep_epic; the loop
-            # body runs in this shell, so the EV_* globals it sets are visible here.
+            # fd 3 isolates the outer loop's input from every gh call inside sweep_epic; the loop body runs
+            # in this shell, so the EV_* globals it sets are visible here.
             local EPIC
             while IFS= read -r EPIC <&3; do
               [ -n "$EPIC" ] || continue
@@ -658,11 +600,11 @@ runs:
         }
 
         # ---- PER-PR wrapper ---------------------------------------------------------------
-        # Classify the triggering PR (mirror of merge-gate's classify step) and post epic-freeze on
-        # its head ONLY. Fails OPEN — success on standalone and on ANY uncertainty — because per-PR
-        # is the satisfiability guarantor for a fresh head with no prior check; a wrongly-open PR is
-        # double-backstopped (merge-gate is independently required + fail-closed, and the next sweep
-        # re-derives and freezes the true heads). Only a REST-confirmed frozen Epic posts failure.
+        # Classify the triggering PR (mirror of merge-gate's classify step) and post epic-freeze on its
+        # head ONLY. Fails OPEN (success on standalone and ANY uncertainty) — the satisfiability guarantor
+        # for a fresh head with no prior check; a wrongly-open PR is double-backstopped by merge-gate
+        # (independently required + fail-closed) and the next sweep. Only a REST-confirmed frozen Epic
+        # posts failure.
         per_pr_main() {
           # Anchor the check to the head the ruleset evaluates. No head SHA = misconfigured caller.
           if [ -z "${HEAD_SHA:-}" ]; then
@@ -670,14 +612,14 @@ runs:
             exit 1
           fi
 
-          # Which PR are we classifying? On a merge_group event the queued PR number is encoded in
-          # the group ref (…/pr-<N>-<sha>); a batch names one PR and we evaluate that PR's Epic.
+          # Which PR are we classifying? On a merge_group event the queued PR number is encoded in the
+          # group ref (…/pr-<N>-<sha>); a batch names one PR and we evaluate that PR's Epic.
           local classify_pr=""
           if [ -n "${IN_QUEUE:-}" ]; then
             classify_pr=$(printf '%s' "${MG_HEAD_REF:-}" | grep -oE 'pr-[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
             if [ -z "$classify_pr" ]; then
-              # Can't identify the queued PR — post failure on the group head (dequeues). Harmless:
-              # merge-gate already dequeues an unidentifiable group; the sweep re-checks the PR head.
+              # Can't identify the queued PR — post failure on the group head (dequeues). merge-gate
+              # already dequeues an unidentifiable group; the sweep re-checks the PR head.
               freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
                 "merge_group head_ref \"${MG_HEAD_REF:-}\" — couldn't identify the queued PR to check its Epic; posting failure (dequeues) rather than passing blind. The sweep re-checks the PR head."
               return 0
@@ -685,18 +627,17 @@ runs:
           elif [ -n "${PR_NUMBER:-}" ]; then
             classify_pr="$PR_NUMBER"
           else
-            # A head SHA but neither a PR nor a merge_group is a misconfigured caller — refuse to
-            # satisfy a required check on a real SHA with nothing evaluated.
+            # A head SHA but neither a PR nor a merge_group is a misconfigured caller — refuse to satisfy
+            # a required check on a real SHA with nothing evaluated.
             freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
               "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event — refusing to pass a required check without evaluating a PR."
             return 0
           fi
 
-          # This PR's labels (the membership authority). On the native pull_request event they are
-          # in the payload → classify with NO API call (the standalone fast-path can't be frozen by
-          # a GraphQL outage). merge_group / repost paths have no payload, so read via GraphQL; a
-          # read failure fails OPEN (post success) — merge-gate holds independently and the sweep
-          # re-derives. (No >100-label HOLD like merge-gate: per-PR fails open, so it is moot here.)
+          # This PR's labels (the membership authority). On the native pull_request event they are in the
+          # payload → classify with NO API call (the standalone fast-path can't be frozen by a GraphQL
+          # outage). merge_group / repost paths have no payload, so read via GraphQL; a read failure fails
+          # OPEN (post success) — merge-gate holds independently and the sweep re-derives.
           local labels=""
           if [ -n "${EVENT_PR:-}" ] && [ "$classify_pr" = "${EVENT_PR}" ]; then
             labels=$(printf '%s' "${EVENT_LABELS:-[]}")
@@ -713,8 +654,7 @@ runs:
           epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty' | grep -oE '[0-9]+' || true)
 
           if [ -z "$epic" ]; then
-            # STANDALONE fast-path → success. (Drop merge-gate's `Closes`/parent-epic nudge — not
-            # this check's job.)
+            # STANDALONE fast-path → success.
             freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
               "PR #${classify_pr} has no epic:<N> label — standalone, no partial-landing coordination. epic-freeze clear."
             return 0
@@ -731,8 +671,8 @@ runs:
               freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
                 "Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding this sibling to prevent further partial landing. Does NOT roll back merged PRs — human rollback is a-novel-kit/workflows#235." ;;
             *)
-              # Uncertainty (resolve/queue/REST) → fail OPEN. Double-backstopped by merge-gate + the
-              # next sweep, which re-derives from scratch and freezes the true heads if it is real.
+              # Uncertainty (resolve/queue/REST) → fail OPEN. Double-backstopped by merge-gate + the next
+              # sweep, which re-derives from scratch and freezes the true heads if it is real.
               freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
                 "Epic #${epic}: couldn't confirm partial-landing state (resolve/queue/REST uncertainty) — failing open (success). merge-gate holds independently and the reconcile sweep re-derives." ;;
           esac
