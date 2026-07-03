@@ -172,6 +172,23 @@ runs:
           echo "::error::grace_minutes must be an integer, got \"${GRACE_MINUTES:-}\""
           exit 1
         fi
+        # PER-PR inputs become GraphQL args + API path components. per-PR fails OPEN on data
+        # UNCERTAINTY by design, but a misconfigured input (a slash/space in `repo`, a bad SHA) must
+        # fail LOUD, not silently post success — so validate them here. The sweep ignores these.
+        if [ "${MODE:-}" = "per-pr" ]; then
+          if ! [[ "${REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::repo must be a bare repository name (no owner/slash), got \"${REPO:-}\""
+            exit 1
+          fi
+          if [ -n "${PR_NUMBER:-}" ] && ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::pull_request_number must be numeric, got \"$PR_NUMBER\""
+            exit 1
+          fi
+          if ! [[ "${HEAD_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::head_sha must be a 40-hex commit SHA, got \"${HEAD_SHA:-}\""
+            exit 1
+          fi
+        fi
 
         # dry_run defaults on; only the literal "false" (any case) mutates. Lowercase via tr (portable),
         # not ${VAR,,} (bash-4 only) — matches enable-auto-merge.
