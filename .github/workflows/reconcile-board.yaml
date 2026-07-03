@@ -1,10 +1,12 @@
 # Reusable board reconcile sweep — the fail-safe that repairs board state the
 # event-driven automation can miss. Each org's `.github` repo calls this on a schedule
-# with a thin caller, so the sweep logic lives in ONE place. Three passes:
+# with a thin caller, so the sweep logic lives in ONE place. Four passes:
 #   - rollup:   roll each epic's Status + Start date up from its children (read-only by default).
 #   - rederive: re-derive every open Task PR's board Status, catching dropped derive events.
 #   - regate:   re-post merge-gate on every open epic-member PR, since a sibling changing
 #               in another repo emits no event to it.
+#   - detect:   re-derive every active Epic's partial-landing state org-wide and post epic-freeze
+#               (the SWEEP half of the detector) — the level-triggered floor + standalone backstop.
 # The per-PR passes matrix over the org's open PRs (enumerated first, paginated) and call
 # the generic-actions cross-repo via their repo inputs. All board mutations still go through
 # the single-writer actions. The `when` (cron / concurrency) lives in the caller.
@@ -26,6 +28,14 @@ on:
         type: string
         default: "true"
         description: When "true" (default), the epic rollup only logs; set "false" to write.
+      detect_dry_run:
+        required: false
+        type: string
+        default: "true"
+        description: >
+          When "true" (default), the partial-landing detector only logs; set "false" to post
+          epic-freeze check-runs and roll strays forward. Independent of rollup_dry_run so the
+          detector flips live on its own rollout schedule.
     secrets:
       private_key:
         required: true
@@ -40,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.9.0
+      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.10.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -122,7 +132,7 @@ jobs:
           permission-contents: read
           permission-issues: read
           permission-pull-requests: read
-      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.9.0
+      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.10.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -144,10 +154,25 @@ jobs:
       matrix:
         pr: ${{ fromJSON(needs.enumerate.outputs.epic_prs) }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.9.0
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.10.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           repo: ${{ matrix.pr.repo }}
           pull_request_number: ${{ matrix.pr.number }}
           head_sha: ${{ matrix.pr.sha }}
+
+  # Partial-landing fail-safe: the SWEEP half of the epic-freeze detector. A single whole-org
+  # invocation — it self-enumerates every active Epic and every open head, so it needs no
+  # matrix and no `needs`. SWEEP mode (no pull_request_number; the event is schedule/dispatch).
+  # It mints its own org-wide tokens (read + checks +, sweep-only, a write token for grace-bounded
+  # roll-forward), so no token/permission is scoped here. dry_run threads from the caller.
+  detect:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.10.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          dry_run: ${{ inputs.detect_dry_run }}
