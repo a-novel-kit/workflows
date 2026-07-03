@@ -161,8 +161,10 @@ runs:
         set -euo pipefail
 
         # ---- Validate the untrusted inputs before they reach a search grammar or arithmetic.
-        if [ -z "${ORG:-}" ]; then
-          echo "::error::org is required"
+        # org feeds `org:<ORG>` search qualifiers — require GitHub-login chars so a stray value
+        # (whitespace, an injected qualifier) can't broaden the scope or break the query. Empty fails too.
+        if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
+          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
           exit 1
         fi
         # grace_minutes feeds shell arithmetic; reject anything non-numeric outright.
@@ -190,11 +192,12 @@ runs:
               labels(first:100){ nodes{ name } } } } } }'
 
         # Live merge-queue read. `mergeQueue` is null when the branch has no queue configured (jq `// []`
-        # → empty set). `headOid` is the entry's live temp-merge head, which differs from the PR's head.
+        # → empty set). headCommit.oid is the entry's live temp-merge head, which differs from the PR's
+        # head (MergeQueueEntry exposes the SHA via headCommit{oid}, not a headOid field).
         MQ_Q='query($owner:String!,$repo:String!,$base:String!){
           repository(owner:$owner,name:$repo){
             mergeQueue(branch:$base){
-              entries(first:100){ nodes{ pullRequest{ number } state headOid } } } } }'
+              entries(first:100){ nodes{ pullRequest{ number } state headCommit{ oid } } } } } }'
 
         # Direct PR labels read (PER-PR mode, merge_group / repost path — no event payload there).
         PR_LABELS_Q='query($owner:String!,$repo:String!,$num:Int!){
@@ -243,7 +246,7 @@ runs:
               && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
               printf '%s' "$data" | jq -c '[(.data.repository.mergeQueue.entries.nodes // [])[]
                 | select(.pullRequest.number != null)
-                | {number: .pullRequest.number, state, headOid}]'
+                | {number: .pullRequest.number, state, headOid: .headCommit.oid}]'
               return 0
             fi
             [ "$attempt" -lt 3 ] && sleep 2
