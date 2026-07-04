@@ -75,6 +75,39 @@ inputs:
     description: >
       When "true" (default), log every intended freeze / unfreeze / re-enqueue without calling GitHub.
       Set "false" to actually post check-runs and re-enqueue.
+  planning_repo:
+    required: false
+    default: .github
+    description: >
+      Repository (name only; owner is `org`) where Epic issues live — read to check an Epic's
+      `automation:paused` marker. Defaults to the org `.github` repo, where the planning Epics are
+      tracked.
+  max_freeze_repos:
+    required: false
+    default: "5"
+    description: >
+      BLAST-CAP (sweep only): the distinct-repo width at which a SINGLE Epic's freeze is flagged as
+      suspiciously wide. If an Epic's freeze target set (open sibling heads + live queue heads) spans
+      MORE than this many DISTINCT repos the sweep STILL posts that Epic's freeze on every target —
+      skipping it would leave a REST-confirmed partial landing un-frozen, which is fail-UNSAFE — but
+      it ALSO raises a LOUD alert (::error + a red sweep run) so a runaway / mis-scoped freeze is
+      investigated. Other Epics in the same sweep are unaffected. Per-PR mode freezes one repo, so the
+      cap never applies there. Empty/unset falls back to a hard internal default of 5. Must be a
+      positive integer.
+  kill_switch:
+    required: false
+    default: ""
+    description: >
+      Org-level HALT, threaded from the caller as `kill_switch: ${{ vars.AGENT_KILL_SWITCH }}`
+      (a composite action cannot read the `vars` context itself). FAIL-SAFE: RUNNING only when the
+      value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset, 0, off, false,
+      no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) ENGAGES the halt (a kill-switch
+      must fail toward halting). Read FIRST — the kill-switch is the hard, read-free halt (no token,
+      no API), unlike the per-Epic `automation:paused` pause, which is BEST-EFFORT (fail-open on a
+      label-read blip). When engaged: per-PR mode posts a `failure` HOLD on the head (a required-check
+      poster must never skip — a skipped/neutral required check passes OPEN); sweep mode skips all
+      work (no freeze posts, no roll-forward), since merge-gate independently HOLDs every PR org-wide
+      while halted.
 
 runs:
   using: composite
@@ -101,6 +134,10 @@ runs:
     # Least-privilege org-wide tokens: the sweep spans the whole org, so the single-repo GITHUB_TOKEN
     # can't see sibling PRs; separate tokens keep each capability scoped. Org-wide (not per-repo) because
     # a composite action can't loop `create-github-app-token` over repos discovered at runtime.
+    # These mints are deliberately NOT additionally gated on the kill-switch: a halted sweep no-ops
+    # without exercising them (token SCOPE, not mint timing, is the enforced bound), a mint-free halt
+    # is unachievable anyway (the per-PR HOLD below must mint checks:write to post `failure`), and
+    # gating each mint would duplicate the fail-safe off-token parse into a separate pre-mint step.
     - name: Mint read token
       id: read
       uses: actions/create-github-app-token@v3
@@ -144,8 +181,11 @@ runs:
         WRITE_TOKEN: ${{ steps.write.outputs.token }}
         MODE: ${{ steps.mode.outputs.mode }}
         ORG: ${{ inputs.org }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
         GRACE_MINUTES: ${{ inputs.grace_minutes }}
+        MAX_FREEZE_REPOS: ${{ inputs.max_freeze_repos }}
         DRY_RUN: ${{ inputs.dry_run }}
+        KILL_SWITCH: ${{ inputs.kill_switch }}
         # Per-PR inputs + event payload (used only when MODE=per-pr). OWNER/REPO_FULL derive from `org`
         # (the single source of truth matching the minted tokens), not github.repository_owner.
         OWNER: ${{ inputs.org }}
@@ -174,6 +214,28 @@ runs:
           echo "::error::grace_minutes must be an integer, got \"${GRACE_MINUTES:-}\""
           exit 1
         fi
+        # planning_repo becomes an API path component (the Epic-pause read); require a bare repo name.
+        if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
+          exit 1
+        fi
+        # max_freeze_repos (BLAST-CAP) feeds shell arithmetic + a `-gt` compare; require a positive int.
+        # Hard internal default 5 so an empty/unset value is safe rather than an error (mirrors the
+        # input default; the fallback covers a caller that threads an empty string through).
+        MAX_FREEZE_REPOS="${MAX_FREEZE_REPOS:-5}"
+        if ! [[ "${MAX_FREEZE_REPOS}" =~ ^[0-9]+$ ]] || [ "${MAX_FREEZE_REPOS}" -lt 1 ]; then
+          echo "::error::max_freeze_repos must be a positive integer, got \"${MAX_FREEZE_REPOS:-}\""
+          exit 1
+        fi
+
+        # Org-level HALT flag (read FIRST — resolved from an input, no token/API). FAIL-SAFE: RUNNING
+        # only for an explicit off-token (empty/unset, 0, off, false, no, disabled); ANYTHING ELSE
+        # (a fat-fingered value or garbage) ENGAGES. Acted on at Dispatch below, after the helpers are
+        # defined so per-PR can reuse freeze_post (dry-run aware).
+        kill_engaged=true
+        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+          "" | 0 | off | false | no | disabled) kill_engaged=false ;;
+        esac
         # Per-PR inputs become GraphQL args + API path components. Per-PR fails open on data
         # uncertainty by design, but a misconfigured input (a slash/space in `repo`, a bad SHA) must
         # fail loud, not silently post success — so validate them here. The sweep ignores these.
@@ -302,6 +364,16 @@ runs:
             [ "$attempt" -lt 3 ] && sleep 2
           done
           return 1
+        }
+
+        # Is Epic N paused? Reads the `automation:paused` marker on the Epic issue in the planning
+        # repo — a >= triage label, so a permission-gated per-Epic hold. Returns 0 = paused,
+        # 1 = not paused, 2 = read error (the caller then proceeds with normal detection — fail-open
+        # on pause; a real partial landing still gets caught).
+        epic_paused() { # $1 = epic number
+          local out
+          out=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/$1" --jq '.labels[].name' 2>/dev/null) || return 2
+          printf '%s\n' "$out" | grep -qx 'automation:paused'
         }
 
         # ---- Post helpers (dry-run aware; the checks token posts) -------------------------
@@ -545,6 +617,20 @@ runs:
             + [ $queue[] | select(.headOid != null) | {repo: .repo, sha: .headOid} ] )
             | map(select(.sha != null))
             | unique_by(.repo + " " + .sha)')
+
+          # BLAST-CAP: a freeze spanning more than max_freeze_repos DISTINCT repos is almost certainly
+          # a runaway / mis-scoped Epic — but SKIPPING the post would leave a REST-confirmed partial
+          # landing un-frozen (fail-UNSAFE). So STILL post the freeze on every target (fail toward
+          # freezing), and only set the tripwire flag + raise a LOUD ::error so the sweep ends RED and
+          # a human investigates. This is a flag-and-continue tripwire: sweep_main exits non-zero AFTER
+          # the whole loop; it never aborts the sweep mid-epic, and other Epics are unaffected.
+          local distinct_repos
+          distinct_repos=$(printf '%s' "$targets" | jq -r '[.[].repo] | unique | length')
+          if [ "$distinct_repos" -gt "$MAX_FREEZE_REPOS" ]; then
+            blast_cap_tripped=true
+            echo "::error::BLAST-CAP: epic #$epic freeze spans ${distinct_repos} distinct repos (> max_freeze_repos=${MAX_FREEZE_REPOS}) — posting the freeze anyway (skipping it would leave a partial landing un-frozen), but flagging this sweep RED. Investigate a runaway / mis-scoped Epic; raise max_freeze_repos deliberately if the width is genuine." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
           local t_repo t_sha
           while read -r t_repo t_sha <&5; do
             [ -n "$t_repo" ] || continue
@@ -553,6 +639,13 @@ runs:
         }
 
         sweep_epic() { # $1 = epic
+          # Per-Epic pause: `automation:paused` on the Epic issue → leave this Epic entirely alone (no
+          # freeze, no roll-forward), so its landing is under manual control while OTHER Epics move. A
+          # read error (2) falls through to normal detection so a real partial landing is still caught.
+          if epic_paused "$1"; then
+            echo "epic #$1: automation:paused — skipping (no freeze / roll-forward this sweep)." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
           evaluate_epic "$1"
           case "$EV_DECISION" in
             clear)  sweep_post_clear "$1" ;;
@@ -583,6 +676,9 @@ runs:
         }
 
         sweep_main() {
+          # BLAST-CAP tripwire: set true by sweep_post_freeze when an Epic's freeze exceeds
+          # max_freeze_repos. Checked at the end so the whole sweep run ends RED — a loud alert.
+          blast_cap_tripped=false
           echo "Enumerating active Epics (distinct epic:<N> labels on open PRs, org=${ORG})…" | tee -a "$GITHUB_STEP_SUMMARY"
           if ! all_open=$(search_prs "org:${ORG} is:pr is:open"); then
             echo "::error::could not enumerate open PRs (GraphQL search failed after retries) — nothing done this sweep"
@@ -619,6 +715,14 @@ runs:
           fi
 
           echo "Partial-landing sweep complete." | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # A tripped BLAST-CAP fails the sweep run RED — the loud alert — but only AFTER the whole
+          # loop, never mid-epic. The over-wide Epic WAS still frozen (fail-safe — a partial landing is
+          # never left open); its width is merely flagged for a human to investigate.
+          if [ "$blast_cap_tripped" = true ]; then
+            echo "::error::BLAST-CAP tripped this sweep — one or more Epics exceeded max_freeze_repos=${MAX_FREEZE_REPOS} (details above). They were frozen anyway (fail-safe); investigate a runaway / mis-scoped Epic."
+            exit 1
+          fi
         }
 
         # ---- Per-PR wrapper ---------------------------------------------------------------
@@ -682,6 +786,15 @@ runs:
             return 0
           fi
 
+          # Per-Epic pause: `automation:paused` on the Epic issue → don't evaluate partial-landing for
+          # it. merge-gate HOLDs a paused Epic's members independently, so fail open here (post success)
+          # to avoid stranding this head on "Expected". A read error (2) proceeds with normal detection.
+          if epic_paused "$epic"; then
+            freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
+              "Epic #${epic} is automation:paused — merge-gate holds it; epic-freeze not evaluating partial-landing while paused. epic-freeze clear."
+            return 0
+          fi
+
           # Epic member → evaluate the Epic and post on head_sha only.
           echo "PR #${classify_pr} carries epic:${epic} — evaluating the Epic for a partial landing." | tee -a "$GITHUB_STEP_SUMMARY"
           evaluate_epic "$epic"
@@ -699,6 +812,22 @@ runs:
                 "Epic #${epic}: couldn't confirm partial-landing state (resolve/queue/REST uncertainty) — failing open (success). merge-gate holds independently and the reconcile sweep re-derives." ;;
           esac
         }
+
+        # ---- Org-level HALT (AGENT_KILL_SWITCH) — acted on FIRST at dispatch ---------------
+        # Per-PR is a required-check poster → HOLD (post failure), never skip (a skipped/neutral
+        # required check passes OPEN). Sweep is a recovery writer → skip all work: no freeze posts, no
+        # roll-forward. The halt is still complete because merge-gate independently HOLDs every PR
+        # org-wide (the regate sweep pass re-posts it on idle PRs). freeze_post is dry-run aware, so a
+        # halted per-PR run under dry_run only logs the intended HOLD.
+        if [ "$kill_engaged" = true ]; then
+          if [ "${MODE:-sweep}" = "per-pr" ]; then
+            freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
+              "Automation halted org-wide by AGENT_KILL_SWITCH — holding this PR. Lift the org kill-switch to resume; the next event or reconcile sweep re-evaluates."
+          else
+            echo "AGENT_KILL_SWITCH engaged — skipping the partial-landing sweep (no freeze posts, no roll-forward). merge-gate HOLDs every PR org-wide meanwhile." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
+        fi
 
         # ---- Dispatch --------------------------------------------------------------------
         if [ "${MODE:-sweep}" = "per-pr" ]; then

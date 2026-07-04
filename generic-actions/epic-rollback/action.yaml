@@ -89,10 +89,54 @@ inputs:
     description: >
       When "true" (default), print the reconstructed ledger + the planned per-repo reverts + the
       planned board resets and do NO writes. Set "false" to actually open + land the reverts.
+  max_rollback_repos:
+    required: false
+    default: "5"
+    description: >
+      BLAST-CAP: the maximum number of distinct repos a single rollback may touch. If the
+      reconstructed ledger spans MORE than this many repos the action ABORTS LOUD (::error + exit 1)
+      before opening any revert — a rollback that wide is almost certainly a mis-scoped Epic. Aborting
+      is correct HERE (unlike the partial-landing freeze, which posts anyway): a rollback is
+      DESTRUCTIVE and opt-in, so failing toward NOT reverting is the safe direction. Checked in both
+      dry and live runs (the plan is still printed to the summary first). Raise it deliberately for a
+      genuinely large rollback. Empty/unset falls back to a hard internal default of 5. Must be a
+      positive integer.
+  kill_switch:
+    required: false
+    default: ""
+    description: >
+      Org-level HALT, threaded from the caller as `kill_switch: ${{ vars.AGENT_KILL_SWITCH }}`
+      (a composite action cannot read the `vars` context itself). FAIL-SAFE: this action is RUNNING
+      only when the value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset,
+      0, off, false, no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) engages the halt
+      (a kill-switch must fail toward halting). When engaged this destructive, human-triggered action
+      aborts LOUD (exit 1) as its FIRST step, before the admin check or any mint — a failing step
+      stops the composite, so nothing later runs. Lift the org kill-switch deliberately before rolling
+      back.
 
 runs:
   using: composite
   steps:
+    # Org-level HALT (read FIRST, before the admin check or any token mint): AGENT_KILL_SWITCH
+    # engaged → refuse to run. A destructive rollback must be an explicit, un-halted decision, so
+    # this aborts loud rather than silently no-opping.
+    - name: Halt guard (kill-switch)
+      shell: bash
+      env:
+        KILL_SWITCH: ${{ inputs.kill_switch }}
+      run: |
+        set -euo pipefail
+        # FAIL-SAFE: RUNNING only for an explicit off-token (empty/unset, 0, off, false, no,
+        # disabled); ANYTHING ELSE (a fat-fingered value or garbage) engages the halt. A failing step
+        # stops the composite, so no later step (admin check, mints, revert) runs.
+        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          *)
+            echo "::error::AGENT_KILL_SWITCH engaged — [Agent] automation is halted org-wide; refusing to run epic-rollback. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) deliberately before rolling back."
+            exit 1
+            ;;
+        esac
+
     # Defense in depth: re-check the dispatcher is a repo admin HERE, as the action's first step —
     # the gate must not live ONLY in the caller's dispatch shell (a hand-written or drifted copy could
     # drop it). Copied from approve-pr/action.yaml: the collaborator-permission endpoint needs only
@@ -169,6 +213,7 @@ runs:
         PROJECT_ID: ${{ inputs.project_id }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
         DRY_RUN: ${{ inputs.dry_run }}
+        MAX_ROLLBACK_REPOS: ${{ inputs.max_rollback_repos }}
         ACTOR: ${{ github.actor }}
       run: |
         set -euo pipefail
@@ -189,10 +234,28 @@ runs:
           echo "::error::reason is required (it is the audit trail for the rollback)"
           exit 1
         fi
+        # BLAST-CAP bound feeds shell arithmetic + a `-gt` compare; require a positive integer.
+        # Hard internal default 5 so an empty/unset value is safe rather than an error.
+        MAX_ROLLBACK_REPOS="${MAX_ROLLBACK_REPOS:-5}"
+        if ! [[ "${MAX_ROLLBACK_REPOS}" =~ ^[0-9]+$ ]] || [ "${MAX_ROLLBACK_REPOS}" -lt 1 ]; then
+          echo "::error::max_rollback_repos must be a positive integer, got \"${MAX_ROLLBACK_REPOS:-}\""
+          exit 1
+        fi
 
         # dry_run defaults on; only the literal "false" (any case) mutates. Lowercase via tr
         # (portable), not ${VAR,,} (bash-4 only).
         dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
+
+        # ---- Per-Epic pause -------------------------------------------------------------------
+        # `automation:paused` on the Epic issue holds ALL [Agent] automation for that Epic. A
+        # destructive rollback must be an explicit, un-paused decision, so refuse to run while the
+        # Epic is paused. Read the Epic issue's labels (issues:read); a read error does NOT block
+        # (fail-open — the admin + typed-confirmation gate already fenced this dispatch).
+        paused_labels=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.labels[].name' 2>/dev/null || echo "")
+        if printf '%s\n' "$paused_labels" | grep -qx 'automation:paused'; then
+          echo "::error::epic:#${EPIC} is automation:paused — remove the \`automation:paused\` label from the Epic issue before rolling it back."
+          exit 1
+        fi
 
         # Marker file for the conflict-placeholder fallback (a ruleset may reject an empty commit).
         MARKER="ROLLBACK-HELD.md"
@@ -361,6 +424,17 @@ runs:
         task_ids=$(printf '%s' "$ledger" | jq -r '[.[].tasks[]] | unique | .[]')
         task_n=$(printf '%s' "$task_ids" | grep -c . || true)
         echo "### Board reset plan: ${task_n} rolled-back Task(s) → Status \"Ready\"" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        # ---- BLAST-CAP (before ANY mutation, for both dry + real runs) --------------------------
+        # A rollback fans a DESTRUCTIVE revert across every repo in the ledger. Cap the distinct-repo
+        # target set: over the cap → ABORT LOUD rather than proceed, a guard against a runaway or
+        # mis-scoped rollback. The plan above is already in the summary, so the operator sees WHAT it
+        # would have touched; they raise max_rollback_repos deliberately if the width is genuine.
+        repo_n=$(printf '%s' "$repos" | grep -c . || true)
+        if [ "$repo_n" -gt "$MAX_ROLLBACK_REPOS" ]; then
+          echo "::error::BLAST-CAP: rollback of epic:#${EPIC} would touch ${repo_n} repos (> max_rollback_repos=${MAX_ROLLBACK_REPOS}) — aborting before any revert. A rollback this wide is almost certainly a mis-scoped Epic; investigate, or re-dispatch with a higher max_rollback_repos if it is genuinely intended." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
 
         # ---- Multi-base assert (before ANY mutation, for both dry + real runs) -----------------
         # A repo's siblings must all target ONE base branch. Reverting an older-base sibling onto the
