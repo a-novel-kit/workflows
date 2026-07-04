@@ -30,7 +30,7 @@ runs:
     - name: run audit
       shell: bash
       # --fix requires a mode since pnpm 11; "override" pins vulnerable
-      # transitive deps via package.json overrides without moving direct deps.
+      # transitive dependencies via package.json overrides without moving direct ones.
       env:
         # `pnpm audit --fix` writes new overrides then runs an install to apply
         # them; under CI pnpm defaults that install to --frozen-lockfile, which

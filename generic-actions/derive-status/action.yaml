@@ -1,8 +1,8 @@
 name: derive-status
 description: >
-  Derive a Task's board Status from its pull request's CURRENT state and write it as
+  Derive a Task's board Status from its pull request's current state and write it as
   the [Agent] App, so the board follows PR activity with a single writer. The mapping
-  is a pure function of the PR (draft / approved / merged / closed), NOT of the event
+  is a pure function of the PR (draft / approved / merged / closed), not of the event
   that fired — which is exactly why the reconcile sweep can re-run this same derivation
   to repair drift from dropped or cross-repo events. On first activity it also stamps
   the Task's Start date, once. The Task is resolved through the PR's closing-issue
@@ -94,7 +94,7 @@ runs:
           echo "::warning::PR #$PR closes $ref_count issues; deriving the lowest-numbered. The reconcile sweep covers the rest."
         fi
 
-        # Pure function of the PR's CURRENT state — the reconcile sweep re-runs this
+        # Pure function of the PR's current state — the reconcile sweep re-runs this
         # identically, so it must not depend on which event fired.
         case "$state" in
           MERGED) status="Awaiting release" ;;
@@ -122,7 +122,7 @@ runs:
 
         # "activated" = the Task has genuinely started (any state past the pre-PR
         # Backlog/Ready), which is when it earns a Start date. A reverted PR
-        # (closed-unmerged → Ready) is NOT activated, so it never back-stamps a date.
+        # (closed-unmerged → Ready) is not activated, so it never back-stamps a date.
         activated=false
         case "$status" in
           "In progress" | "In review" | "Done" | "Awaiting release") activated=true ;;
@@ -139,8 +139,8 @@ runs:
           | tee -a "$GITHUB_STEP_SUMMARY"
 
     # Write the derived Status. board-write mints the [Agent] token, resolves the item
-    # (adding it if absent), and compares before writing. Pinned external ref: a
-    # ./ path would resolve against the CONSUMER repo's workspace, not this repo.
+    # (adding it if absent), and compares before writing. This pins the external ref
+    # because a ./ path would resolve against the consumer repo's workspace, not this repo.
     - name: Write Status
       if: ${{ steps.derive.outputs.has_issue == 'true' }}
       uses: a-novel-kit/workflows/generic-actions/board-write@v1.10.0

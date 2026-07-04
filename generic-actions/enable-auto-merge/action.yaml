@@ -26,7 +26,7 @@ inputs:
     description: Number of the PR to enable auto-merge on.
   client_id:
     required: true
-    description: Client id of the [Agent] App (pull-requests + contents write on the target repo).
+    description: Client ID of the [Agent] App (pull-requests + contents write on the target repo).
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -52,9 +52,8 @@ runs:
         owner: ${{ github.repository_owner }}
         repositories: ${{ inputs.repo }}
         permission-pull-requests: write
-        # `gh pr merge --auto` needs contents:write too — the only proven `--auto` enqueue
-        # in this repo (governance/auto-approve-dependabot) mints both. A later spike may
-        # confirm pull-requests:write alone suffices and narrow this.
+        # contents:write is granted alongside pull-requests:write because the proven
+        # `gh pr merge --auto` enqueue pattern mints both.
         permission-contents: write
 
     - name: Enable auto-merge

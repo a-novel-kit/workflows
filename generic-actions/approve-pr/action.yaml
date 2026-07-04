@@ -10,7 +10,7 @@ description: >
 inputs:
   client_id:
     required: true
-    description: Client id of a GitHub App with the contents read and pull-requests write permissions.
+    description: Client ID of a GitHub App with the contents read and pull-requests write permissions.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.

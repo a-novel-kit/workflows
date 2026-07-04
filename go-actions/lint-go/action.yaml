@@ -12,9 +12,9 @@ runs:
     - uses: actions/checkout@v7
     - uses: actions/setup-go@v6
       with:
-        # Resolve go.mod relative to working-directory so the action also works
-        # when the Go module is not at the repo root (e.g. a CLI under cli/).
-        # An empty working-directory keeps the previous behaviour exactly.
+        # Resolve go.mod relative to working-directory so the action works when the
+        # Go module is not at the repo root. An empty working-directory falls back
+        # to the repo-root go.mod.
         go-version-file: ${{ inputs.working-directory && format('{0}/go.mod', inputs.working-directory) || 'go.mod' }}
     - uses: golangci/golangci-lint-action@v9
       with:

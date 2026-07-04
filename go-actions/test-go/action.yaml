@@ -56,8 +56,9 @@ runs:
       shell: bash
       id: discover
       run: |
-        # List all modules using `go list -m`, and for each module, list every package.
-        # The extra `go list -m` steps is used to discover multiple modules when working with workspaces.
+        # Enumerate every package across every module. Iterating modules from
+        # `go list -m` (rather than a single `go list ./...`) is what makes this
+        # work in a Go workspace, where packages span more than one module.
         echo "$(for mod in $(go list -m); do go list ${mod//$(go list .)/.}/... ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }}; done)" > modules.txt
         echo "MODULES=$(cat modules.txt | tr '\n' ' ')" >> $GITHUB_ENV
     - name: run tests

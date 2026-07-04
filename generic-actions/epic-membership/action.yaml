@@ -1,25 +1,25 @@
 name: epic-membership
 description: >
-  Resolve an Epic's authorized member set: the OPEN pull requests carrying the
-  `epic:<N>` label across the workflow's org. This is the membership AUTHORITY for the
+  Resolve an Epic's authorized member set: the open pull requests carrying the
+  `epic:<N>` label across the workflow's org. This is the membership authority for the
   cross-repo landing machinery. Authority is the label itself, because GitHub only lets
   a user with >= triage on a repo apply a label — so an `epic:<N>` label is a
   permission-gated assertion that a PR belongs to the Epic. A PR-body `Closes` keyword
-  is author-controlled and NOT gated, so the older `closingIssuesReferences → parent →
-  subIssues` walk is demoted to a discovery hint (a way to SUGGEST the label) and is no
-  longer trusted to define the set here.
+  is author-controlled and not gated, so the `closingIssuesReferences → parent →
+  subIssues` walk serves only as a discovery hint (a way to suggest the label), never as
+  the definition of the set here.
 
   Read-only: it queries the label set and emits it. It mutates nothing — no check post,
   no board write — so it takes no dry_run. The caller decides what to do with the set
   (and, on error, whether to hold or fail-open); this action just reports.
 
-  TODO (follow-up, intentionally NOT built here to keep the MVP small): membership
-  should be the ACTIVATION SNAPSHOT, not the live label set — a timeline-fold where a PR
+  TODO (follow-up, intentionally not built here to keep the MVP small): membership
+  should be the activation snapshot, not the live label set — a timeline-fold where a PR
   is a member iff its last `epic:<N>` label event at time <= the Epic's activation
   timestamp is `labeled` (a pure fold over GET issues/{n}/timeline). That freezes the
-  set so a PR labelled after the Epic starts landing joins the NEXT wave instead of
-  re-freezing an in-flight one, and a reopened/relabelled sibling can't resurrect a
-  finished Epic. The MVP below uses the CURRENT open-PR label set, which is correct for
+  set so a PR labeled after the Epic starts landing joins the next wave instead of
+  re-freezing an in-flight one, and a reopened/relabeled sibling can't resurrect a
+  finished Epic. The MVP below uses the current open-PR label set, which is correct for
   a single steady wave and is the input the snapshot fold will later consume.
 
 inputs:
@@ -40,7 +40,7 @@ outputs:
     description: >
       Compact JSON array of the authorized members, one object per open `epic:<N>` PR:
       {repo (nameWithOwner), number, headRefOid, isDraft, reviewDecision}. `[]` when the
-      Epic has no open labelled PRs.
+      Epic has no open labeled PRs.
     value: ${{ steps.resolve.outputs.members }}
   count:
     description: Integer count of members (length of the array).
@@ -92,8 +92,8 @@ runs:
         # matches the `epic:<N>` convention exactly (the colon needs the quotes);
         # `org:${OWNER}` scopes the walk to the workflow's org (the owner is an
         # Organization — a user account would need the `user:` qualifier instead).
-        # NOTE: GitHub's search index is eventually consistent, so a PR labelled or
-        # opened seconds ago may be missing from an otherwise-successful response (and a
+        # GitHub's search index is eventually consistent, so a PR labeled or opened
+        # seconds ago may be missing from an otherwise-successful response (and a
         # just-closed one briefly present); the caller must tolerate a transiently short
         # set. The timeline-fold follow-up above closes this window by reading the Epic
         # timeline live instead of the lagging index.
@@ -109,8 +109,8 @@ runs:
               repository{ nameWithOwner } } } } }'
 
         # Retry transient GraphQL failures a few times. Unlike merge-gate (which posts a
-        # required check and so must fail-OPEN to avoid deadlocking the queue), this is a
-        # read helper with no side effect: if the set can't be resolved we FAIL with a
+        # required check and so must fail open to avoid deadlocking the queue), this is a
+        # read helper with no side effect: if the set can't be resolved we fail with a
         # clear message and let the caller choose hold-vs-fail-open with full context.
         fetch() { # $1=cursor  → prints the response JSON on success, nothing on failure
           # -f (raw string) for every variable: all three are GraphQL String, and -f

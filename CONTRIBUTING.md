@@ -10,7 +10,7 @@ Each action lives at `<group>/<name>/action.yaml`, grouped by the kind of work i
 
 ## Versioning
 
-The whole repository is released as a single unit: a single Git tag covers every action at once, with no per-action versions. Release tags follow the `v*` convention; pushing one triggers `publish-actions/auto-release`, which turns it into a GitHub Release with generated notes.
+The whole repository is released as a single unit: one `v*` Git tag covers every action at once, with no per-action versions. Releases are cut from the GitHub UI (Actions ▸ release ▸ pick a bump type), which runs `publish-actions/release-core` to compute the next tag, push it, and create the GitHub Release. The protected `release` environment gates who may publish.
 
 Because everything ships together, an action may depend on another in this repo — but reference it by its pinned tag (`a-novel-kit/workflows/<group>/<name>@<tag>`), never a relative path. That keeps a release internally consistent: every action in a release calls that same release's version of its siblings, rather than whatever currently sits on `master`.
 

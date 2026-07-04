@@ -1,6 +1,6 @@
 name: board-write
 description: >
-  The write half of the board automation: set ONE field (single-select or date) on a
+  The write half of the board automation: set one field (single-select or date) on a
   Projects v2 board item, for a given issue or PR, as the [Agent] App. It resolves the
   field + option node-ids and the item — adding the item to the board if it isn't a
   member yet — and compares the current value before writing, so a re-run or an
@@ -35,7 +35,7 @@ inputs:
   value:
     required: true
     description: >
-      Target value. For a single-select field, the option NAME (e.g. "In progress").
+      Target value. For a single-select field, the option name (e.g. "In progress").
       For a date field, an ISO date (YYYY-MM-DD).
   add_if_missing:
     required: false
@@ -117,7 +117,7 @@ runs:
         fi
 
         # Build the GraphQL value fragment to write, and the sub-selection that reads
-        # the item's CURRENT value of this field (for the compare-before-write). Both
+        # the item's current value of this field (for the compare-before-write). Both
         # inlined values are safe to interpolate: a single-select option id is a GitHub
         # node id, and a date is format-checked below.
         case "$data_type" in
@@ -152,7 +152,7 @@ runs:
             ;;
         esac
 
-        # 2. Resolve the content's item in THIS project; add it if missing (a derived
+        # 2. Resolve the content's item in this project; add it if missing (a derived
         #    write on an un-boarded Task should board it, not vanish). Page through
         #    projectItems so a content that sits on many projects still matches —
         #    idempotence must not hinge on the first page holding the target board.

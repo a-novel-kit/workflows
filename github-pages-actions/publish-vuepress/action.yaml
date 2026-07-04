@@ -25,7 +25,7 @@ runs:
   steps:
     - uses: actions/checkout@v7
       with:
-        # fetch all commits to get last updated time or other git log info
+        # Full history so VuePress can read each page's last-updated time from the git log.
         fetch-depth: 0
     - uses: pnpm/action-setup@v6
       with:
@@ -40,7 +40,6 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       run: pnpm install --frozen-lockfile
-    # run build script
     - name: build VuePress site
       working-directory: ${{ inputs.working_directory }}
       shell: bash

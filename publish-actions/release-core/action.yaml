@@ -3,8 +3,7 @@ description: >
   Cut a release in CI: bump the version (workspace-aware, no pnpm), refresh doc
   version refs (prepublish:doc / `a-novel publish stamp`), commit, tag, push,
   and create the GitHub Release — and output the computed version for the
-  downstream build/publish jobs. Replaces the local `a-novel publish version`
-  and the tag-push `auto-release`. The release-type selector and the protected
+  downstream build/publish jobs. The release-type selector and the protected
   `release` environment live in the caller (the per-repo release workflow).
 
 inputs:
@@ -14,7 +13,7 @@ inputs:
   client_id:
     required: true
     description: >
-      [Agent] App client id. Needs contents:write plus a branch/tag-protection bypass,
+      [Agent] App client ID. Needs contents:write plus a branch/tag-protection bypass,
       since the bump commit lands on the protected default branch and the tag is
       protected (v*).
   app_private_key:
