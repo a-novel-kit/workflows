@@ -17,10 +17,40 @@ inputs:
   pull_request:
     required: true
     description: URL (or number) of the pull request to approve.
+  kill_switch:
+    required: false
+    default: ""
+    description: >
+      Org-level HALT, threaded from the caller as `kill_switch: ${{ vars.AGENT_KILL_SWITCH }}`
+      (a composite action cannot read the `vars` context itself). FAIL-SAFE: this action is RUNNING
+      only when the value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset,
+      0, off, false, no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) engages the halt.
+      When engaged this mutating, human-triggered action aborts LOUD (exit 1) before minting or
+      approving anything — lift the org kill-switch deliberately before recording an approval.
 
 runs:
   using: composite
   steps:
+    # Org-level HALT (read FIRST, before the admin check or any mint): AGENT_KILL_SWITCH engaged →
+    # refuse to record an approval. A human-triggered mutation aborts loud so the operator sees the
+    # halt and lifts it deliberately rather than silently doing nothing.
+    - name: Halt guard (kill-switch)
+      shell: bash
+      env:
+        KILL_SWITCH: ${{ inputs.kill_switch }}
+      run: |
+        set -euo pipefail
+        # FAIL-SAFE: RUNNING only for an explicit off-token (empty/unset, 0, off, false, no,
+        # disabled); ANYTHING ELSE (a fat-fingered value or garbage) engages the halt. A failing step
+        # stops the composite, so the admin check, mint, and approval never run.
+        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          *)
+            echo "::error::AGENT_KILL_SWITCH engaged — [Agent] automation is halted org-wide; approvals are refused. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to proceed."
+            exit 1
+            ;;
+        esac
+
     # Fail closed unless the actor who dispatched this is a repo admin —
     # workflow_dispatch is open to anyone with write access, so this check is what
     # keeps it admin-only. The collaborator-permission endpoint needs only
@@ -63,7 +93,7 @@ runs:
         token: ${{ steps.token.outputs.token }}
         persist-credentials: false
 
-    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.11.0
+    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.12.0
       with:
         pull_request: ${{ inputs.pull_request }}
         github_token: ${{ steps.token.outputs.token }}

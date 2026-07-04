@@ -57,6 +57,30 @@ inputs:
     description: >
       Head SHA to anchor the check to. Defaults to the PR head (or the merge-queue group's
       head); the sweep passes the sibling PR's current head when re-posting.
+  planning_repo:
+    required: false
+    default: .github
+    description: >
+      Repository (name only; owner is the workflow's org) where Epic issues live — read to
+      check the Epic's `automation:paused` marker. Defaults to the org `.github` repo, where
+      the planning Epics are tracked.
+  kill_switch:
+    required: false
+    default: ""
+    description: >
+      Org-level HALT. The caller threads the org variable through as
+      `kill_switch: ${{ vars.AGENT_KILL_SWITCH }}`, because a composite action cannot read the
+      `vars` context itself. FAIL-SAFE semantics: the gate is RUNNING only when the value
+      (lowercased, whitespace-stripped) is an explicit off-token — empty/unset, `0`, `off`, `false`,
+      `no`, or `disabled`; ANYTHING ELSE engages the halt. A fat-fingered `halt` / `engage` / garbage
+      value therefore HALTS (a kill-switch must fail TOWARD halting), and only an explicit off-token
+      or an unset variable runs. When engaged the gate posts a `failure` HOLD on every PR (never a
+      neutral/skip, which passes a required check open), so nothing merges org-wide until the switch
+      is lifted. Read FIRST, before any membership work — the kill-switch is the hard, read-free halt
+      (no token, no API), unlike the per-Epic `automation:paused` pause, which is BEST-EFFORT
+      (fail-open on a label-read blip). Engaging the switch does NOT retroactively disarm native
+      auto-merge already armed on an idle ready PR: merge-gate holds it (the required check goes red),
+      but there is a brief latency window before the next event / reconcile sweep re-posts the hold.
 
 runs:
   using: composite
@@ -89,6 +113,8 @@ runs:
         REPO_FULL: ${{ github.repository_owner }}/${{ inputs.repo }}
         OWNER: ${{ github.repository_owner }}
         REPO: ${{ inputs.repo }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
+        KILL_SWITCH: ${{ inputs.kill_switch }}
         HEAD_SHA: ${{ inputs.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
         IN_QUEUE: ${{ github.event.merge_group.head_sha }}
@@ -121,6 +147,46 @@ runs:
         # empty = terminal (this step already posted the check); non-empty = the Epic
         # number for the resolve + evaluate steps to gate against.
         emit() { echo "epic_number=$1" >> "$GITHUB_OUTPUT"; }
+
+        # ---- Org-level HALT: AGENT_KILL_SWITCH (read FIRST, before any membership work) ----
+        # The [Agent]'s emergency brake — and it must FAIL-SAFE, i.e. fail TOWARD halting. RUNNING
+        # only when the value (lowercased, whitespace-stripped) is an explicit off-token —
+        # empty/unset, 0, off, false, no, disabled; ANYTHING ELSE (a fat-fingered "halt"/"engage", or
+        # garbage) ENGAGES the halt. Threaded in as an input because a composite action cannot read
+        # the `vars` context — the caller passes ${{ vars.AGENT_KILL_SWITCH }}, so the value is
+        # resolved with NO token and NO API call before anything gates. A required-check gate must
+        # HOLD (post `failure`), never skip: a skipped or neutral required check passes OPEN. So when
+        # halted we post `failure` on the head (which also dequeues a live merge_group) and stop. This
+        # HOLD is posted BEFORE every success path (standalone fast-path, misconfig, merge_group
+        # re-affirm) because the whole org-wide halt rests on merge-gate holding EVERY PR — no success
+        # branch may run first.
+        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          *)
+            post_check failure "Automation halted org-wide by AGENT_KILL_SWITCH — holding this PR. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to resume; the next event or reconcile sweep re-evaluates."
+            emit ""
+            exit 0
+            ;;
+        esac
+
+        # planning_repo becomes an API path component (the Epic-pause read below); require a bare
+        # repo name so a stray value (owner/slash, whitespace, an injected path) can't redirect the
+        # request. Mirrors detect-partial-landing. Validated AFTER the read-free kill-switch so the
+        # halt always wins even when planning_repo is malformed.
+        if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
+          exit 1
+        fi
+
+        # Is Epic N paused? Reads the `automation:paused` marker on the Epic issue in the planning
+        # repo — a >= triage label, so a permission-gated per-Epic hold. Returns 0 = paused,
+        # 1 = not paused, 2 = read error (the caller then falls through to normal readiness — fail-open
+        # on pause, since pause is an operator convenience and the readiness gate still applies).
+        epic_paused() { # $1 = epic number
+          local out
+          out=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/$1" --jq '.labels[].name' 2>/dev/null) || return 2
+          printf '%s\n' "$out" | grep -qx 'automation:paused'
+        }
 
         # Read a PR's labels + its `Closes` parent (the discovery hint) in one query,
         # retrying transient GraphQL errors. Prints the response JSON on success;
@@ -212,6 +278,15 @@ runs:
         fi
 
         if [ -n "$epic" ]; then
+          # Per-Epic pause: `automation:paused` on the Epic issue HOLDS its members (post failure),
+          # leaving every OTHER Epic moving. Read FIRST here so a paused Epic never resolves/evaluates.
+          ps=0; epic_paused "$epic" || ps=$?
+          if [ "$ps" -eq 0 ]; then
+            post_check failure "Epic #${epic} is automation:paused — holding its members. Remove the \`automation:paused\` label from Epic #${epic} to resume atomic landing."
+            emit ""
+            exit 0
+          fi
+          [ "$ps" -eq 2 ] && echo "::warning::couldn't read Epic #${epic} pause state (planning-repo read failed) — proceeding with normal readiness evaluation."
           # Labeled Epic member — hand off to epic-membership (the authority) + evaluate.
           echo "PR #${classify_pr} carries \`epic:${epic}\` — resolving the authorized member set." | tee -a "$GITHUB_STEP_SUMMARY"
           emit "$epic"
@@ -245,7 +320,7 @@ runs:
       id: membership
       if: ${{ steps.discover.outputs.epic_number != '' }}
       continue-on-error: true
-      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.11.0
+      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.12.0
       with:
         epic_number: ${{ steps.discover.outputs.epic_number }}
         client_id: ${{ inputs.client_id }}

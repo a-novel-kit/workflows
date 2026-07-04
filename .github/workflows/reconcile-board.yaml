@@ -61,12 +61,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.11.0
+      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.12.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           project_id: ${{ inputs.project_id }}
           dry_run: ${{ inputs.rollup_dry_run }}
+          # Org-level HALT: the org variable, read from the reusable workflow's `vars` context
+          # (org variables are available to reusable workflows) and threaded into every action here
+          # (a composite action can't read `vars` itself). FAIL-SAFE semantics live in the actions:
+          # each is RUNNING only for an explicit off-token (empty/unset, 0, off, false, no, disabled)
+          # and ENGAGES for anything else — so an unset variable runs, and a fat-fingered value halts.
+          # Engaged → this writer no-ops.
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
   # Enumerate ALL the org's open PRs (paginated) → matrices for the two per-PR passes.
   enumerate:
@@ -143,7 +150,7 @@ jobs:
           permission-contents: read
           permission-issues: read
           permission-pull-requests: read
-      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.11.0
+      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.12.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -151,6 +158,8 @@ jobs:
           repo: ${{ matrix.pr.repo }}
           pull_request_number: ${{ matrix.pr.number }}
           github_token: ${{ steps.token.outputs.token }}
+          # Org-level HALT: engaged → this writer no-ops (no re-derive, no board write).
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
   # Staleness fail-safe: re-post merge-gate on each open epic-member PR — a sibling
   # changing in another repo emits no event to it. merge-gate mints its own org-wide
@@ -165,13 +174,16 @@ jobs:
       matrix:
         pr: ${{ fromJSON(needs.enumerate.outputs.epic_prs) }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.11.0
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.12.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           repo: ${{ matrix.pr.repo }}
           pull_request_number: ${{ matrix.pr.number }}
           head_sha: ${{ matrix.pr.sha }}
+          # Org-level HALT: engaged → merge-gate HOLDs (posts failure) this idle PR too, so a PR that
+          # emits no event while halted is still stopped. A gate must post failure, never skip.
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
   # Partial-landing fail-safe: the SWEEP half of the epic-freeze detector. A single whole-org
   # invocation — it self-enumerates every active Epic and every open head, so it needs no
@@ -182,11 +194,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.11.0
+      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.12.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.detect_dry_run }}
+          # Org-level HALT (FAIL-SAFE, see the rollup job): engaged → the sweep skips all work
+          # (merge-gate HOLDs every PR via regate). The BLAST-CAP (max_freeze_repos) keeps its action
+          # default of 5 — an over-wide Epic is frozen ANYWAY (fail-safe) and merely flags the sweep RED.
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
   # Display-only read-model: rewrite each active Epic's derived status table into its issue body. A
   # single whole-org invocation — it self-enumerates active Epics and their siblings, so it needs no
@@ -202,3 +218,5 @@ jobs:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.render_dry_run }}
+          # Org-level HALT: engaged → this display-only writer no-ops (no Epic-body edits).
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
