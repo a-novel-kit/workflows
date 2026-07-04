@@ -134,6 +134,10 @@ runs:
     # Least-privilege org-wide tokens: the sweep spans the whole org, so the single-repo GITHUB_TOKEN
     # can't see sibling PRs; separate tokens keep each capability scoped. Org-wide (not per-repo) because
     # a composite action can't loop `create-github-app-token` over repos discovered at runtime.
+    # These mints are deliberately NOT additionally gated on the kill-switch: a halted sweep no-ops
+    # without exercising them (token SCOPE, not mint timing, is the enforced bound), a mint-free halt
+    # is unachievable anyway (the per-PR HOLD below must mint checks:write to post `failure`), and
+    # gating each mint would duplicate the fail-safe off-token parse into a separate pre-mint step.
     - name: Mint read token
       id: read
       uses: actions/create-github-app-token@v3

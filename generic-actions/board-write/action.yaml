@@ -109,6 +109,10 @@ runs:
         # engages. This is the single privileged board mutator, and its guard + the mutation live in
         # THIS one step, so an `exit 0` here genuinely stops the write — every derived board write
         # fails safe (no mutation, changed=false) while the org is halted.
+        # The org-Projects token is minted above, ahead of this guard, on purpose: nothing past the
+        # `exit 0` exercises it, so mint-vs-halt ordering is not blast radius here (token SCOPE, not
+        # mint timing, is the enforced bound) — and every action keeps one "mint per least-privilege,
+        # then halt-first" shape instead of duplicating this fail-safe parse pre-mint.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
