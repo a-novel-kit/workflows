@@ -58,7 +58,7 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
 | `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                           |
-| `epic-membership`        | Resolve an Epic's authorized member set — open PRs labelled `epic:<N>`.                                           |
+| `epic-membership`        | Resolve an Epic's authorized member set — open PRs labeled `epic:<N>`.                                           |
 | `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                              |
 | `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
