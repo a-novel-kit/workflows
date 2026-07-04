@@ -219,13 +219,12 @@ runs:
         # the humans wrote outside the markers. The invariant is absolute: a hand-edit that leaves an
         # unbalanced or duplicated marker must NEVER cause human prose to be dropped.
         #
-        #   - Balanced pair present → rewrite in place. Tolerant of a DUPLICATE START (a hand-edit, or
-        #     a second region pasted in): the fresh region is emitted once at the first START and every
-        #     start…end span is collapsed, repairing the body to a single managed region.
-        #   - No balanced pair (fresh Epic, or a lone/orphaned START or END a hand-edit left behind) →
-        #     FIRST strip any lone marker lines, THEN append a fresh region after a blank line. Stripping
-        #     the orphan is what guarantees the next sweep sees exactly one balanced pair, so an
-        #     unbalanced marker can never make a later sweep skip (drop) the human text around it.
+        #   - Exactly one START then one END → rewrite that single region in place.
+        #   - Anything else (fresh Epic with no markers, a lone/orphaned START or END, a DUPLICATE
+        #     marker, or END-before-START — all things a hand-edit can leave) → strip every marker
+        #     line, THEN append one fresh region after a blank line. Repairing to a single balanced
+        #     pair is what guarantees the next sweep's in-place path applies, so a malformed marker
+        #     can never make a later sweep skip (drop) the human text around it.
         #
         # Whole-line marker matching throughout (grep -x, awk $0==) so a marker embedded inline in prose
         # is treated as prose, not a managed boundary. Prints the new body.
@@ -342,20 +341,19 @@ runs:
             repo_tags=$(jq -cn --argjson m "$repo_tags" --arg k "$r" --arg v "$t" '$m + {($k): $v}')
           done 7< <(printf '%s\n' "$merged_repos")
 
-          local i b m_repo m_num m_sha m_tag rel
-          for i in $(seq 0 $((mcount - 1))); do
-            b=$(printf '%s' "$members" | jq -r ".[$i].bucket")
-            [ "$b" = "merged" ] || continue
-            m_repo=$(printf '%s' "$members" | jq -r ".[$i].repository.nameWithOwner")
-            m_num=$(printf '%s' "$members" | jq -r ".[$i].number")
-            m_sha=$(printf '%s' "$members" | jq -r ".[$i].mergeCommit.oid // \"\"")
+          local m_repo m_num m_sha m_tag rel
+          # Stream ONLY the merged members once (a single jq scan of $members), tab-separated, into
+          # the loop — avoids the per-index re-parse of the whole array. fd 8 keeps this loop's stdin
+          # free for the tag_contains gh calls inside it.
+          while IFS=$'\t' read -r m_repo m_num m_sha <&8; do
             m_tag=$(printf '%s' "$repo_tags" | jq -r --arg k "$m_repo" '.[$k] // ""')
             rel=""
             if [ -n "$m_tag" ] && [ "$(tag_contains "$m_repo" "$m_sha" "$m_tag")" = "yes" ]; then
               rel="$m_tag"
             fi
             released=$(jq -cn --argjson m "$released" --arg k "${m_repo}#${m_num}" --arg v "$rel" '$m + {($k): $v}')
-          done
+          done 8< <(printf '%s' "$members" | jq -r '.[] | select(.bucket=="merged")
+            | [.repository.nameWithOwner, (.number|tostring), (.mergeCommit.oid // "")] | @tsv')
 
           # Fold each member into a display row + the summary counts. State is a pure fold over live
           # fields; SHA is the head (open / closed) or the merge commit (merged), shortened.
