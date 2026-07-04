@@ -1,0 +1,458 @@
+name: render-epic-status
+description: >
+  Display-only Epic status read-model — the [Agent] rewrites a derived status table into a
+  marker-delimited managed region of each active Epic's issue body, regenerated every reconcile
+  sweep from live GitHub truth. It is explicitly NOT authority: it holds no CAS / revision / lock,
+  posts no check-run, and never touches the board. A lost, stale, or hand-edited table is cosmetic —
+  every landing decision still reads live state elsewhere — so this action fails soft everywhere (a
+  search / read / write error warns and the next sweep re-derives) and never fails the sweep.
+
+  It enumerates active Epics org-wide as the union of three lookback-bounded searches — open PRs,
+  plus PRs merged or closed-unmerged within the window — folding their `epic:<N>` labels to a
+  distinct set. The merged / closed windows are why a just-fully-landed Epic still gets one terminal
+  render: an open-PRs-only enumeration would drop it the instant its last sibling merged, freezing
+  the table one row short of "all released".
+
+  Per Epic it resolves the full member set across open ∪ merged ∪ closed-unmerged (not
+  lookback-bounded, so an older merged sibling still shows) and folds each into a display state from
+  live fields — draft / in-review / ready for an open PR; merged, merged · released, or closed
+  (unmerged) otherwise. "Released" is resolved against release tags: per repo it lists the `v*` tags,
+  takes the highest semver, and compares the sibling's merge commit against it — a tag ahead of or
+  identical to the merge commit contains it, so the sibling shipped in that release.
+
+  It splices the table into a `<!-- epic-read-model:start -->` … `<!-- epic-read-model:end -->`
+  region, preserving everything the humans wrote outside the markers and creating the region if it is
+  absent. It compares before writing — a render whose material content (ignoring the volatile
+  timestamp) matches what is already there is skipped, so an unchanged Epic generates no edit and no
+  notification. `dry_run` defaults on: it logs the table it would render and writes nothing.
+
+inputs:
+  client_id:
+    required: true
+    description: >
+      Client ID of a GitHub App installed org-wide with issues:write + pull-requests:read +
+      contents:read. One org-wide token is minted from it: the sibling search spans every repo in the
+      org (the single-repo GITHUB_TOKEN can't see them), and the Epic body edit + tag reads need the
+      issues + contents scopes.
+  app_private_key:
+    required: true
+    description: Private key (PEM) of that App.
+  org:
+    required: false
+    default: ${{ github.repository_owner }}
+    description: >
+      Organization login to render. The sibling search is scoped `org:<org>` and the token is
+      installed here. Defaults to the workflow's org.
+  planning_repo:
+    required: false
+    default: .github
+    description: >
+      Repository (name only; owner is `org`) where Epic issues live and `epic:<N>` indexes — the
+      action edits `<org>/<planning_repo>#N`. Defaults to the org `.github` repo, where the planning
+      Epics are tracked.
+  lookback_days:
+    required: false
+    default: "21"
+    description: >
+      How many days a merged or closed-unmerged sibling keeps its Epic in the render set, so a
+      just-landed Epic still gets a terminal render before it ages out. Open PRs are always in scope
+      regardless of this window. Must be an integer.
+  dry_run:
+    required: false
+    default: "true"
+    description: >
+      When "true" (default), log the table each Epic would get and write nothing. Set "false" to
+      splice it into the Epic issue body.
+
+runs:
+  using: composite
+  steps:
+    # One org-wide token, three scopes: the sibling search spans the whole org (the single-repo
+    # GITHUB_TOKEN can't see it), editing the Epic body needs issues:write (⊇ read, to read the body
+    # first), and the release-tag matching-refs + compare reads need contents:read. Narrower than any
+    # sibling recovery action — no checks, no contents:write, no org-projects.
+    - name: Mint token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.org }}
+        permission-issues: write
+        permission-pull-requests: read
+        permission-contents: read
+
+    - name: Render Epic read-model
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        ORG: ${{ inputs.org }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
+        LOOKBACK_DAYS: ${{ inputs.lookback_days }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        # ---- Validate the untrusted inputs before they reach a search grammar or a date argument.
+        # org feeds `org:<ORG>` search qualifiers — require GitHub-login chars so a stray value can't
+        # broaden the scope or break the query. planning_repo becomes an API path component. lookback
+        # feeds `date`; reject anything non-numeric.
+        if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
+          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
+          exit 1
+        fi
+        if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
+          exit 1
+        fi
+        if ! [[ "${LOOKBACK_DAYS:-}" =~ ^[0-9]+$ ]]; then
+          echo "::error::lookback_days must be an integer, got \"${LOOKBACK_DAYS:-}\""
+          exit 1
+        fi
+
+        # dry_run defaults on; only the literal "false" (any case) writes. Lowercase via tr
+        # (portable), not ${VAR,,} (bash-4 only).
+        dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
+
+        # Markers delimiting the managed region. Everything outside them in the Epic body is a human's
+        # to write and is preserved; only the bytes between them are regenerated.
+        START='<!-- epic-read-model:start -->'
+        END='<!-- epic-read-model:end -->'
+
+        # ---- Shared GraphQL document + read helpers --------------------------------------------
+
+        # PR search node — detect-partial-landing's SEARCH_Q extended with `mergeCommit{oid}` and
+        # `reviewDecision` for the display fold. `labels` drives Epic enumeration; the rest drive the
+        # per-sibling state + released columns. (No `state` field: the fold classifies by search
+        # bucket — open / merged / closed-unmerged — not by the PR's own state.)
+        SEARCH_Q='query($q:String!,$cursor:String){
+          search(query:$q, type:ISSUE, first:100, after:$cursor){
+            pageInfo{ hasNextPage endCursor }
+            nodes{ ... on PullRequest{
+              number headRefOid isDraft reviewDecision
+              repository{ nameWithOwner }
+              mergeCommit{ oid }
+              labels(first:100){ nodes{ name } } } } } }'
+
+        # Page an ISSUE search to completion, retrying transient GraphQL errors. Prints the aggregated
+        # PR-node JSON array; returns 1 (logs to stderr) on failure so the caller can skip that Epic.
+        search_prs() { # $1 = search query string
+          local search="$1" cursor="" agg='[]' data page ok args
+          while :; do
+            ok=false
+            for attempt in 1 2 3; do
+              args=(-f query="$SEARCH_Q" -f q="$search")
+              [ -n "$cursor" ] && args+=(-f cursor="$cursor")
+              if data=$(gh api graphql "${args[@]}" 2>&1) \
+                && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
+                ok=true
+                break
+              fi
+              [ "$attempt" -lt 3 ] && sleep 2
+            done
+            if [ "$ok" != true ]; then
+              printf 'search_prs failed for query "%s": %s\n' "$search" "$data" >&2
+              return 1
+            fi
+            page=$(printf '%s' "$data" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')
+            agg=$(jq -s '.[0] + .[1]' <(printf '%s' "$agg") <(printf '%s' "$page"))
+            [ "$(printf '%s' "$data" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
+            cursor=$(printf '%s' "$data" | jq -r '.data.search.pageInfo.endCursor')
+          done
+          printf '%s' "$agg"
+        }
+
+        # Highest-semver `v*` tag of a repo (its latest release), or empty if it has none. Only the
+        # tag NAME is needed — compare resolves it to a commit — so annotated vs lightweight doesn't
+        # matter. `--paginate` + a jq slurp aggregate ALL pages of matching refs before taking the max,
+        # so a repo with >30 `v*` tags isn't mis-read as unreleased (the endpoint pages at 30). A read
+        # error yields empty (that repo's merged siblings just show as unreleased), never an abort:
+        # this is display-only.
+        latest_tag() { # $1 = owner/repo
+          local repo="$1" data
+          for attempt in 1 2 3; do
+            if data=$(gh api --paginate "repos/${repo}/git/matching-refs/tags/v" 2>/dev/null); then
+              # --paginate emits one JSON array per page; -s slurps them into an array-of-arrays that
+              # `.[][]` flattens back into a single ref stream before the max is taken.
+              printf '%s' "$data" | jq -rs '
+                [ .[][].ref | ltrimstr("refs/tags/")
+                  | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) ]
+                | map(ltrimstr("v") | split(".") | map(tonumber))
+                | sort
+                | if length == 0 then "" else "v" + (.[-1] | map(tostring) | join(".")) end'
+              return 0
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          printf ''
+        }
+
+        # Whether a release tag contains a merge commit: compare with the merge SHA as base and the tag
+        # as head — `ahead` (merge is an ancestor of the tag) or `identical` (they are the same commit)
+        # means the tag shipped that merge. Prints "yes" / "no"; an error or a missing SHA is "no"
+        # (unreleased), never an abort.
+        tag_contains() { # $1=owner/repo $2=merge-sha $3=tag
+          local repo="$1" sha="$2" tag="$3" data status
+          [ -n "$sha" ] && [ "$sha" != "null" ] || { printf 'no'; return 0; }
+          for attempt in 1 2 3; do
+            if data=$(gh api "repos/${repo}/compare/${sha}...${tag}" 2>/dev/null); then
+              status=$(printf '%s' "$data" | jq -r '.status // ""')
+              case "$status" in
+                ahead|identical) printf 'yes' ;;
+                *)               printf 'no' ;;
+              esac
+              return 0
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          printf 'no'
+        }
+
+        # Drop the volatile "_Rendered … " stamp line and all blank lines from stdin, so
+        # compare-before-write sees only material content and a fresh timestamp alone never counts as
+        # a change (which would edit-spam every Epic each sweep).
+        strip_volatile() {
+          grep -v '^_Rendered ' | sed '/^[[:space:]]*$/d' || true
+        }
+
+        # Replace the managed region in an Epic body with a freshly rendered one, preserving everything
+        # the humans wrote outside the markers. The invariant is absolute: a hand-edit that leaves an
+        # unbalanced or duplicated marker must NEVER cause human prose to be dropped.
+        #
+        #   - Balanced pair present → rewrite in place. Tolerant of a DUPLICATE START (a hand-edit, or
+        #     a second region pasted in): the fresh region is emitted once at the first START and every
+        #     start…end span is collapsed, repairing the body to a single managed region.
+        #   - No balanced pair (fresh Epic, or a lone/orphaned START or END a hand-edit left behind) →
+        #     FIRST strip any lone marker lines, THEN append a fresh region after a blank line. Stripping
+        #     the orphan is what guarantees the next sweep sees exactly one balanced pair, so an
+        #     unbalanced marker can never make a later sweep skip (drop) the human text around it.
+        #
+        # Whole-line marker matching throughout (grep -x, awk $0==) so a marker embedded inline in prose
+        # is treated as prose, not a managed boundary. Prints the new body.
+        splice() { # $1 = body file, $2 = region file (already wrapped in the markers)
+          local bodyf="$1" regionf="$2" ns ne sl el wellformed=false
+          # Well-formed = EXACTLY one START, EXACTLY one END, START before END → replace in place.
+          # Anything else (none, duplicate, orphaned, or END-before-START a hand-edit left) → strip
+          # ALL marker lines and append one fresh region. Gating on well-formedness (not mere
+          # existence) is what stops an unclosed trailing START from making awk swallow the human
+          # text after it — the strip-and-append path only ever removes marker LINES, never prose.
+          ns=$(grep -cxF -- "$START" "$bodyf" || true)
+          ne=$(grep -cxF -- "$END" "$bodyf" || true)
+          if [ "$ns" = "1" ] && [ "$ne" = "1" ]; then
+            sl=$(grep -nxF -- "$START" "$bodyf" | cut -d: -f1)
+            el=$(grep -nxF -- "$END" "$bodyf" | cut -d: -f1)
+            if [ "$sl" -lt "$el" ]; then wellformed=true; fi
+          fi
+          if [ "$wellformed" = true ]; then
+            awk -v startm="$START" -v endm="$END" -v regionfile="$regionf" '
+              BEGIN { region=""; while ((getline line < regionfile) > 0) region = region line "\n" }
+              $0 == startm { if (!done) { printf "%s", region; done=1 } inside=1; next }
+              $0 == endm { inside=0; next }
+              inside { next }
+              { print }
+            ' "$bodyf"
+          else
+            grep -vxF -e "$START" -e "$END" -- "$bodyf" || true
+            printf '\n'
+            cat "$regionf"
+          fi
+        }
+
+        # ---- Enumerate active Epics -------------------------------------------------------------
+
+        # Union of distinct `epic:<N>` labels over three org-wide searches: every open PR, plus PRs
+        # merged or closed-unmerged within the lookback window. The two dated windows keep a
+        # just-fully-landed Epic in the set for one terminal render.
+        enumerate_epics() {
+          local since open merged closed
+          since=$(date -u -d "-${LOOKBACK_DAYS} days" +%Y-%m-%d)
+          if ! open=$(search_prs "org:${ORG} is:pr is:open"); then return 1; fi
+          if ! merged=$(search_prs "org:${ORG} is:pr is:merged merged:>=${since}"); then return 1; fi
+          if ! closed=$(search_prs "org:${ORG} is:pr is:closed is:unmerged closed:>=${since}"); then return 1; fi
+          jq -sr '(.[0] + .[1] + .[2])
+            | [ .[] | (.labels.nodes // [])[].name | select(test("^epic:[0-9]+$")) | ltrimstr("epic:") ]
+            | unique | .[]' \
+            <(printf '%s' "$open") <(printf '%s' "$merged") <(printf '%s' "$closed")
+        }
+
+        # ---- Render one Epic --------------------------------------------------------------------
+
+        # Called under `||` from the loop, so `set -e` is inactive here: every failure path returns 0
+        # after a warning and the next sweep re-derives — a display render never fails the sweep.
+        render_epic() { # $1 = Epic number (validated numeric)
+          local epic="$1"
+
+          # The Epic issue itself. Not found (deleted / wrong planning repo) or already closed → leave
+          # it alone: a wrapped-up Epic stops churning, and there is nothing to render into a ghost.
+          local issue state body
+          if ! issue=$(gh issue view "$epic" --repo "${ORG}/${PLANNING_REPO}" --json state,body 2>/dev/null); then
+            echo "::warning::Epic ${ORG}/${PLANNING_REPO}#${epic} not found — skipping (display-only)." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+          state=$(printf '%s' "$issue" | jq -r '.state')
+          if [ "$state" = "CLOSED" ]; then
+            echo "Epic ${ORG}/${PLANNING_REPO}#${epic} is CLOSED — leaving its body untouched." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+          # GitHub stores bodies with CRLF; normalize to LF so the marker match and the compare are
+          # line-ending agnostic (and the write settles on LF).
+          body=$(printf '%s' "$issue" | jq -r '.body // ""' | tr -d '\r')
+
+          # Full member set (not lookback-bounded — an Epic's older merged siblings must still appear),
+          # each tagged with the bucket it came from and sorted stably by repo then number.
+          local base_q open merged closed members
+          base_q="label:\"epic:${epic}\" org:${ORG}"
+          if ! open=$(search_prs "is:pr is:open $base_q"); then
+            echo "::warning::could not resolve open epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"; return 0
+          fi
+          if ! merged=$(search_prs "is:pr is:merged $base_q"); then
+            echo "::warning::could not resolve merged epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"; return 0
+          fi
+          if ! closed=$(search_prs "is:pr is:closed is:unmerged $base_q"); then
+            echo "::warning::could not resolve closed epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"; return 0
+          fi
+          # Dedup by (repo, number) before render: a PR that flips state between the three searches (a
+          # race) can surface in two buckets; keep the highest-priority one (merged > closed-unmerged >
+          # open) so a just-merged sibling never lingers as "open". Keys are repo#number.
+          members=$(jq -s '
+            def prio: {"merged":0,"closed":1,"open":2}[.bucket];
+            ( [.[0][] | . + {bucket:"open"}]
+              + [.[1][] | . + {bucket:"merged"}]
+              + [.[2][] | . + {bucket:"closed"}] )
+            | group_by(.repository.nameWithOwner + "#" + (.number|tostring))
+            | map(min_by(prio))
+            | sort_by(.repository.nameWithOwner, .number)' \
+            <(printf '%s' "$open") <(printf '%s' "$merged") <(printf '%s' "$closed"))
+
+          local mcount
+          mcount=$(printf '%s' "$members" | jq 'length')
+          if [ "$mcount" -eq 0 ]; then
+            echo "Epic #${epic}: no epic:${epic} PRs resolved — nothing to render." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+
+          # Released resolution: one latest-tag lookup per repo that has a merged sibling, then one
+          # compare per merged sibling → a repo#number ⇒ release-tag (or "") map. fd 7 isolates this
+          # loop's stdin from the gh calls inside it.
+          local repo_tags='{}' released='{}' merged_repos r t
+          merged_repos=$(printf '%s' "$members" | jq -r '[.[] | select(.bucket=="merged") | .repository.nameWithOwner] | unique | .[]')
+          while IFS= read -r r <&7; do
+            [ -n "$r" ] || continue
+            t=$(latest_tag "$r")
+            repo_tags=$(jq -cn --argjson m "$repo_tags" --arg k "$r" --arg v "$t" '$m + {($k): $v}')
+          done 7< <(printf '%s\n' "$merged_repos")
+
+          local i b m_repo m_num m_sha m_tag rel
+          for i in $(seq 0 $((mcount - 1))); do
+            b=$(printf '%s' "$members" | jq -r ".[$i].bucket")
+            [ "$b" = "merged" ] || continue
+            m_repo=$(printf '%s' "$members" | jq -r ".[$i].repository.nameWithOwner")
+            m_num=$(printf '%s' "$members" | jq -r ".[$i].number")
+            m_sha=$(printf '%s' "$members" | jq -r ".[$i].mergeCommit.oid // \"\"")
+            m_tag=$(printf '%s' "$repo_tags" | jq -r --arg k "$m_repo" '.[$k] // ""')
+            rel=""
+            if [ -n "$m_tag" ] && [ "$(tag_contains "$m_repo" "$m_sha" "$m_tag")" = "yes" ]; then
+              rel="$m_tag"
+            fi
+            released=$(jq -cn --argjson m "$released" --arg k "${m_repo}#${m_num}" --arg v "$rel" '$m + {($k): $v}')
+          done
+
+          # Fold each member into a display row + the summary counts. State is a pure fold over live
+          # fields; SHA is the head (open / closed) or the merge commit (merged), shortened.
+          local rows counts
+          rows=$(printf '%s' "$members" | jq -r --argjson rel "$released" '
+            .[]
+            | .repository.nameWithOwner as $repo
+            | "\($repo)#\(.number)" as $key
+            | ($rel[$key] // "") as $r
+            | (if .bucket == "open" then
+                 (if .isDraft then "open · draft"
+                  elif .reviewDecision == "APPROVED" then "open · ready"
+                  else "open · in review" end)
+               elif .bucket == "merged" then
+                 (if ($r | length) > 0 then "merged · released" else "merged" end)
+               else "closed (unmerged)" end) as $state
+            | (if .bucket == "merged" then (.mergeCommit.oid // "") else (.headRefOid // "") end) as $sha
+            | (if ($sha | length) >= 7 then $sha[0:7] else $sha end) as $short
+            | "| \($repo) | #\(.number) | \($state) | `\(if ($short | length) > 0 then $short else "—" end)` | \(if ($r | length) > 0 then $r else "—" end) |"')
+          counts=$(printf '%s' "$members" | jq -r --argjson rel "$released" '
+            "\(length) member(s) · "
+            + "\([.[] | select(.bucket=="merged")] | length) merged "
+            + "(\([.[] | select(.bucket=="merged") | select(($rel["\(.repository.nameWithOwner)#\(.number)"] // "") | length > 0)] | length) released) · "
+            + "\([.[] | select(.bucket=="open")] | length) open · "
+            + "\([.[] | select(.bucket=="closed")] | length) closed-unmerged"')
+
+          # The managed region, timestamp included. %s args keep the backticks in $rows literal
+          # (printf never does command substitution), unlike an unquoted heredoc.
+          local ts region_inner
+          ts=$(date -u '+%Y-%m-%d %H:%M')
+          region_inner=$(printf '### Epic status — display-only, derived from live GitHub truth (not authority)\n\n_Rendered %s UTC by the reconcile sweep. A lost or hand-edited table is cosmetic — every decision reads live state._\n\n%s\n\n| Repo | PR | State | SHA | Released |\n|------|----|-------|-----|----------|\n%s' \
+            "$ts" "$counts" "$rows")
+
+          # Compare-before-write: material content already in the body (region between markers, minus
+          # the volatile stamp) vs. the fresh render. Equal → the table is current, so no edit and no
+          # notification.
+          local new_norm old_inner old_norm
+          new_norm=$(printf '%s\n' "$region_inner" | strip_volatile)
+          old_inner=$(printf '%s\n' "$body" | awk -v s="$START" -v e="$END" '
+            $0 == s { inside=1; next } $0 == e { inside=0; next } inside { print }')
+          old_norm=$(printf '%s\n' "$old_inner" | strip_volatile)
+          if [ -n "$old_inner" ] && [ "$old_norm" = "$new_norm" ]; then
+            echo "Epic ${ORG}/${PLANNING_REPO}#${epic}: read-model unchanged — no write." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+
+          if [ "$dry" != "false" ]; then
+            {
+              echo "Epic ${ORG}/${PLANNING_REPO}#${epic}: would render read-model (DRY RUN):"
+              printf '%s\n' "$region_inner"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+
+          local region_file body_file spliced_file
+          region_file=$(mktemp); body_file=$(mktemp); spliced_file=$(mktemp)
+          {
+            printf '%s\n' "$START"
+            printf '%s\n' "$region_inner"
+            printf '%s\n' "$END"
+          } > "$region_file"
+          printf '%s\n' "$body" > "$body_file"
+          splice "$body_file" "$region_file" > "$spliced_file"
+
+          if gh issue edit "$epic" --repo "${ORG}/${PLANNING_REPO}" --body-file "$spliced_file" >/dev/null 2>&1; then
+            echo "Epic ${ORG}/${PLANNING_REPO}#${epic}: read-model region updated." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::could not update Epic ${ORG}/${PLANNING_REPO}#${epic} body — display-only, next sweep retries." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          rm -f "$region_file" "$body_file" "$spliced_file"
+        }
+
+        # ---- Main -------------------------------------------------------------------------------
+
+        echo "## Epic read-model render (org=${ORG}, planning=${PLANNING_REPO}, lookback=${LOOKBACK_DAYS}d, dry_run=${dry})" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        # Fail soft even here: a total org-wide enumeration failure warns and exits 0 — it must never
+        # redden the reconcile sweep (this is a display-only leaf). The next sweep re-derives from live
+        # truth. (Per-Epic errors already warn-and-continue below.)
+        epics=$(enumerate_epics) || {
+          echo "::warning::could not enumerate active Epics (GraphQL search failed after retries) — nothing rendered this sweep; next sweep re-derives (display-only, sweep not failed)." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        }
+        if [ -z "$epics" ]; then
+          echo "No active Epics in the last ${LOOKBACK_DAYS} day(s) — nothing to render." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # fd 3 isolates the outer loop's input from every gh call inside render_epic.
+        while IFS= read -r epic <&3; do
+          [ -n "$epic" ] || continue
+          # Defense in depth: the number feeds a `label:"epic:<N>"` search qualifier.
+          if ! [[ "$epic" =~ ^[0-9]+$ ]]; then
+            echo "::warning::skipping non-numeric epic token \"$epic\""
+            continue
+          fi
+          render_epic "$epic" || echo "::warning::epic #$epic render aborted (display-only); next sweep re-derives"
+        done 3< <(printf '%s\n' "$epics")
+
+        echo "Epic read-model render complete." | tee -a "$GITHUB_STEP_SUMMARY"

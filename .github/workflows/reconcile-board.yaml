@@ -1,12 +1,15 @@
 # Reusable board reconcile sweep — the fail-safe that repairs board state the
 # event-driven automation can miss. Each org's `.github` repo calls this on a schedule
-# with a thin caller, so the sweep logic lives in ONE place. Four passes:
+# with a thin caller, so the sweep logic lives in ONE place. Five passes:
 #   - rollup:   roll each epic's Status + Start date up from its children (read-only by default).
 #   - rederive: re-derive every open Task PR's board Status, catching dropped derive events.
 #   - regate:   re-post merge-gate on every open epic-member PR, since a sibling changing
 #               in another repo emits no event to it.
 #   - detect:   re-derive every active Epic's partial-landing state org-wide and post epic-freeze
 #               (the SWEEP half of the detector) — the level-triggered floor + standalone backstop.
+#   - render:   rewrite each active Epic's display-only status read-model into its issue body,
+#               derived from live truth. Never authority — no board write, no check-run; a lost or
+#               hand-edited table is cosmetic.
 # The per-PR passes matrix over the org's open PRs (enumerated first, paginated) and call
 # the generic-actions cross-repo via their repo inputs. All board mutations still go through
 # the single-writer actions. The `when` (cron / concurrency) lives in the caller.
@@ -36,6 +39,14 @@ on:
           When "true" (default), the partial-landing detector only logs; set "false" to post
           epic-freeze check-runs and roll strays forward. Independent of rollup_dry_run so the
           detector flips live on its own rollout schedule.
+      render_dry_run:
+        required: false
+        type: string
+        default: "true"
+        description: >
+          When "true" (default), the Epic status read-model only logs the table it would render; set
+          "false" to rewrite it into each active Epic's issue body. Display-only (no board write, no
+          check-run), so it flips live on its own schedule, independent of the other passes.
     secrets:
       private_key:
         required: true
@@ -176,3 +187,18 @@ jobs:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.detect_dry_run }}
+
+  # Display-only read-model: rewrite each active Epic's derived status table into its issue body. A
+  # single whole-org invocation — it self-enumerates active Epics and their siblings, so it needs no
+  # matrix and no `needs`. It is NOT authority (no board write, no check-run; a lost table is
+  # cosmetic), so it mints its own org-wide token and never fails the sweep. dry_run threads from the
+  # caller, independent of the other passes.
+  render:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.12.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          dry_run: ${{ inputs.render_dry_run }}
