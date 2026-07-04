@@ -500,8 +500,13 @@ runs:
             fi
             body=$(printf 'HELD — the automated revert for **%s** could not be produced:\n\n> %s\n\nThis is a DRAFT placeholder that keeps epic:#%s from landing partially (the merge-gate holds every sibling until this one is ready). Never auto-resolved.\n\n**Finish by hand:** reset this branch to `%s`, then for each commit below (NEWEST-FIRST) run `git revert --no-edit <squash>`, resolve conflicts, push, and mark this PR ready.\n\nCommits to revert: %s (originals: %s)\n\nRequested by @%s. Reason: %s' \
               "$repo" "$detail" "$M" "$base" "$sha_list" "$orig_list" "$ACTOR" "$REASON")
-            pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
-              --draft --title "[HELD] Revert epic:#${EPIC} — ${repo} (rollback #${M})" --body "$body")
+            if ! pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
+              --draft --title "[HELD] Revert epic:#${EPIC} — ${repo} (rollback #${M})" --body "$body"); then
+              echo "::error::could not open the HELD draft revert PR for ${repo}." | tee -a "$GITHUB_STEP_SUMMARY"
+              rm -rf "$dir"
+              orphan_summary
+              exit 1
+            fi
             draft=true
             had_failure=true
           else
@@ -513,8 +518,13 @@ runs:
             fi
             body=$(printf 'Reverts the landed epic:#%s changes in **%s** (newest-first): %s.\n\nOriginals: %s. Part of rollback epic #%s. Each revert is a new forward commit — the originals stay merged in history.\n\nRequested by @%s. Reason: %s' \
               "$EPIC" "$repo" "$sha_list" "$orig_list" "$M" "$ACTOR" "$REASON")
-            pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
-              --title "Revert epic:#${EPIC} — ${repo} (rollback #${M})" --body "$body")
+            if ! pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
+              --title "Revert epic:#${EPIC} — ${repo} (rollback #${M})" --body "$body"); then
+              echo "::error::could not open the revert PR for ${repo}." | tee -a "$GITHUB_STEP_SUMMARY"
+              rm -rf "$dir"
+              orphan_summary
+              exit 1
+            fi
             draft=false
           fi
           rm -rf "$dir"
