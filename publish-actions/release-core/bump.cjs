@@ -11,8 +11,7 @@
 // pass. This also sidesteps `pnpm version`'s clean-tree requirement.
 //
 // Reads RELEASE_TYPE (patch|minor|major) from the env; writes the new version
-// to stdout. Bumps the root and every workspace member to one version, matching
-// the old `pnpm version --recursive`.
+// to stdout. Bumps the root and every workspace member to a single version.
 const fs = require("fs");
 const cp = require("child_process");
 

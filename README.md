@@ -45,23 +45,24 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `generic-actions`
 
-| Action                | Purpose                                                                    |
-| --------------------- | -------------------------------------------------------------------------- |
-| `approve-bot`         | Auto-approve a PR (skips if already approved); trusted users only.         |
-| `approve-pr`          | Admin-only: record an [Agent] approval on a PR (Gate-2 override).          |
-| `archive-board-items` | Archive the repo's "Awaiting release" board items on release.              |
-| `assign-bot`          | Assign the PR author to their own PR.                                      |
-| `auto-merge-bot`      | Enable auto-merge on a PR.                                                 |
-| `board-write`         | Set one single-select/date board field as [Agent] — the single write path. |
-| `check-changes`       | Detect uncommitted changes in a pathspec; optionally fail.                 |
-| `codecov`             | Upload the coverage artifact to Codecov.                                   |
-| `derive-status`       | Derive a Task's board Status from its PR's current state (single writer).  |
-| `enable-auto-merge`   | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).    |
-| `epic-membership`     | Resolve an Epic's authorized member set — open PRs labelled `epic:<N>`.    |
-| `merge-gate`          | Required "may this PR merge?" check (epic-atomicity + draft/review).       |
-| `pull-bot`            | Mint a bot App token and check out the repo authenticated as it.           |
-| `renovate`            | Run self-hosted Renovate as the bot.                                       |
-| `rollup-board`        | Roll an epic's Status + Start date up from its children.                   |
+| Action                   | Purpose                                                                                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `approve-bot`            | Auto-approve a PR (skips if already approved); trusted users only.                                                |
+| `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
+| `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
+| `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
+| `auto-merge-bot`         | Enable auto-merge on a PR.                                                                                        |
+| `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
+| `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
+| `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
+| `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
+| `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
+| `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                           |
+| `epic-membership`        | Resolve an Epic's authorized member set — open PRs labeled `epic:<N>`.                                            |
+| `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                              |
+| `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
+| `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
+| `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
 
 ### `github-pages-actions`
 
@@ -75,7 +76,7 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | ---------------- | -------------------------------------------------------------- |
 | `go-report-card` | Refresh the repo's [Go Report Card](https://goreportcard.com). |
 | `lint-go`        | Run `golangci-lint` (supports a non-root module dir).          |
-| `test-go`        | Run Go tests (race + coverage) via `gotestsum`.                |
+| `test-go`        | Run the workspace's Go tests with coverage via `gotestsum`.    |
 
 ### `node-actions`
 
@@ -89,10 +90,11 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `publish-actions`
 
-| Action         | Purpose                                                |
-| -------------- | ------------------------------------------------------ |
-| `auto-release` | Turn a pushed tag into a GitHub release with notes.    |
-| `npm`          | Publish the workspace packages to the GitHub registry. |
+| Action         | Purpose                                                    |
+| -------------- | ---------------------------------------------------------- |
+| `auto-release` | Turn a pushed tag into a GitHub release with notes.        |
+| `npm`          | Publish the workspace packages to the GitHub registry.     |
+| `release-core` | Cut a release in CI: bump the version, tag, push, release. |
 
 ### Reusable workflows
 

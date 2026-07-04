@@ -2,17 +2,17 @@ name: merge-gate
 description: >
   Posts the `merge-gate` check-run — the single "may this PR merge?" status — on the
   triggering pull request, or on the merge-queue group. It runs as the [Agent] App (not
-  the workflow's own identity) so the check's integration id is fixed regardless of what
+  the workflow's own identity) so the check's integration ID is fixed regardless of what
   decides the outcome, letting a ruleset require it by that id.
 
   Membership is the `epic:<N>` LABEL, not the PR's `Closes` keyword. A PR belongs to Epic
   N iff it carries the `epic:<N>` label — a label needs >= triage to apply, so it is a
   permission-gated assertion of membership, whereas a `Closes` keyword is author-controlled
-  and cannot be trusted to define the set. For a labelled PR this action resolves the
+  and cannot be trusted to define the set. For a labeled PR this action resolves the
   Epic's authorized open sibling PRs (via the epic-membership action) and passes only when
   EVERY member is merge-ready (non-draft + approved), so a set of concurrent cross-repo PRs
   lands together instead of partially. The `Closes` walk survives only as a discovery HINT:
-  for an unlabelled PR whose closing issue has a parent Epic, the action suggests adding the
+  for an unlabeled PR whose closing issue has a parent Epic, the action suggests adding the
   `epic:<N>` label but still treats the PR as standalone. A PR with no `epic:<N>` label is
   standalone and always passes (the fast path — classified from the event payload alone, so
   the flood of ordinary PRs never depends on an API call and can't be frozen by a blip).
@@ -35,9 +35,9 @@ inputs:
   client_id:
     required: true
     description: >
-      Client id of the [Agent] App. Needs checks:write (post the status), plus issues +
+      Client ID of the [Agent] App. Needs checks:write (post the status), plus issues +
       pull-requests read (read a PR's labels and its `Closes` hint, and to mint the nested
-      epic-membership token). The App identity is what fixes the check's integration id.
+      epic-membership token). The App identity is what fixes the check's integration ID.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -159,8 +159,8 @@ runs:
 
         # Which PR are we classifying? On a merge_group event the queued PR number is
         # encoded in the group ref (refs/heads/gh-readonly-queue/<base>/pr-<N>-<sha>); a
-        # batch names one PR and we evaluate that PR's Epic (full-batch attribution is a
-        # later spike). Off the queue it is the input PR number.
+        # batch names one PR and the gate evaluates only that PR's Epic. Off the queue it
+        # is the input PR number.
         if [ -n "${IN_QUEUE:-}" ]; then
           classify_pr=$(printf '%s' "${MG_HEAD_REF:-}" | grep -oE 'pr-[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
           if [ -z "$classify_pr" ]; then
@@ -212,7 +212,7 @@ runs:
         fi
 
         if [ -n "$epic" ]; then
-          # Labelled Epic member — hand off to epic-membership (the authority) + evaluate.
+          # Labeled Epic member — hand off to epic-membership (the authority) + evaluate.
           echo "PR #${classify_pr} carries \`epic:${epic}\` — resolving the authorized member set." | tee -a "$GITHUB_STEP_SUMMARY"
           emit "$epic"
           exit 0
@@ -251,7 +251,7 @@ runs:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
 
-    # Recompute readiness over the member set and post the gate. Runs for the labelled-Epic
+    # Recompute readiness over the member set and post the gate. Runs for the labeled-Epic
     # path only; standalone / misconfig / hold cases were already posted by the classify step.
     - name: Evaluate readiness + post merge-gate
       if: ${{ steps.discover.outputs.epic_number != '' }}
@@ -279,7 +279,7 @@ runs:
 
         # epic-membership ran with continue-on-error: an EMPTY output means it FAILED to
         # resolve (transport / rate-limit after its own retries); a resolved-but-empty set
-        # is "[]". Either way we can't confirm readiness for a PR we KNOW is labelled
+        # is "[]". Either way we can't confirm readiness for a PR we KNOW is labeled
         # `epic:<N>` — it should appear in its own set, so "[]" means the label search index
         # is still lagging. HOLD (failure), never pass: an uncertain set that turns out
         # unready must not merge. The reconcile sweep re-runs and lands the set once ready.
