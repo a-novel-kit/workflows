@@ -30,7 +30,7 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.10.0
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.11.0
       id: app_token
       with:
         client_id: ${{ inputs.client_id }}
