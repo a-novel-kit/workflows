@@ -1,0 +1,213 @@
+name: release core (hotfix)
+description: >
+  Cut a HOTFIX release from an already-released line — the exception-path sibling of release-core.
+  It reuses release-core's bump.cjs + plan.cjs UNCHANGED (the version math and tag plan are
+  identical) but drops the three default-branch assumptions baked into release-core: the
+  default-branch guard, the default-branch checkout, and the push-to-the-default-branch. Instead it
+  checks out an ephemeral branch that was cut from a release TAG (carrying the fix on top of the
+  baseline), patch-bumps to vX.Y.(Z+1), and pushes ONLY the tag — the ephemeral branch is thrown
+  away by the caller (the tag preserves the commit). The tag is created with --latest=false so a
+  patch to an OLD line can't steal "Latest" from a newer release.
+
+  Kept a SEPARATE action (not a flag on release-core) on purpose — blast-radius discipline: a change
+  to the exception path must not be able to break the everyday release path. The bump is a plain
+  `patch` here (a hotfix is always a patch of its line); the reconcile-to-master, the ephemeral
+  branch lifecycle, the lock, and the human gate all live in the caller (hotfix.yaml).
+
+inputs:
+  ref:
+    required: true
+    description: >
+      The ephemeral hotfix branch to cut from (e.g. hotfix/vX.Y.x), already carrying the fix on top
+      of the baseline release tag. bump.cjs derives the version from THIS ref's package.json, so it
+      must descend from a real release tag — hard-asserted below (the baseline vX.Y.Z tag must exist).
+  client_id:
+    required: true
+    description: >
+      [Agent] App client ID. Needs contents:write plus a tag-protection bypass, since the vX.Y.(Z+1)
+      tag is protected (v*). Unlike release-core it never pushes a branch, so no branch-protection
+      bypass is exercised.
+  app_private_key:
+    required: true
+    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  dry_run:
+    required: false
+    default: "false"
+    description: >
+      When "true", bump and report the version/tags but do NOT commit, tag, push, or release — the
+      working tree is reverted. Lets a hotfix be rehearsed before the bot has push rights.
+
+outputs:
+  version:
+    description: The bumped hotfix version (e.g. 1.4.6).
+    value: ${{ steps.cut.outputs.version }}
+  tag:
+    description: The root hotfix tag — always vX.Y.Z.
+    value: ${{ steps.cut.outputs.tag }}
+  tags:
+    description: Every tag cut, newline-separated — root vX.Y.Z plus any <subdir>/vX.Y.Z sub-module tags.
+    value: ${{ steps.cut.outputs.tags }}
+
+runs:
+  using: composite
+  steps:
+    # No default-branch guard (FORK 1 vs release-core): a hotfix is cut from an ephemeral branch off
+    # a release tag, never from the default branch. The "cut from a real release" invariant is
+    # enforced below by asserting the baseline tag exists, not by pinning the ref to a branch name.
+
+    # Token that can push the tag + create the release. Scoped to this repo and contents only.
+    - name: Mint push token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+
+    # Bot-authenticated checkout of the EPHEMERAL branch (FORK 2 vs release-core: `ref` is an input,
+    # not github.ref_name); full history + tags so the baseline assert and the tag resolve.
+    # CRITICAL: check out into a SUB-PATH, never the root. A root checkout would clobber
+    # $GITHUB_WORKSPACE with the old-baseline tree — breaking this action's OWN sibling read of
+    # ../release-core/*.cjs (absent on old lines) AND any local `./` action a caller runs AFTER the
+    # cut (the reconcile / escalate steps). With a sub-path the root workspace stays on the caller's
+    # ref, so $GITHUB_ACTION_PATH/../release-core resolves to the CURRENT scripts.
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        token: ${{ steps.token.outputs.token }}
+        ref: ${{ inputs.ref }}
+        path: __hotfix
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Setup node
+      uses: actions/setup-node@v6
+      with:
+        node-version: lts/*
+    - name: Enable pnpm
+      shell: bash
+      run: corepack enable
+
+    # Only repos that stamp docs (a prepublish:doc script) need the a-novel CLI. Read the EPHEMERAL
+    # tree's package.json (working-directory), not the root workspace's.
+    - name: Detect prepublish:doc
+      id: stamp
+      working-directory: __hotfix
+      shell: bash
+      run: |
+        if node -e "process.exit(require('./package.json').scripts?.['prepublish:doc']?0:1)" 2>/dev/null; then
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "needed=false" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Setup Go
+      if: ${{ steps.stamp.outputs.needed == 'true' }}
+      uses: actions/setup-go@v6
+      with:
+        go-version: stable
+        cache: false
+    - name: Install a-novel CLI (for stamp)
+      if: ${{ steps.stamp.outputs.needed == 'true' }}
+      shell: bash
+      run: |
+        go install github.com/a-novel-kit/stack/cli/cmd/a-novel@latest
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+    # working-directory: __hotfix — bump/plan/git all operate on the EPHEMERAL tree. $GITHUB_ACTION_PATH
+    # stays absolute (this action's dir in the untouched root), so $RC/*.cjs are the CURRENT scripts.
+    - name: Cut hotfix
+      id: cut
+      working-directory: __hotfix
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        APP_SLUG: ${{ steps.token.outputs.app-slug }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        STAMP_NEEDED: ${{ steps.stamp.outputs.needed }}
+      run: |
+        set -euo pipefail
+
+        # release-core owns bump.cjs / plan.cjs; reuse them UNCHANGED from this action's sibling dir
+        # via the ABSOLUTE $GITHUB_ACTION_PATH (immune to the __hotfix working-directory), so the
+        # CURRENT scripts run regardless of what tree the ephemeral checkout holds. A hotfix is
+        # always a patch bump of its line.
+        RC="$GITHUB_ACTION_PATH/../release-core"
+        export RELEASE_TYPE=patch
+
+        git config user.name "${APP_SLUG}[bot]"
+        git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+
+        # HARD-ASSERT the ephemeral branch is cut from a real release: bump.cjs derives the next
+        # version from package.json at this ref, so the baseline vX.Y.Z it patches from MUST be a
+        # released tag AND this HEAD must descend from it — otherwise the branch was cut from the
+        # wrong place and the tag would be bogus.
+        baseline=$(node -p "require('./package.json').version")
+        if ! git rev-parse -q --verify "refs/tags/v${baseline}" >/dev/null; then
+          echo "::error::baseline v${baseline} (this ref's package.json version) is not a released tag — a hotfix must be cut from a release tag, not an arbitrary commit."
+          exit 1
+        fi
+        if ! git merge-base --is-ancestor "refs/tags/v${baseline}" HEAD; then
+          echo "::error::HEAD does not descend from baseline v${baseline} — the ephemeral branch was not cut from that release tag."
+          exit 1
+        fi
+
+        # Patch-bump package.json (root + workspace members).
+        node "$RC/bump.cjs"
+        version=$(node -p "require('./package.json').version")
+
+        # Refresh doc version refs where a prepublish:doc script exists (env skips pnpm's pre-run
+        # install, which would need npm-registry auth).
+        if [ "$STAMP_NEEDED" = "true" ]; then
+          PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm run prepublish:doc
+        fi
+
+        # Stamp in-repo version refs and compute the tags (root vX.Y.Z plus any sub-module tags).
+        tags=$(node "$RC/plan.cjs")
+        root_tag="v${version}"
+
+        # Tag-monotonicity: refuse if ANY computed tag already exists (a stale-baseline cut, or a
+        # re-run). Check ALL of them up front so we never push a partial set then fail.
+        while IFS= read -r t; do
+          [ -n "$t" ] || continue
+          if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
+            echo "::error::tag $t already exists — refusing to overwrite (stale baseline or a re-run?)."
+            exit 1
+          fi
+        done <<< "$tags"
+
+        {
+          echo "version=$version"
+          echo "tag=$root_tag"
+          echo "tags<<__TAGS__"
+          printf '%s\n' "$tags"
+          echo "__TAGS__"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "Hotfix **$version** (patch of v${baseline}) — tags:"
+          printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "[dry-run] no commit, tag, push, or release." | tee -a "$GITHUB_STEP_SUMMARY"
+          git checkout -- . 2>/dev/null || true
+          exit 0
+        fi
+
+        # Commit the bump, then push ONLY the tags (FORK 3 vs release-core: no `git push HEAD:branch`
+        # — the ephemeral branch is disposable and the caller deletes it; the tag preserves the
+        # bump commit). Each tag points at the bump commit and carries it to the remote.
+        git add -A
+        git commit -m "$version"
+        while IFS= read -r t; do
+          [ -n "$t" ] || continue
+          git tag "$t"
+          git push origin "refs/tags/$t"
+        done <<< "$tags"
+
+        # --latest=false (FORK 3 cont.): a patch to an old line must NOT become the repo's "Latest"
+        # release over a newer version. release-core lets GitHub pick latest; a hotfix never can.
+        gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
+          --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes --latest=false
+        echo "- ✓ hotfix released $(printf '%s\n' "$tags" | grep -c .) tag(s), root \`$root_tag\` (not latest)" | tee -a "$GITHUB_STEP_SUMMARY"
