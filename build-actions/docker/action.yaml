@@ -40,6 +40,15 @@ inputs:
   secret-files:
     description: "List of secret files to expose to the build (e.g., key=filename, MY_SECRET=./secret.txt)."
     required: false
+  cache:
+    required: false
+    description: >
+      Reuse a cross-run GHA layer cache (type=gha) for the build. Default true,
+      which persists the go build + module cache so an image whose sources are
+      unchanged restores its previous compilation. Set false for images that do
+      not compile (e.g. a stock-base database image), where caching the large
+      base to GHA is pure overhead and can make the build slower than cold.
+    default: "true"
 
 outputs:
   digest:
@@ -97,8 +106,8 @@ runs:
         # layers. Scope is per-image: each service/job image builds in its own
         # job, so a shared scope would let those parallel builds evict each
         # other's cache — the image name keeps them isolated.
-        cache-from: type=gha,scope=${{ inputs.image_name }}
-        cache-to: type=gha,mode=max,scope=${{ inputs.image_name }}
+        cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
         load: true
         tags: ghcr.io/${{ inputs.image_name }}:test
         file: ${{ inputs.file }}
@@ -139,7 +148,7 @@ runs:
         # Restore only: the push build shares this job's warm buildx cache from
         # the load build above, so it re-tags/pushes the already-built layers
         # rather than recompiling.
-        cache-from: type=gha,scope=${{ inputs.image_name }}
+        cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
