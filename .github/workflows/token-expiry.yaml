@@ -1,0 +1,35 @@
+# Daily fine-grained-PAT expiry reminders to a dedicated Discord channel (TOKEN_EXPIRY_WEBHOOK).
+# Currently watches the bypass-audit read PAT. warn_days is set above the token's lifetime so it
+# posts EVERY run — a daily countdown (green→red as it runs down). The `push` trigger (scoped to the
+# action + this caller) is for iterating on the message from a branch, since workflow_dispatch and
+# schedule only fire on the default branch; production is the daily schedule.
+name: token-expiry
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # daily 08:00 UTC
+  workflow_dispatch:
+  push:
+    paths:
+      - generic-actions/token-expiry-notify/**
+      - .github/workflows/token-expiry.yaml
+
+jobs:
+  bypass-audit-pat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./generic-actions/token-expiry-notify
+        with:
+          token: ${{ secrets.BYPASS_AUDIT_PAT }}
+          token_name: BYPASS_AUDIT_PAT
+          webhook: ${{ secrets.TOKEN_EXPIRY_WEBHOOK }}
+          # Post every run (the token has ~1y left) so we can see + iterate on the message; the color
+          # tracks the % of lifetime remaining. Lower warn_days later if you want the final-stretch only.
+          warn_days: "400"
+          lifetime_days: "366"
+          regen_hint: |
+            New fine-grained PAT — Administration: Read-only, All repositories, owner ${{ github.repository_owner }}:
+              https://github.com/settings/personal-access-tokens/new
+            Then re-store it:
+              gh secret set BYPASS_AUDIT_PAT --org ${{ github.repository_owner }} --app actions --visibility all --body <pat>
