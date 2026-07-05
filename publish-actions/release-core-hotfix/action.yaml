@@ -68,11 +68,17 @@ runs:
 
     # Bot-authenticated checkout of the EPHEMERAL branch (FORK 2 vs release-core: `ref` is an input,
     # not github.ref_name); full history + tags so the baseline assert and the tag resolve.
+    # CRITICAL: check out into a SUB-PATH, never the root. A root checkout would clobber
+    # $GITHUB_WORKSPACE with the old-baseline tree — breaking this action's OWN sibling read of
+    # ../release-core/*.cjs (absent on old lines) AND any local `./` action a caller runs AFTER the
+    # cut (the reconcile / escalate steps). With a sub-path the root workspace stays on the caller's
+    # ref, so $GITHUB_ACTION_PATH/../release-core resolves to the CURRENT scripts.
     - name: Checkout
       uses: actions/checkout@v7
       with:
         token: ${{ steps.token.outputs.token }}
         ref: ${{ inputs.ref }}
+        path: __hotfix
         fetch-depth: 0
         fetch-tags: true
 
@@ -84,9 +90,11 @@ runs:
       shell: bash
       run: corepack enable
 
-    # Only repos that stamp docs (a prepublish:doc script) need the a-novel CLI.
+    # Only repos that stamp docs (a prepublish:doc script) need the a-novel CLI. Read the EPHEMERAL
+    # tree's package.json (working-directory), not the root workspace's.
     - name: Detect prepublish:doc
       id: stamp
+      working-directory: __hotfix
       shell: bash
       run: |
         if node -e "process.exit(require('./package.json').scripts?.['prepublish:doc']?0:1)" 2>/dev/null; then
@@ -107,8 +115,11 @@ runs:
         go install github.com/a-novel-kit/stack/cli/cmd/a-novel@latest
         echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+    # working-directory: __hotfix — bump/plan/git all operate on the EPHEMERAL tree. $GITHUB_ACTION_PATH
+    # stays absolute (this action's dir in the untouched root), so $RC/*.cjs are the CURRENT scripts.
     - name: Cut hotfix
       id: cut
+      working-directory: __hotfix
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -118,9 +129,10 @@ runs:
       run: |
         set -euo pipefail
 
-        # release-core owns bump.cjs / plan.cjs; reuse them from the sibling action dir UNCHANGED
-        # (the whole workflows repo is checked out under $GITHUB_ACTION_PATH's parent, so the sibling
-        # is present). A hotfix is always a patch bump of its line.
+        # release-core owns bump.cjs / plan.cjs; reuse them UNCHANGED from this action's sibling dir
+        # via the ABSOLUTE $GITHUB_ACTION_PATH (immune to the __hotfix working-directory), so the
+        # CURRENT scripts run regardless of what tree the ephemeral checkout holds. A hotfix is
+        # always a patch bump of its line.
         RC="$GITHUB_ACTION_PATH/../release-core"
         export RELEASE_TYPE=patch
 
@@ -129,10 +141,15 @@ runs:
 
         # HARD-ASSERT the ephemeral branch is cut from a real release: bump.cjs derives the next
         # version from package.json at this ref, so the baseline vX.Y.Z it patches from MUST be a
-        # released tag — otherwise the branch was cut from the wrong place and the tag would be bogus.
+        # released tag AND this HEAD must descend from it — otherwise the branch was cut from the
+        # wrong place and the tag would be bogus.
         baseline=$(node -p "require('./package.json').version")
         if ! git rev-parse -q --verify "refs/tags/v${baseline}" >/dev/null; then
           echo "::error::baseline v${baseline} (this ref's package.json version) is not a released tag — a hotfix must be cut from a release tag, not an arbitrary commit."
+          exit 1
+        fi
+        if ! git merge-base --is-ancestor "refs/tags/v${baseline}" HEAD; then
+          echo "::error::HEAD does not descend from baseline v${baseline} — the ephemeral branch was not cut from that release tag."
           exit 1
         fi
 
