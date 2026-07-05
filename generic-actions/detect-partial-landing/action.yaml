@@ -162,8 +162,10 @@ runs:
     # Discover the repos with an OPEN epic:<N> PR — the bounded superset of this sweep's roll-forward
     # targets (a reenqueue target is a landable stray, i.e. an open Epic member). The enqueue token
     # below is scoped to exactly these, not org-wide, so a leak can't reach a repo that isn't mid-landing.
-    # Mirrors the run step's own `all_open` enumeration; the two can only diverge if a PR opens in the
-    # seconds between, and a reenqueue miss already self-heals (it logs "next sweep retries").
+    # Reads the same open-PR + label view the run step's enumeration does (labels first:100), so it is a
+    # superset of the reenqueue targets (a stray is an open Epic member). Residual divergence is only a PR
+    # opening in the seconds between (self-heals — the reenqueue logs "next sweep retries") or an org with
+    # >1000 open PRs (not realistic here). A partial page failure abandons the token, never a partial scope.
     - name: Discover active-Epic repos (scope for the enqueue token)
       id: scope
       if: ${{ steps.mode.outputs.mode == 'sweep' }}
@@ -178,12 +180,17 @@ runs:
         fi
         Q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:100, after:$cursor){
           pageInfo{ hasNextPage endCursor }
-          nodes{ ... on PullRequest{ repository{ name } labels(first:20){ nodes{ name } } } } } }'
+          nodes{ ... on PullRequest{ repository{ name } labels(first:100){ nodes{ name } } } } } }'
         cursor=""; names=""; failed=0
         while :; do
           args=(-f query="$Q" -f q="org:${ORG} is:pr is:open")
           [ -n "$cursor" ] && args+=(-f cursor="$cursor")
-          if ! data=$(gh api graphql "${args[@]}" 2>/dev/null); then failed=1; break; fi
+          # Require a well-formed page (data present, no errors) — same guard as the run step's
+          # search_prs — so a 200 carrying a partial data+errors payload abandons the token, not scopes it.
+          if ! data=$(gh api graphql "${args[@]}" 2>/dev/null) \
+            || ! printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
+            failed=1; break
+          fi
           names+=$(printf '%s' "$data" | jq -r '
             .data.search.nodes[]? | select([.labels.nodes[]?.name] | any(test("^epic:[0-9]+$"))) | .repository.name')
           names+=$'\n'
@@ -197,7 +204,9 @@ runs:
           echo "::warning::active-Epic repo discovery failed — not minting the enqueue token this sweep (roll-forward waits for the next); freeze detection is unaffected."
           echo "repos=" >> "$GITHUB_OUTPUT"
         else
-          csv=$(printf '%s' "$names" | grep -v '^$' | sort -u | paste -sd, -)
+          # `sed '/^$/d'` (not `grep -v '^$'`): grep exits 1 when it drops EVERY line — the common
+          # no-active-Epic case — which under set -e/pipefail would abort the whole sweep. sed exits 0.
+          csv=$(printf '%s' "$names" | sed '/^$/d' | sort -u | paste -sd, -)
           echo "repos=${csv}" >> "$GITHUB_OUTPUT"
           echo "Enqueue-token scope (repos with an open Epic PR): ${csv:-<none>}"
         fi
