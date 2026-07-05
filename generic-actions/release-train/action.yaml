@@ -533,7 +533,7 @@ runs:
             elif .status=="nochange" then "— nothing new"
             elif .status=="botched" then "⚠️ tag `"+.tag+"` without a Release — repair"
             elif .status=="parked" then "⏸️ parked (release-env approval)"
-            else "❌ "+.status end)) |")')
+            else "❌ "+.status end) |")')
         # Only a live run edits the human-authored Epic body; a dry-run rehearsal is side-effect-free.
         if [ "$dry" = "false" ]; then
           block=$(printf '<!-- release-train:receipts:start -->\n### 🚂 Release train — epic:#%s (%s)\n%s\n<!-- release-train:receipts:end -->' \
