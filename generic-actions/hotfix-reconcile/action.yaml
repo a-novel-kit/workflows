@@ -1,0 +1,190 @@
+name: hotfix-reconcile
+description: >
+  Forward-port a hotfix's FIX DIFF (never the version bump) from a hotfix tag onto the default
+  branch — the load-bearing guarantee against a "forgotten back-merge" that lets a later vX.Y+1.0,
+  cut from master, silently reintroduce the bug. Given the baseline tag and the ephemeral branch's
+  fix-HEAD, it cherry-picks the range `baseline..fix_head` onto a fresh branch off the default
+  branch and opens a SQUASH `hotfix-reconcile/*` PR that `Closes` the hotfix's cleanup Task.
+
+  It reuses epic-rollback's clone → open-PR → never-force-reset skeleton, but degrades DIFFERENTLY:
+  on a cherry-pick conflict it COMMITS THE CONFLICT MARKERS into the branch and opens a DRAFT PR for
+  a human to resolve in place (epic-rollback commits an empty held placeholder instead). The
+  reconcile PR is deliberately LABEL-CLEAN — never `epic:<N>` — so the merge-gate treats it as an
+  ordinary standalone PR (benign pass) and never PARKS it; an unreconciled hotfix does not worsen as
+  master moves, so freezing the repo would be harmful friction. Enforcement is the escalating cleanup
+  Task + watchdog (built alongside), not a merge-blocking check.
+
+  "Reached master" is machine-verified downstream by an ORDERED FALLBACK — patch-id (`git cherry`,
+  survives a clean single-commit squash) → the `-x` trailer (carried into the squash body) → the
+  PR's `Closes #<cleanup-task>` (the only signal robust to BOTH a squash AND a conflict resolution).
+  This action's job is to open that PR correctly; the watchdog checks that it landed. If the fix is
+  ALREADY on the default branch (patch-id match), it short-circuits — no PR.
+
+inputs:
+  client_id:
+    required: true
+    description: >
+      [Agent] App client id. Mints one token scoped (repositories:) to THIS repo with contents:write
+      (push the reconcile branch) + pull-requests:write (open the PR).
+  app_private_key:
+    required: true
+    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  source_ref:
+    required: true
+    description: >
+      The ephemeral hotfix branch carrying the fix (e.g. hotfix/vX.Y.x). Its commits are fetched so
+      the range baseline..fix_head can be cherry-picked; it must still exist when this runs (the
+      caller deletes it only after).
+  baseline:
+    required: true
+    description: The baseline release tag the hotfix was cut from (range start, exclusive) — e.g. v1.4.5.
+  fix_head:
+    required: true
+    description: >
+      SHA of the fix tip on the ephemeral branch (range end, inclusive) — captured BEFORE the version
+      bump, so the reconcile carries the fix diff only, never the bump commit.
+  line:
+    required: true
+    description: The X.Y line (e.g. "1.4"), used only to name the reconcile branch + PR.
+  cleanup_task:
+    required: true
+    description: >
+      Number of the hotfix's cleanup Task issue in THIS repo. The PR `Closes #<cleanup_task>` — the
+      authoritative "reached master" signal that survives both a squash and a conflict resolution.
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", report what would be reconciled without pushing a branch or opening a PR.
+
+outputs:
+  already_on_master:
+    description: '"true" if the fix was already on the default branch (patch-id match) — no PR opened.'
+    value: ${{ steps.reconcile.outputs.already_on_master }}
+  conflicted:
+    description: '"true" if the cherry-pick conflicted — a DRAFT PR with conflict markers was opened.'
+    value: ${{ steps.reconcile.outputs.conflicted }}
+  pr_url:
+    description: URL of the reconcile PR (empty if already on master or dry-run).
+    value: ${{ steps.reconcile.outputs.pr_url }}
+  pr_number:
+    description: Number of the reconcile PR (empty if already on master or dry-run).
+    value: ${{ steps.reconcile.outputs.pr_number }}
+
+runs:
+  using: composite
+  steps:
+    # Scoped to THIS repo: push the reconcile branch (contents) and open the PR (pull-requests).
+    # No kill-switch guard — the hotfix path (this included) is exempt (the emergency STOP must not
+    # disable the emergency PATH).
+    - name: Mint reconcile token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+        permission-pull-requests: write
+
+    - name: Reconcile fix to the default branch
+      id: reconcile
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        APP_SLUG: ${{ steps.token.outputs.app-slug }}
+        REPO: ${{ github.repository }}
+        SOURCE_REF: ${{ inputs.source_ref }}
+        BASELINE: ${{ inputs.baseline }}
+        FIX_HEAD: ${{ inputs.fix_head }}
+        LINE: ${{ inputs.line }}
+        CLEANUP_TASK: ${{ inputs.cleanup_task }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        # cleanup_task feeds `Closes #<n>` — must be a bare integer (a stray value could break the
+        # closing keyword or the PR body).
+        if ! printf '%s' "$CLEANUP_TASK" | grep -qE '^[0-9]+$'; then
+          echo "::error::cleanup_task must be an integer, got \"$CLEANUP_TASK\"."
+          exit 1
+        fi
+
+        default_branch=$(gh api "repos/${REPO}" -q .default_branch)
+        emit() { # $1 already_on_master $2 conflicted $3 pr_url $4 pr_number
+          {
+            echo "already_on_master=$1"; echo "conflicted=$2"
+            echo "pr_url=$3"; echo "pr_number=$4"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        # Clone the default branch (full history so baseline + fix commits are reachable), token in
+        # the throwaway clone's remote URL only (the epic-rollback / pull-bot pattern).
+        dir=$(mktemp -d)
+        git clone --quiet --branch "$default_branch" \
+          "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$dir"
+        git -C "$dir" config user.name "${APP_SLUG}[bot]"
+        git -C "$dir" config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+        # Bring in the fix commits + the baseline tag so the range resolves.
+        git -C "$dir" fetch --quiet origin "$SOURCE_REF"
+        git -C "$dir" fetch --quiet origin "refs/tags/${BASELINE}:refs/tags/${BASELINE}" 2>/dev/null || true
+
+        # Short-circuit: is the fix already on the default branch? `git cherry` marks each commit in
+        # baseline..fix_head '+' (not upstream) or '-' (already upstream, by patch-id). Zero '+' → the
+        # fix is already reconciled (e.g. a re-run after the PR merged, or the fix also went to master
+        # directly) → close the loop without a redundant PR.
+        pending=$(git -C "$dir" cherry "origin/${default_branch}" "$FIX_HEAD" "$BASELINE" 2>/dev/null | grep -c '^+' || true)
+        if [ "$pending" -eq 0 ]; then
+          echo "Fix is already on \`${default_branch}\` (patch-id match) — no reconcile PR needed." | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -rf "$dir"
+          emit true false "" ""
+          exit 0
+        fi
+
+        branch="hotfix-reconcile/v${LINE}-${CLEANUP_TASK}"
+        git -C "$dir" switch -c "$branch" "origin/${default_branch}" >/dev/null 2>&1
+
+        # Cherry-pick the fix range (fix diff only — the bump is excluded by construction, it is past
+        # fix_head). -x records "(cherry picked from …)" — one of the reached-master signals. On a
+        # conflict, DON'T abort: stage the markers and commit them so a human resolves in the PR.
+        conflicted=false
+        if git -C "$dir" cherry-pick -x "${BASELINE}..${FIX_HEAD}" >/dev/null 2>&1; then
+          conflicted=false
+        else
+          conflicted=true
+          conflict_paths=$(git -C "$dir" diff --name-only --diff-filter=U | tr '\n' ' ')
+          # Commit the conflict markers as-is (the human resolves them in the PR), then abandon any
+          # remaining commits in the range — the draft PR tells the human to finish the port by hand.
+          git -C "$dir" add -A
+          git -C "$dir" commit --quiet --no-edit \
+            -m "hotfix reconcile v${LINE} (UNRESOLVED CONFLICTS — resolve before merge)" \
+            -m "cherry-pick -x ${BASELINE}..${FIX_HEAD} conflicted on: ${conflict_paths}"
+          git -C "$dir" cherry-pick --quit >/dev/null 2>&1 || true
+        fi
+
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "[dry-run] would open a $([ "$conflicted" = true ] && echo 'DRAFT (conflicts) ')reconcile PR \`$branch\` → \`$default_branch\`, Closes #${CLEANUP_TASK}." | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -rf "$dir"
+          emit false "$conflicted" "" ""
+          exit 0
+        fi
+
+        git -C "$dir" push --quiet -u origin "$branch"
+
+        if [ "$conflicted" = true ]; then
+          body=$(printf 'Forward-ports the **v%s** hotfix fix diff to `%s`, but `git cherry-pick -x %s..%s` **CONFLICTED** — the conflict markers are committed as-is on this branch.\n\n**Resolve by hand:** check out `%s`, fix the `<<<<<<<` markers (paths: %s), re-run any dropped commits from the range if needed, push, and mark this PR ready. Then squash-merge.\n\nCloses #%s' \
+            "$LINE" "$default_branch" "$BASELINE" "${FIX_HEAD:0:12}" "$branch" "${conflict_paths:-—}" "$CLEANUP_TASK")
+          pr_url=$(gh pr create --repo "$REPO" --base "$default_branch" --head "$branch" --draft \
+            --title "[CONFLICTS] hotfix reconcile v${LINE} → ${default_branch}" --body "$body")
+          echo "::warning::reconcile CONFLICTED — opened DRAFT PR for manual resolution: ${pr_url}"
+        else
+          body=$(printf 'Forward-ports the **v%s** hotfix fix diff (range `%s..%s`, the fix only — never the bump) to `%s` via `git cherry-pick -x`.\n\nThis is the regression guard for the fix-on-tag hotfix: without it a later minor cut from `%s` would silently reintroduce the bug. Squash-merge when green.\n\nCloses #%s' \
+            "$LINE" "$BASELINE" "${FIX_HEAD:0:12}" "$default_branch" "$default_branch" "$CLEANUP_TASK")
+          pr_url=$(gh pr create --repo "$REPO" --base "$default_branch" --head "$branch" \
+            --title "hotfix reconcile v${LINE} → ${default_branch}" --body "$body")
+          echo "Opened reconcile PR: ${pr_url}" | tee -a "$GITHUB_STEP_SUMMARY"
+        fi
+        rm -rf "$dir"
+
+        pr_number=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$')
+        emit false "$conflicted" "$pr_url" "$pr_number"
