@@ -1,0 +1,220 @@
+# Reusable staleness watchdog — the fail-safe backstop for the exception path (a-novel-kit/.github#95).
+# The event-driven posters (merge-gate / epic-freeze) always TRY to post a terminal conclusion, and a
+# hotfix aborts its own lock wait — but an App outage, a hung step, or a dropped event can still leave a
+# required check stuck with no conclusion (a PR blocked forever, since a plain PR has no merge-queue
+# timeout) or a hotfix run hung holding its lock. This scheduled sweep NOTICES those and escalates each,
+# so a stuck automation always surfaces to a human instead of silently blocking work.
+#
+# Two detections, org-wide:
+#   - stale check: an open PR whose required merge-gate / epic-freeze check has had no terminal
+#     conclusion for longer than the threshold (the check never posted, or is stuck pending).
+#   - stuck hotfix: a hotfix.yaml run in_progress longer than the threshold (a hung step holding the
+#     per-repo hotfix lock, blocking further hotfixes there).
+# Each finding fans out to the escalate action (one deduped ticket per condition). The `when`
+# (cron / concurrency) lives in the thin per-org caller, exactly like reconcile-board.
+name: watchdog
+
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        required: true
+        type: string
+        description: The org's [Agent] bot App client id.
+      project_id:
+        required: true
+        type: string
+        description: Node id of the org "Tasks" board (PVT_…) — escalate drives its ticket's Status here.
+      stale_check_minutes:
+        required: false
+        type: string
+        default: "30"
+        description: A required check with no terminal conclusion older than this (minutes) is stale.
+      stuck_run_minutes:
+        required: false
+        type: string
+        default: "60"
+        description: A hotfix run in_progress longer than this (minutes) is a stuck lock.
+      heartbeat_workflows:
+        required: false
+        type: string
+        default: ""
+        description: >
+          Comma-separated caller workflow file names IN THIS REPO to heartbeat-check — e.g.
+          "reconcile-board.yaml,watchdog.yaml". If any has no run within heartbeat_max_minutes its
+          cron is broken/disabled and the org has lost that fail-safe → SEV1. Empty = skip.
+      heartbeat_max_minutes:
+        required: false
+        type: string
+        default: "120"
+        description: A heartbeat workflow with no run newer than this (minutes) is considered down.
+      mention:
+        required: false
+        type: string
+        default: ""
+        description: Threaded to escalate as the SEV1/SEV2 @mention (e.g. vars.SEV1_MENTION).
+      dry_run:
+        required: false
+        type: string
+        default: "true"
+        description: When "true" (default), escalate only logs the tickets/pages it would file.
+    secrets:
+      private_key:
+        required: true
+        description: The [Agent] bot App private key (PEM).
+      push_webhook:
+        required: false
+        description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
+
+jobs:
+  # Scan the org for stale required checks + stuck hotfix runs → a findings list the escalate job
+  # matrices over. Read-only; the App token is scoped to reads.
+  detect:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      findings: ${{ steps.scan.outputs.findings }}
+    steps:
+      - name: Mint read token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-issues: read
+          permission-pull-requests: read
+          permission-actions: read
+      - name: Scan for stale checks + stuck hotfix runs
+        id: scan
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+          STALE_MIN: ${{ inputs.stale_check_minutes }}
+          STUCK_MIN: ${{ inputs.stuck_run_minutes }}
+          HEARTBEAT_WORKFLOWS: ${{ inputs.heartbeat_workflows }}
+          HEARTBEAT_MAX: ${{ inputs.heartbeat_max_minutes }}
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+          findings='[]'
+          add() { # severity summary dedup_key repo body
+            findings=$(jq -cn --argjson f "$findings" --arg s "$1" --arg m "$2" --arg d "$3" --arg r "$4" --arg b "$5" \
+              '$f + [{severity:$s, summary:$m, dedup_key:$d, repo:$r, body:$b}]')
+          }
+
+          # ---- STALE CHECKS: open PRs whose required merge-gate/epic-freeze has no terminal conclusion.
+          # A check should complete within seconds of the event; if the PR head is older than the
+          # threshold and the check still isn't COMPLETED, the poster never finished (App outage / dropped
+          # event) and the PR is blocked with no self-heal (a plain PR has no merge-queue timeout).
+          q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:50, after:$cursor){
+            pageInfo{ hasNextPage endCursor }
+            nodes{ ... on PullRequest{ number url repository{ nameWithOwner }
+              commits(last:1){ nodes{ commit{ committedDate
+                statusCheckRollup{ contexts(first:40){ nodes{
+                  __typename ... on CheckRun{ name status } } } } } } } } } } }'
+          cursor=""
+          while :; do
+            args=(-F q="org:${ORG} is:pr is:open")
+            [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+            page=$(gh api graphql -f query="$q" "${args[@]}")
+            while IFS= read -r pr; do
+              [ -n "$pr" ] || continue
+              repo=$(printf '%s' "$pr" | jq -r '.repository.nameWithOwner')
+              num=$(printf '%s' "$pr" | jq -r '.number')
+              url=$(printf '%s' "$pr" | jq -r '.url')
+              committed=$(printf '%s' "$pr" | jq -r '.commits.nodes[0].commit.committedDate // empty')
+              [ -n "$committed" ] || continue
+              age=$(( now - $(date -u -d "$committed" +%s) ))
+              [ "$age" -lt $(( STALE_MIN * 60 )) ] && continue # too fresh to judge
+              for chk in merge-gate epic-freeze; do
+                status=$(printf '%s' "$pr" | jq -r --arg n "$chk" \
+                  '[.commits.nodes[0].commit.statusCheckRollup.contexts.nodes[]? | select(.__typename=="CheckRun" and .name==$n)][0].status // "ABSENT"')
+                # COMPLETED = a terminal conclusion posted (success/failure/etc.) → healthy. Anything
+                # else (QUEUED / IN_PROGRESS / ABSENT) after the threshold = stale.
+                if [ "$status" != "COMPLETED" ]; then
+                  add sev2 "Stale required check '${chk}' on ${repo}#${num}" \
+                    "stale-check:${chk}:${repo}:${num}" "$repo" \
+                    "The required \`${chk}\` check has had NO terminal conclusion for >${STALE_MIN}m on ${url} (status=${status}). The PR is blocked and won't self-heal — the [Agent] App may be down, or the check never posted. Re-run the poster or post a conclusion by hand."
+                fi
+              done
+            done < <(printf '%s' "$page" | jq -c '.data.search.nodes[]? | select(.number)')
+            [ "$(printf '%s' "$page" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
+            cursor=$(printf '%s' "$page" | jq -r '.data.search.pageInfo.endCursor')
+          done
+
+          # ---- STUCK HOTFIX RUNS: a hotfix.yaml run in_progress past the threshold — a hung step holding
+          # the per-repo hotfix lock (the run's own 30-min lock cap only covers WAITING, not a hang).
+          repos=$(gh api "orgs/${ORG}/repos" --paginate --jq '.[].name' 2>/dev/null || true)
+          while IFS= read -r repo; do
+            [ -n "$repo" ] || continue
+            # Repos without a hotfix.yaml error here → skip quietly.
+            runs=$(gh run list --repo "${ORG}/${repo}" --workflow hotfix.yaml --status in_progress \
+              --json databaseId,createdAt,url --limit 10 2>/dev/null || echo '[]')
+            while IFS= read -r run; do
+              [ -n "$run" ] || continue
+              created=$(printf '%s' "$run" | jq -r '.createdAt')
+              age=$(( now - $(date -u -d "$created" +%s) ))
+              if [ "$age" -ge $(( STUCK_MIN * 60 )) ]; then
+                rurl=$(printf '%s' "$run" | jq -r '.url')
+                rid=$(printf '%s' "$run" | jq -r '.databaseId')
+                add sev2 "Stuck hotfix run in ${ORG}/${repo}" \
+                  "stuck-hotfix:${ORG}/${repo}:${rid}" "${ORG}/${repo}" \
+                  "A hotfix.yaml run has been in_progress >${STUCK_MIN}m (${rurl}) — likely a hung step holding the hotfix lock, blocking further hotfixes in this repo. Cancel it if hung."
+              fi
+            done < <(printf '%s' "$runs" | jq -c '.[]?')
+          done < <(printf '%s\n' "$repos")
+
+          # ---- HEARTBEAT / dead-man's-switch: the scheduled fail-safes (this sweep + reconcile-board)
+          # must keep RUNNING. If a caller workflow in THIS repo hasn't run within the window, its cron
+          # is broken/disabled and the org has silently lost that backstop — page it (SEV1: nothing is
+          # watching). This run catches a fail-safe that stopped-and-resumed or a SIBLING fail-safe
+          # that's down; a fail-safe that's still down is caught by its sibling's own heartbeat.
+          if [ -n "${HEARTBEAT_WORKFLOWS:-}" ]; then
+            IFS=',' read -ra hbwf <<< "$HEARTBEAT_WORKFLOWS"
+            for wf in "${hbwf[@]}"; do
+              wf=$(printf '%s' "$wf" | tr -d '[:space:]')
+              [ -n "$wf" ] || continue
+              last=$(gh run list --repo "$REPO" --workflow "$wf" --limit 1 --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || echo "")
+              if [ -z "$last" ]; then
+                add sev1 "Fail-safe '${wf}' has NEVER run in ${REPO}" "heartbeat:${REPO}:${wf}" "$REPO" \
+                  "The scheduled fail-safe \`${wf}\` has no runs — its cron may be disabled or misconfigured, so the org has lost this backstop."
+                continue
+              fi
+              age=$(( now - $(date -u -d "$last" +%s) ))
+              if [ "$age" -ge $(( HEARTBEAT_MAX * 60 )) ]; then
+                add sev1 "Fail-safe '${wf}' hasn't run in >${HEARTBEAT_MAX}m" "heartbeat:${REPO}:${wf}" "$REPO" \
+                  "The scheduled fail-safe \`${wf}\` last ran $(( age / 60 ))m ago (> ${HEARTBEAT_MAX}m threshold) — its cron is broken/disabled and the org has lost this backstop. Re-enable it."
+              fi
+            done
+          fi
+
+          echo "findings=${findings}" >> "$GITHUB_OUTPUT"
+          count=$(printf '%s' "$findings" | jq 'length')
+          echo "Watchdog scan complete — ${count} stale/stuck finding(s)." | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # One escalate per finding (deduped by its stable key, so a recurring condition updates one ticket).
+  escalate:
+    needs: detect
+    if: ${{ needs.detect.outputs.findings != '[]' && needs.detect.outputs.findings != '' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        finding: ${{ fromJSON(needs.detect.outputs.findings) }}
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/escalate@v1.16.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          project_id: ${{ inputs.project_id }}
+          severity: ${{ matrix.finding.severity }}
+          summary: ${{ matrix.finding.summary }}
+          dedup_key: ${{ matrix.finding.dedup_key }}
+          repo: ${{ matrix.finding.repo }}
+          body: ${{ matrix.finding.body }}
+          mention: ${{ inputs.mention }}
+          push_webhook: ${{ secrets.push_webhook }}
+          dry_run: ${{ inputs.dry_run }}
