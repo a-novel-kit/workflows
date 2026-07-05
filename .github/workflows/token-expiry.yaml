@@ -28,8 +28,14 @@ jobs:
           # tracks the % of lifetime remaining. Lower warn_days later if you want the final-stretch only.
           warn_days: "400"
           lifetime_days: "366"
-          regen_hint: |
-            New fine-grained PAT — Administration: Read-only, All repositories, owner ${{ github.repository_owner }}:
-              https://github.com/settings/personal-access-tokens/new
-            Then re-store it:
-              gh secret set BYPASS_AUDIT_PAT --org ${{ github.repository_owner }} --app actions --visibility all --body <pat>
+          regen_md: |
+            ### Regenerate and update the secret
+
+            https://github.com/settings/personal-access-tokens/new
+            New fine-grained PAT
+             -> **owner**:            `${{ github.repository_owner }}`
+             -> **Scope**:             `All Repositories`
+             -> **Permissions**: `Administration (read-only)`
+            ```
+            gh secret set BYPASS_AUDIT_PAT --org ${{ github.repository_owner }} --app actions --visibility all --body <pat>
+            ```

@@ -17,12 +17,13 @@ inputs:
   token_name:
     required: true
     description: Human name of the token/secret (e.g. "BYPASS_AUDIT_PAT") — shown in the reminder.
-  regen_hint:
+  regen_md:
     required: false
     default: ""
     description: >
-      The exact steps/command to regenerate + re-store the token, shown in the embed's code block
-      (e.g. the fine-grained-PAT settings + the `gh secret set …` command). Empty = omit.
+      Free-form Markdown appended under the header — the caller formats the regen instructions
+      however it likes. Discord renders ## / ### headings, **bold**, `code`, and ``` blocks in an
+      embed description, so the caller owns the layout. Empty = omit.
   webhook:
     required: false
     default: ""
@@ -58,7 +59,7 @@ runs:
       env:
         TOKEN: ${{ inputs.token }}
         TOKEN_NAME: ${{ inputs.token_name }}
-        REGEN_HINT: ${{ inputs.regen_hint }}
+        REGEN_MD: ${{ inputs.regen_md }}
         WEBHOOK: ${{ inputs.webhook }}
         WARN_DAYS: ${{ inputs.warn_days }}
         LIFETIME_DAYS: ${{ inputs.lifetime_days }}
@@ -90,11 +91,11 @@ runs:
         # Color-code by percentage of lifetime left (if lifetime_days given) or by absolute days.
         # Discord embed colors are decimal RGB: green 0x2ECC71 / yellow 0xF1C40F / orange 0xE67E22 /
         # red 0xE74C3C.
-        metric=""
+        pctline=""
         if [ -n "${LIFETIME_DAYS:-}" ] && [ "${LIFETIME_DAYS}" -gt 0 ] 2>/dev/null; then
           pct=$(( days * 100 / LIFETIME_DAYS ))
           [ "$pct" -gt 100 ] && pct=100
-          metric=" · ${pct}% of its lifetime left"
+          pctline=" | ${pct}% left"
           if   [ "$pct" -gt 50 ]; then color=3066993
           elif [ "$pct" -gt 25 ]; then color=15844367
           elif [ "$pct" -gt 10 ]; then color=15105570
@@ -106,15 +107,18 @@ runs:
           else color=15158332; fi
         fi
 
-        desc="Expires in **${days} day(s)** — ${exp}${metric}."
-        if [ -n "${REGEN_HINT:-}" ]; then
-          desc="${desc}"$'\n\n'"Regenerate and update the secret:"$'\n'"\`\`\`"$'\n'"${REGEN_HINT}"$'\n'"\`\`\`"
+        # The whole message is the embed DESCRIPTION (Discord renders ## / ### headings there) — no
+        # separate title field. Header, then the expiry as `-#` subtext (small + grey), then the
+        # caller's regen Markdown.
+        desc="## ⏳ [Token] ${TOKEN_NAME} - ${days} days left"$'\n'"-# Expires ${exp}${pctline}"
+        if [ -n "${REGEN_MD:-}" ]; then
+          desc="${desc}"$'\n'"${REGEN_MD}"
         fi
         desc=$(printf '%s' "$desc" | head -c 3900)
         desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
         # allowed_mentions parse:[] — a maintenance nudge should never ping a role/@everyone.
-        payload=$(jq -n --arg t "⏳ Token expiring: ${TOKEN_NAME}" --arg d "$desc" --argjson c "$color" \
-          '{embeds: [{title: $t, description: $d, color: $c}], allowed_mentions: {parse: []}}')
+        payload=$(jq -n --arg d "$desc" --argjson c "$color" \
+          '{embeds: [{description: $d, color: $c}], allowed_mentions: {parse: []}}')
 
         if [ "$DRY_RUN" = "true" ]; then
           { echo "[dry-run] would post the ${TOKEN_NAME} expiry embed (color ${color}, ${days}d left):"; printf '%s\n' "$desc"; } | tee -a "$GITHUB_STEP_SUMMARY"
