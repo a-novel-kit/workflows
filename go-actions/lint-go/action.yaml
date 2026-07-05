@@ -18,5 +18,10 @@ runs:
         go-version-file: ${{ inputs.working-directory && format('{0}/go.mod', inputs.working-directory) || 'go.mod' }}
     - uses: golangci/golangci-lint-action@v9
       with:
-        version: latest
+        # Pinned, not `latest`: the action keys its download + analysis cache on
+        # the resolved version, so `latest` busts that cache fleet-wide whenever
+        # upstream releases, and a new linter can turn a green branch red with no
+        # repo change. Matches the version the services pin in golangci-lint.mod;
+        # Renovate bumps it.
+        version: v2.12.2
         working-directory: ${{ inputs.working-directory }}
