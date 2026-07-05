@@ -18,7 +18,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.15.4
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.15.5
       id: app_token
       with:
         client_id: ${{ inputs.client_id }}
