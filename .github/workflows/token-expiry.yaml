@@ -30,8 +30,7 @@ jobs:
           lifetime_days: "366"
           regen_md: |
             ## Regenerate and update the secret
-            https://github.com/settings/personal-access-tokens/new
-            New fine-grained PAT
+            [New fine-grained PAT](https://github.com/settings/personal-access-tokens/new)
              -> **owner**: ${{ github.repository_owner }}
              -> **Scope**: All Repositories
              -> **Permissions**: Administration (read-only)
