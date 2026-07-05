@@ -26,3 +26,33 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
           client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
+
+  # Guard against the v1.12.0 incident: a composite action's WHOLE manifest is
+  # expression-templated at load time — input descriptions and run: strings, bash
+  # comments included. The vars / secrets / needs / matrix / strategy contexts do not
+  # exist for composite actions, so a literal `${{ vars.X }}` anywhere in one — even
+  # as documentation — makes the action fail to LOAD, which took merge-gate offline
+  # org-wide until v1.12.1. Caller WORKFLOWS (.github/workflows/*) may use these; a
+  # composite action manifest may not. This job is a main.yaml job, so repocfg makes
+  # it a required check on this repo.
+  lint-action-manifests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: No composite-illegal ${{ }} contexts in action manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            # Only composite actions are affected; reusable workflows are not composite.
+            grep -qE 'using:[[:space:]]*"?composite' "$f" || continue
+            if grep -nE '\$\{\{[[:space:]]*(vars|secrets|needs|matrix|strategy)\.' "$f"; then
+              echo "::error file=$f::references a context unavailable to composite actions (vars/secrets/needs/matrix/strategy) — deliteralize it, e.g. write \`vars.X\` (plain text) instead of \`\${{ vars.X }}\`. See the v1.12.1 load-failure incident."
+              fail=1
+            fi
+          done < <(find . -type f -name action.yaml -not -path './node_modules/*')
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "✓ no composite-illegal \${{ }} contexts in any action manifest."
