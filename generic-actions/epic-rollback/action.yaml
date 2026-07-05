@@ -48,11 +48,12 @@ inputs:
   client_id:
     required: true
     description: >
-      Client ID of the [Agent] App. Mints three least-privilege org-wide tokens: read (issues +
-      pull-requests + contents read, for the ledger), write (contents + pull-requests + issues write,
-      for branches / revert commits / PRs / labels / the rollback-Epic issue), and an org-Projects
-      write token for the board reset. Org-wide (not per-repo) because a composite action can't loop
-      `create-github-app-token` over repos discovered at runtime.
+      Client ID of the [Agent] App. Mints three least-privilege tokens: a read token (issues +
+      pull-requests + contents read, org-wide, for the cross-repo ledger search), a write token
+      (contents + pull-requests + issues write, for branches / revert commits / PRs / labels / the
+      rollback-Epic issue) SCOPED via `repositories:` to just the reconstructed ledger's repos + the
+      planning repo — not org-wide — and minted only on a live, gate-cleared run, and an org-Projects
+      write token for the board reset (org-scoped, since `repositories:` does not apply to it).
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -171,11 +172,6 @@ runs:
         permission-pull-requests: read
         permission-contents: read
 
-    # Write token: branch push + revert commit (contents), open + label + auto-merge the revert PRs
-    # (pull-requests), and open the rollback-Epic issue + edit its body + apply the `epic:<M>` label
-    # (issues). It never APPROVES — the App authors these reverts and GitHub 422s a self-approval, so a
-    # human approves the wave. Minted unconditionally (an ephemeral installation token is not a
-    # mutation); every actual write is gated on dry_run==false in the script.
     # Reconstruct the epic:<N> ledger (READ-only) and derive the epic-scoped repo set. Emits `proceed`
     # (true only for a live run that cleared every gate), `ledger` (the reconstructed JSON — the single
     # source of truth the mutation step consumes), and `repos` (the ledger's repos + the planning repo,
@@ -211,6 +207,14 @@ runs:
         fi
         if [ -z "${REASON:-}" ]; then
           echo "::error::reason is required (it is the audit trail for the rollback)"
+          exit 1
+        fi
+        # planning_repo now feeds TWO sinks: the write token's `repositories:` scope (via the repos
+        # output) and the rollback-Epic issue's API path. Require a bare repo name so a stray value
+        # can't widen the token scope (a comma would add a repo) or break the `repos=` output (a
+        # newline). Mirrors the merge-gate / detect-partial-landing guard.
+        if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
           exit 1
         fi
         # BLAST-CAP bound feeds shell arithmetic + a `-gt` compare; require a positive integer.
@@ -512,6 +516,9 @@ runs:
         # Rehydrate the reconstructed ledger from the plan step — the single source of truth, and
         # exactly the repos the scoped write token was minted for. Recompute the derived sets the
         # mutation uses (repos = owner/name for the per-repo loop; task_n = the total Task count).
+        # INVARIANT (no-partial-rollback scope guarantee): the mutation MUST derive its repo set only
+        # from THIS ledger — never re-search the epic:<N> set here. The write token was scoped to
+        # exactly these repos (+ planning), so a repo from a fresh query would 403 mid-wave.
         ledger="$LEDGER"
         repos=$(printf '%s' "$ledger" | jq -r '[.[].repo] | unique | .[]')
         task_n=$(printf '%s' "$ledger" | jq -r '[.[].tasks[]] | unique | length')
