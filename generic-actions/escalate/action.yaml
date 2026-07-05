@@ -1,0 +1,534 @@
+name: escalate
+description: >
+  Pull a human in when the governance automation reaches a state it cannot self-resolve. One
+  centralized, versioned primitive so every workflow escalates the same way. Two channels — an
+  auto-filed board "ticket" (a marker-deduped tracking issue whose board Status is driven
+  explicitly, because closing an issue does NOT archive its board item) and a single loud "push"
+  (a SEV1 page to a chat webhook). Three blast-radius severities pick which channels fire:
+
+    SEV1  org inconsistent   → ticket + @mention + push   (the loud page)
+    SEV2  one repo blocked    → ticket + @mention          (someone should look)
+    SEV3  cleanup / advisory  → ticket, silent             (a durable record, no noise)
+
+  Dedup is by a stable `dedup_key`: the same condition re-firing updates the one open ticket
+  (bumping an occurrence counter and, for SEV1/SEV2, re-notifying) instead of spamming new issues.
+  Call it with `state: resolve` when the condition clears — it closes the ticket(s) AND drives the
+  board Status to a terminal value, so a resolved escalation can't zombie on the board.
+
+  Concurrency: this action cannot lock itself (a composite action can't set `concurrency`). Two
+  runs racing on the same `dedup_key` could each file a ticket — so the CALLER should set a
+  `concurrency:` group keyed by the dedup_key. As a backstop, `state: resolve` closes ALL tickets
+  sharing the key, so a race self-heals at resolution time.
+
+  Escalation is the EMERGENCY path: it is deliberately EXEMPT from the org-wide kill switch (the
+  STOP that pauses normal automation must never mute the channel that reports the automation is
+  stuck). Guard the SEV1 budget — with a single maintainer, a page that cries wolf trains the
+  human to ignore it, and a muted bot is an existential failure. Only genuine org-inconsistency
+  is SEV1.
+
+inputs:
+  client_id:
+    required: true
+    description: >
+      Client id for the org's [Agent] bot. Threaded through to board-write to drive the ticket's
+      board Status; the default GITHUB_TOKEN cannot see org-level Projects v2.
+  app_private_key:
+    required: true
+    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+  project_id:
+    required: true
+    description: >
+      Node id of the org "Tasks" board (PVT_…). Passed in per-org by the caller, the same way
+      client_id is. Find it with: gh project view <n> --owner <org> --format json.
+  severity:
+    required: true
+    description: >
+      Blast radius — sev1 | sev2 | sev3 (case-insensitive; a bare 1|2|3 is accepted). SEV1 pages,
+      SEV2 @mentions, SEV3 is a silent ticket. An unrecognized value is a hard error, never a
+      silent downgrade — a mistyped severity must not quietly turn a page into a silent note.
+  summary:
+    required: true
+    description: >
+      One-line human summary of the condition. Becomes the ticket title (prefixed with the
+      severity) and the first line of the push message. Newlines are collapsed to spaces.
+  dedup_key:
+    required: true
+    description: >
+      Stable identity for THIS condition (e.g. "stuck-hotfix-lock:service-auth" or
+      "stale-check:merge-gate:pr-123"). The same key re-firing updates the one open ticket instead
+      of opening a new one, and `state: resolve` closes the ticket(s) carrying it. Must not contain
+      a newline or the literal "-->" (it is embedded in an HTML-comment marker in the ticket body).
+  body:
+    required: false
+    default: ""
+    description: >
+      Optional longer Markdown detail for the ticket body (what happened, what to check). The body
+      is bot-owned and regenerated on each occurrence — humans add context in a comment, not inline.
+  state:
+    required: false
+    default: open
+    description: >
+      open (default) raises/updates the escalation; resolve closes the matching ticket(s) and
+      drives the board Status to `resolved_status`. resolve is a no-op when no ticket matches.
+  repo:
+    required: false
+    default: ${{ github.repository }}
+    description: The affected repository (owner/name). Defaults to the repo the workflow runs in.
+  epic:
+    required: false
+    default: ""
+    description: Optional Epic reference for context — a number (rendered as #N) or a URL.
+  run_url:
+    required: false
+    default: ""
+    description: >
+      Deep link to the run that raised the escalation. Defaults to THIS workflow run. Included in
+      the ticket and the push so a human lands on the evidence in one click.
+  runbook:
+    required: false
+    default: ""
+    description: >
+      Deep link to the runbook anchor for this condition (a rotted link is worse than none — the
+      skill-cleanup step validates every anchor callers pass here). Rendered in the ticket + push.
+  mention:
+    required: false
+    default: ""
+    description: >
+      Who to @mention for SEV1/SEV2 (e.g. "@kushuh" or a team). Empty means no ping even when the
+      severity would warrant one, so the action degrades gracefully before it is wired. @everyone /
+      @here are neutralized (the push sets allowed_mentions to users + roles only).
+  planning_repo:
+    required: false
+    default: ${{ github.repository_owner }}/.github
+    description: >
+      owner/name of the repo that holds tracking issues (the org planning repo). Defaults to the
+      current org's .github repo, where the board's issues live.
+  escalation_label:
+    required: false
+    default: escalation
+    description: >
+      Umbrella label put on every escalation ticket. Scopes the dedup list and gives humans one
+      board filter for all open escalations. Ensured (created if missing) before the first ticket.
+  board_status:
+    required: false
+    default: Triage
+    description: >
+      Board Status to drive an OPEN ticket to — an "a human must act" column. Triage fits: the
+      ticket has no PR, so nothing else writes its Status and escalate is its single writer.
+  resolved_status:
+    required: false
+    default: Applied
+    description: >
+      Board Status to drive a ticket to on `state: resolve`. Applied is the terminal meta status
+      the archive sweep later clears — set explicitly because closing the issue alone won't move it.
+  push_webhook:
+    required: false
+    default: ""
+    description: >
+      Chat webhook URL for the SEV1 push channel — currently a Discord channel webhook. Wire it
+      from the caller as `push_webhook: secrets.PUSH_WEBHOOK`; empty (unset) makes the push channel
+      a no-op (the ticket is still filed). Only SEV1 in `state: open` ever posts here.
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", log every intended issue/board/push action without performing it.
+
+outputs:
+  issue_number:
+    description: Number of the escalation ticket filed/updated (or the first of several on resolve; empty on a resolve no-op).
+    value: ${{ steps.ticket.outputs.issue_number }}
+  issue_url:
+    description: URL of the escalation ticket.
+    value: ${{ steps.ticket.outputs.issue_url }}
+  action:
+    description: What happened to the ticket — created | updated | resolved | noop.
+    value: ${{ steps.ticket.outputs.action }}
+  changed:
+    description: '"true" if a ticket was mutated, "false" on a dry-run or resolve no-op.'
+    value: ${{ steps.ticket.outputs.changed }}
+  pushed:
+    description: '"true" if a SEV1 push was delivered ("false"/empty otherwise).'
+    value: ${{ steps.push.outputs.pushed }}
+
+runs:
+  using: composite
+  steps:
+    # Validate + normalize everything up front, before any token is minted, so a bad severity or a
+    # malformed dedup_key fails loudly with nothing half-done. Also decides routing (do_push /
+    # do_mention), the target board Status, and cleans free-text (summary/mention) that lands in a
+    # log line — so later steps stay dumb and injection-safe.
+    - name: Resolve inputs and routing
+      id: resolve
+      shell: bash
+      env:
+        SEVERITY: ${{ inputs.severity }}
+        STATE: ${{ inputs.state }}
+        SUMMARY: ${{ inputs.summary }}
+        MENTION: ${{ inputs.mention }}
+        DEDUP_KEY: ${{ inputs.dedup_key }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
+        RUN_URL: ${{ inputs.run_url }}
+        BOARD_STATUS: ${{ inputs.board_status }}
+        RESOLVED_STATUS: ${{ inputs.resolved_status }}
+        PUSH_WEBHOOK: ${{ inputs.push_webhook }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        SERVER_URL: ${{ github.server_url }}
+        REPO_FULL: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        set -euo pipefail
+
+        sev=$(printf '%s' "${SEVERITY:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$sev" in
+          sev1 | 1) sev=sev1; sevlabel="SEV1 — org inconsistent" ;;
+          sev2 | 2) sev=sev2; sevlabel="SEV2 — one repo blocked" ;;
+          sev3 | 3) sev=sev3; sevlabel="SEV3 — cleanup / advisory" ;;
+          *) echo "::error::severity must be sev1|sev2|sev3 (got \"${SEVERITY:-}\")"; exit 1 ;;
+        esac
+
+        st=$(printf '%s' "${STATE:-open}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$st" in open | resolve) : ;; *) echo "::error::state must be open|resolve (got \"${STATE:-}\")"; exit 1 ;; esac
+
+        # dry_run is normalized here (severity/state are), so a "True"/" true " can't silently
+        # perform real mutations. Everything downstream reads this normalized value.
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$dry" in true | 1 | yes) dry=true ;; *) dry=false ;; esac
+
+        for v in SUMMARY DEDUP_KEY PLANNING_REPO; do
+          if [ -z "${!v:-}" ]; then echo "::error::$v is required"; exit 1; fi
+        done
+
+        # The dedup_key is embedded in an HTML-comment marker (<!-- escalate:key=... -->) and
+        # matched as an exact first body line; a newline or a stray "-->" would break the marker.
+        case "$DEDUP_KEY" in
+          *"-->"*) echo "::error::dedup_key must not contain the literal \"-->\""; exit 1 ;;
+        esac
+        if [ "$(printf '%s' "$DEDUP_KEY" | wc -l | tr -d '[:space:]')" != "0" ]; then
+          echo "::error::dedup_key must not contain a newline"; exit 1
+        fi
+
+        powner=${PLANNING_REPO%%/*}
+        pname=${PLANNING_REPO#*/}
+        if [ -z "$powner" ] || [ -z "$pname" ] || [ "$powner" = "$PLANNING_REPO" ]; then
+          echo "::error::planning_repo must be owner/name (got \"$PLANNING_REPO\")"; exit 1
+        fi
+
+        # Collapse newlines in the free-text that reaches a title / a log line, so it can't inject a
+        # ::workflow-command:: or break the single-line title. Body keeps its newlines (it's Markdown
+        # detail, written only to a --body-file, never echoed to stdout).
+        clean_summary=$(printf '%s' "$SUMMARY" | tr -d '\r' | tr '\n' ' ')
+        clean_mention=$(printf '%s' "${MENTION:-}" | tr -d '\r' | tr '\n' ' ')
+
+        # Default the run link to this very run so a human lands on the evidence in one click.
+        run_url="${RUN_URL:-}"
+        [ -z "$run_url" ] && run_url="${SERVER_URL}/${REPO_FULL}/actions/runs/${RUN_ID}"
+
+        # Routing. Push only for a genuine SEV1 page that is being RAISED and only when a webhook is
+        # wired (empty webhook = channel off). @mention for SEV1/SEV2 raises; SEV3 stays silent.
+        do_push=false
+        if [ "$sev" = "sev1" ] && [ "$st" = "open" ] && [ -n "${PUSH_WEBHOOK:-}" ]; then do_push=true; fi
+        do_mention=false
+        if { [ "$sev" = "sev1" ] || [ "$sev" = "sev2" ]; } && [ "$st" = "open" ]; then do_mention=true; fi
+
+        if [ "$st" = "resolve" ]; then target_status="$RESOLVED_STATUS"; else target_status="$BOARD_STATUS"; fi
+
+        {
+          echo "sev=$sev"
+          echo "state=$st"
+          echo "dry_run=$dry"
+          echo "sevlabel=$sevlabel"
+          echo "planning_owner=$powner"
+          echo "planning_name=$pname"
+          echo "run_url=$run_url"
+          echo "do_push=$do_push"
+          echo "do_mention=$do_mention"
+          echo "target_status=$target_status"
+          echo "clean_summary=$clean_summary"
+          echo "clean_mention=$clean_mention"
+        } >> "$GITHUB_OUTPUT"
+
+    # A token that can only touch issues (create/edit/close/comment/label) in the planning repo.
+    # The [Agent] App can do more; requesting only issues:write on the one repo bounds a leak.
+    - name: Mint issues token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ steps.resolve.outputs.planning_owner }}
+        repositories: ${{ steps.resolve.outputs.planning_name }}
+        permission-issues: write
+
+    # The ticket channel: find the open escalation carrying this dedup marker (a strongly consistent
+    # list read, never the eventually-consistent search index), then create / update / close it. The
+    # body is bot-owned and regenerated each occurrence.
+    - name: File or update the ticket
+      id: ticket
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
+        ESC_LABEL: ${{ inputs.escalation_label }}
+        DEDUP_KEY: ${{ inputs.dedup_key }}
+        STATE: ${{ steps.resolve.outputs.state }}
+        SEV: ${{ steps.resolve.outputs.sev }}
+        SEVLABEL: ${{ steps.resolve.outputs.sevlabel }}
+        SUMMARY: ${{ steps.resolve.outputs.clean_summary }}
+        BODY: ${{ inputs.body }}
+        REPO: ${{ inputs.repo }}
+        EPIC: ${{ inputs.epic }}
+        RUN_URL: ${{ steps.resolve.outputs.run_url }}
+        RUNBOOK: ${{ inputs.runbook }}
+        MENTION: ${{ steps.resolve.outputs.clean_mention }}
+        DO_MENTION: ${{ steps.resolve.outputs.do_mention }}
+        TARGET_STATUS: ${{ steps.resolve.outputs.target_status }}
+        DRY_RUN: ${{ steps.resolve.outputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        marker="<!-- escalate:key=${DEDUP_KEY} -->"
+        now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+        # Epic reference: a bare number links as #N; anything else is passed through (e.g. a URL).
+        epic_render=""
+        if [ -n "${EPIC:-}" ]; then
+          case "$EPIC" in
+            *[!0-9]*) epic_render="$EPIC" ;;
+            *) epic_render="#$EPIC" ;;
+          esac
+        fi
+
+        # Regenerate the whole (bot-owned) body. The marker is ALWAYS the first line — dedup matches
+        # it anchored there (not "contains" anywhere), so a marker pasted into prose can't false-match.
+        # first/count live in hidden markers so the next occurrence reads them back.
+        render_body() { # $1 = first-seen ISO, $2 = occurrence count
+          local first="$1" count="$2"
+          {
+            printf '%s\n' "$marker"
+            printf '<!-- escalate:first=%s -->\n' "$first"
+            printf '<!-- escalate:count=%s -->\n\n' "$count"
+            printf '**Severity:** %s\n\n' "$SEVLABEL"
+            printf '**Repo:** `%s`\n\n' "$REPO"
+            [ -n "$epic_render" ] && printf '**Epic:** %s\n\n' "$epic_render"
+            printf '**First seen:** %s · **Last seen:** %s · **Occurrences:** %s\n\n' "$first" "$now" "$count"
+            printf '%s\n' "$SUMMARY"
+            [ -n "${BODY:-}" ] && printf '\n%s\n' "$BODY"
+            printf '\n---\n\n'
+            [ -n "${RUN_URL:-}" ] && printf '**Run:** %s\n\n' "$RUN_URL"
+            [ -n "${RUNBOOK:-}" ] && printf '**Runbook:** %s\n\n' "$RUNBOOK"
+            printf '_Filed by the `escalate` action. This body is bot-owned and regenerated on each occurrence — add context in a comment, not inline._\n'
+            if [ "$DO_MENTION" = "true" ] && [ -n "${MENTION:-}" ]; then printf '\ncc %s\n' "$MENTION"; fi
+          } > "$RUNNER_TEMP/esc_body.md"
+        }
+
+        # jq predicate: the marker must be the EXACT first body line (CRLF-tolerant — GitHub stores
+        # bodies with CRLF). Reused by both the open (first match) and resolve (all matches) paths.
+        pred='.[] | select(((.body // "") | split("\n")[0] | rtrimstr("\r")) == $m)'
+
+        # Strongly consistent dedup. FAIL CLOSED on a list error (do NOT default to []): swallowing
+        # an API hiccup — likeliest during the very incident being escalated — would either spawn a
+        # duplicate ticket (open) or falsely report nothing to resolve (leaving a zombie).
+        # open looks only at OPEN tickets (a closed one means resolved → open a fresh ticket); resolve
+        # looks at ALL (so a ticket whose board drive failed after close still gets re-driven).
+        list_state=open
+        [ "$STATE" = "resolve" ] && list_state=all
+        if ! existing_json=$(gh issue list --repo "$PLANNING_REPO" --label "$ESC_LABEL" \
+          --state "$list_state" --json number,url,body,state --limit 200 2>"$RUNNER_TEMP/list.err"); then
+          echo "::error::could not list escalations in $PLANNING_REPO ($(tr '\n' ' ' < "$RUNNER_TEMP/list.err")) — failing rather than risk a duplicate ticket or a false resolve."
+          exit 1
+        fi
+
+        emit() { # $1 action $2 changed $3 number $4 node $5 url
+          {
+            echo "action=$1"; echo "changed=$2"
+            echo "issue_number=$3"; echo "issue_node_id=$4"; echo "issue_url=$5"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        # ---- resolve: close ALL tickets carrying the key (self-heals a create race); drive the
+        #      first (most recent) terminal via the board step ----
+        if [ "$STATE" = "resolve" ]; then
+          matches=$(printf '%s' "$existing_json" | jq -c --arg m "$marker" "$pred")
+          if [ -z "$matches" ]; then
+            echo "Nothing to resolve — no escalation for key \"$DEDUP_KEY\"." | tee -a "$GITHUB_STEP_SUMMARY"
+            emit noop false "" "" ""; exit 0
+          fi
+          n=$(printf '%s\n' "$matches" | grep -c '' || true)
+          [ "$n" -gt 1 ] && echo "::warning::$n tickets share dedup_key \"$DEDUP_KEY\" (a create race) — resolving all; set a caller concurrency group to prevent it."
+          first_num=""; first_url=""; first_node=""
+          while IFS= read -r row; do
+            [ -z "$row" ] && continue
+            num=$(printf '%s' "$row" | jq -r '.number')
+            url=$(printf '%s' "$row" | jq -r '.url')
+            istate=$(printf '%s' "$row" | jq -r '.state')
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry-run] would close #$num (state=$istate) and drive board Status → \"$TARGET_STATUS\"." | tee -a "$GITHUB_STEP_SUMMARY"
+            elif [ "$istate" = "OPEN" ]; then
+              gh issue close "$num" --repo "$PLANNING_REPO" --reason completed \
+                --comment "Resolved — the escalated condition cleared. See ${RUN_URL}." >/dev/null
+              echo "Resolved (closed) #$num." | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "#$num already closed — re-driving its board Status." | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            if [ -z "$first_num" ]; then
+              first_num="$num"; first_url="$url"
+              first_node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
+            fi
+          done <<< "$matches"
+          emit resolved "$([ "$DRY_RUN" = "true" ] && echo false || echo true)" "$first_num" "$first_node" "$first_url"
+          exit 0
+        fi
+
+        # ---- open: create a new ticket, or update the existing one ----
+        match=$(printf '%s' "$existing_json" | jq -c --arg m "$marker" "$pred" | head -1)
+
+        if [ -z "$match" ]; then
+          render_body "$now" 1
+          title="[$(printf '%s' "$SEV" | tr '[:lower:]' '[:upper:]')] $SUMMARY"
+          title=$(printf '%s' "$title" | cut -c1-200)
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "[dry-run] would FILE \"$title\" in $PLANNING_REPO (label $ESC_LABEL) and drive board Status → \"$TARGET_STATUS\"." | tee -a "$GITHUB_STEP_SUMMARY"
+            emit created false "" "" ""; exit 0
+          fi
+          # Ensure the umbrella label exists (idempotent) so `--label` on create can't fail on a
+          # fresh repo; repocfg may also declare it for board-view consistency.
+          gh label create "$ESC_LABEL" --repo "$PLANNING_REPO" --force \
+            --color B60205 --description "Automated governance escalation (escalate action)." >/dev/null 2>&1 || true
+          url=$(gh issue create --repo "$PLANNING_REPO" --title "$title" \
+            --body-file "$RUNNER_TEMP/esc_body.md" --label "$ESC_LABEL")
+          num=$(printf '%s' "$url" | grep -oE '[0-9]+$')
+          node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
+          echo "Filed escalation #$num ($url)." | tee -a "$GITHUB_STEP_SUMMARY"
+          emit created true "$num" "$node" "$url"
+          exit 0
+        fi
+
+        num=$(printf '%s' "$match" | jq -r '.number')
+        url=$(printf '%s' "$match" | jq -r '.url')
+        ebody=$(printf '%s' "$match" | jq -r '.body // ""')
+        # Guard both parses with a fallback (|| ...): under set -e a grep-no-match returns non-zero
+        # and would abort the step, killing the intended default below.
+        first=$(printf '%s' "$ebody" | grep -oE 'escalate:first=[^ ]+' | head -1 | sed 's/.*escalate:first=//') || first=""
+        [ -n "$first" ] || first="$now"
+        count=$(printf '%s' "$ebody" | grep -oE 'escalate:count=[0-9]+' | head -1 | grep -oE '[0-9]+' || echo 0)
+        # 10# forces base-10 so a hand-edited leading-zero count (e.g. 08) can't error as bad octal.
+        count=$((10#$count + 1))
+        render_body "$first" "$count"
+
+        if [ "$DRY_RUN" = "true" ]; then
+          note="[dry-run] would UPDATE #$num (occurrence $count) and drive board Status → \"$TARGET_STATUS\""
+          [ "$DO_MENTION" = "true" ] && note="$note; re-notify ${MENTION:-<no mention set>}"
+          echo "$note." | tee -a "$GITHUB_STEP_SUMMARY"
+          node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
+          emit updated false "$num" "$node" "$url"
+          exit 0
+        fi
+
+        gh issue edit "$num" --repo "$PLANNING_REPO" --body-file "$RUNNER_TEMP/esc_body.md" >/dev/null
+        # Editing the body does NOT notify anyone — so re-notify SEV1/SEV2 with a comment. SEV3 stays
+        # silent (body edit only), which is the whole point of the silent tier.
+        if [ "$DO_MENTION" = "true" ]; then
+          ping=""
+          [ -n "${MENTION:-}" ] && ping=" cc ${MENTION}"
+          gh issue comment "$num" --repo "$PLANNING_REPO" \
+            --body "🔁 Recurred (occurrence ${count}) — ${RUN_URL}.${ping}" >/dev/null
+        fi
+        node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
+        echo "Updated escalation #$num (occurrence $count)." | tee -a "$GITHUB_STEP_SUMMARY"
+        emit updated true "$num" "$node" "$url"
+
+    # The push channel FIRST (before the board write): one loud SEV1 page is the most critical
+    # output. `always()` so a failed ticket/token step can't swallow the page — do_push is already
+    # false unless resolve succeeded and set it, so always() can't over-fire. A composite step also
+    # cannot continue-on-error, so running the board write earlier could suppress the page; it runs
+    # last instead. A failed page after the ticket is filed exits non-zero on purpose — a page that
+    # silently didn't deliver is exactly the failure mode this whole action guards against.
+    - name: SEV1 push
+      id: push
+      if: ${{ always() && steps.resolve.outputs.do_push == 'true' }}
+      shell: bash
+      env:
+        PUSH_WEBHOOK: ${{ inputs.push_webhook }}
+        SUMMARY: ${{ steps.resolve.outputs.clean_summary }}
+        REPO: ${{ inputs.repo }}
+        EPIC: ${{ inputs.epic }}
+        RUN_URL: ${{ steps.resolve.outputs.run_url }}
+        RUNBOOK: ${{ inputs.runbook }}
+        MENTION: ${{ steps.resolve.outputs.clean_mention }}
+        ISSUE_URL: ${{ steps.ticket.outputs.issue_url }}
+        DRY_RUN: ${{ steps.resolve.outputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        # Build the message. Discord's `content` caps at 2000 CHARACTERS.
+        content="🚨 **[SEV1] ${SUMMARY}**"
+        content="${content}"$'\n'"repo: ${REPO}"
+        [ -n "${EPIC:-}" ] && content="${content} · epic: ${EPIC}"
+        [ -n "${RUN_URL:-}" ] && content="${content}"$'\n'"run: ${RUN_URL}"
+        [ -n "${RUNBOOK:-}" ] && content="${content}"$'\n'"runbook: ${RUNBOOK}"
+        [ -n "${ISSUE_URL:-}" ] && content="${content}"$'\n'"ticket: ${ISSUE_URL}"
+        [ -n "${MENTION:-}" ] && content="${content}"$'\n'"cc ${MENTION}"
+        # Cap the WHOLE message (head -c is total, not per-line) well under the limit, then iconv -c
+        # drops any multibyte char the byte-cut split in half (invalid UTF-8 → Discord would 400).
+        content=$(printf '%s' "$content" | head -c 1900)
+        content=$(printf '%s' "$content" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
+
+        # jq builds the JSON so the message can hold any character without escaping bugs. allowed_mentions
+        # restricts pings to users/roles — an accidental @everyone/@here in `mention` can't mass-ping.
+        # The payload shape is Discord's — swapping channels (Slack/ntfy) is a localized edit here.
+        payload=$(jq -n --arg c "$content" '{content: $c, allowed_mentions: {parse: ["users", "roles"]}}')
+
+        if [ "$DRY_RUN" = "true" ]; then
+          {
+            echo "[dry-run] would POST a SEV1 page to the push webhook:"
+            printf '%s\n' "$content"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # POST with a small retry + timeouts (a black-hole webhook must not hang the emergency page —
+        # composite steps can't set timeout-minutes). Discord returns 204 on success, 429 rate-limit,
+        # 5xx transient. curl doesn't --fail, so those codes are captured (not thrown) and retried.
+        max=3
+        code=000
+        for attempt in $(seq 1 "$max"); do
+          # Fallback OUTSIDE the substitution so a failed connection overwrites the code (curl already
+          # prints "000" via -w on failure; `|| echo 000` inside would append → "000000").
+          code=$(curl -sS --connect-timeout 5 --max-time 15 \
+            -o "$RUNNER_TEMP/esc_push_resp" -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data "$payload" "$PUSH_WEBHOOK") || code=000
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "SEV1 page delivered (HTTP $code)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::warning::SEV1 push attempt $attempt/$max failed (HTTP $code)."
+          [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
+        done
+
+        echo "::error::SEV1 push FAILED after $max attempts (last HTTP $code). The ticket was filed, but the loud page did not deliver — treat this as an escalation-channel outage and check the webhook."
+        echo "pushed=false" >> "$GITHUB_OUTPUT"
+        exit 1
+
+    # Drive the ticket's board Status LAST, through the single privileged board writer (reused, not
+    # re-implemented — keeps the board single-writer). `always()` so it still runs when a SEV1 page
+    # failed above: a filed ticket must never be left without a Status. Runs whenever a ticket exists
+    # (all severities get a board card). NO kill_switch is threaded ON PURPOSE: escalation is the
+    # emergency path, exempt from the org-wide HALT — the STOP must not mute the channel that reports
+    # the automation is stuck. board-write defaults kill_switch to "" = running. The board-write pin
+    # is a REMOTE ref (not ./): a `./` path in a composite action resolves against the CONSUMER's
+    # checkout, not this repo. `publish stamp` re-stamps this version at release, so the two co-version.
+    - name: Drive the ticket's board Status
+      id: board
+      if: ${{ always() && steps.ticket.outputs.issue_node_id != '' }}
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.15.4
+      with:
+        client_id: ${{ inputs.client_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+        project_id: ${{ inputs.project_id }}
+        content_id: ${{ steps.ticket.outputs.issue_node_id }}
+        field: Status
+        value: ${{ steps.resolve.outputs.target_status }}
+        add_if_missing: "true"
+        dry_run: ${{ steps.resolve.outputs.dry_run }}
