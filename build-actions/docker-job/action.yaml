@@ -93,6 +93,15 @@ runs:
     - uses: docker/build-push-action@v7
       with:
         context: ${{ inputs.context }}
+        # Persist the module + go-build cache across runs so an image whose Go
+        # sources are unchanged (or only partly changed) reuses the previous
+        # run's compilation instead of building cold. mode=max caches the
+        # intermediate builder stage (where `go build` runs), not just the final
+        # layers. Scope is per-image: each service/job image builds in its own
+        # job, so a shared scope would let those parallel builds evict each
+        # other's cache — the image name keeps them isolated.
+        cache-from: type=gha,scope=${{ inputs.image_name }}
+        cache-to: type=gha,mode=max,scope=${{ inputs.image_name }}
         load: true
         tags: ghcr.io/${{ inputs.image_name }}:test
         file: ${{ inputs.file }}
@@ -142,6 +151,10 @@ runs:
       id: build
       with:
         context: ${{ inputs.context }}
+        # Restore only: the push build shares this job's warm buildx cache from
+        # the load build above, so it re-tags/pushes the already-built layers
+        # rather than recompiling.
+        cache-from: type=gha,scope=${{ inputs.image_name }}
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
