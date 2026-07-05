@@ -126,8 +126,8 @@ inputs:
     default: ""
     description: >
       Chat webhook URL for the SEV1 push channel — currently a Discord channel webhook. Wire it
-      from the caller as `push_webhook: secrets.PUSH_WEBHOOK`; empty (unset) makes the push channel
-      a no-op (the ticket is still filed). Only SEV1 in `state: open` ever posts here.
+      from the caller as `push_webhook: secrets.ESCALATE_PUSH_WEBHOOK`; empty (unset) makes the push
+      channel a no-op (the ticket is still filed). Only SEV1 in `state: open` ever posts here.
   dry_run:
     required: false
     default: "false"
