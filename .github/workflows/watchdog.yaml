@@ -35,6 +35,19 @@ on:
         type: string
         default: "60"
         description: A hotfix run in_progress longer than this (minutes) is a stuck lock.
+      heartbeat_workflows:
+        required: false
+        type: string
+        default: ""
+        description: >
+          Comma-separated caller workflow file names IN THIS REPO to heartbeat-check — e.g.
+          "reconcile-board.yaml,watchdog.yaml". If any has no run within heartbeat_max_minutes its
+          cron is broken/disabled and the org has lost that fail-safe → SEV1. Empty = skip.
+      heartbeat_max_minutes:
+        required: false
+        type: string
+        default: "120"
+        description: A heartbeat workflow with no run newer than this (minutes) is considered down.
       mention:
         required: false
         type: string
@@ -77,8 +90,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           ORG: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
           STALE_MIN: ${{ inputs.stale_check_minutes }}
           STUCK_MIN: ${{ inputs.stuck_run_minutes }}
+          HEARTBEAT_WORKFLOWS: ${{ inputs.heartbeat_workflows }}
+          HEARTBEAT_MAX: ${{ inputs.heartbeat_max_minutes }}
         run: |
           set -euo pipefail
           now=$(date -u +%s)
@@ -149,6 +165,30 @@ jobs:
               fi
             done < <(printf '%s' "$runs" | jq -c '.[]?')
           done < <(printf '%s\n' "$repos")
+
+          # ---- HEARTBEAT / dead-man's-switch: the scheduled fail-safes (this sweep + reconcile-board)
+          # must keep RUNNING. If a caller workflow in THIS repo hasn't run within the window, its cron
+          # is broken/disabled and the org has silently lost that backstop — page it (SEV1: nothing is
+          # watching). This run catches a fail-safe that stopped-and-resumed or a SIBLING fail-safe
+          # that's down; a fail-safe that's still down is caught by its sibling's own heartbeat.
+          if [ -n "${HEARTBEAT_WORKFLOWS:-}" ]; then
+            IFS=',' read -ra hbwf <<< "$HEARTBEAT_WORKFLOWS"
+            for wf in "${hbwf[@]}"; do
+              wf=$(printf '%s' "$wf" | tr -d '[:space:]')
+              [ -n "$wf" ] || continue
+              last=$(gh run list --repo "$REPO" --workflow "$wf" --limit 1 --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || echo "")
+              if [ -z "$last" ]; then
+                add sev1 "Fail-safe '${wf}' has NEVER run in ${REPO}" "heartbeat:${REPO}:${wf}" "$REPO" \
+                  "The scheduled fail-safe \`${wf}\` has no runs — its cron may be disabled or misconfigured, so the org has lost this backstop."
+                continue
+              fi
+              age=$(( now - $(date -u -d "$last" +%s) ))
+              if [ "$age" -ge $(( HEARTBEAT_MAX * 60 )) ]; then
+                add sev1 "Fail-safe '${wf}' hasn't run in >${HEARTBEAT_MAX}m" "heartbeat:${REPO}:${wf}" "$REPO" \
+                  "The scheduled fail-safe \`${wf}\` last ran $(( age / 60 ))m ago (> ${HEARTBEAT_MAX}m threshold) — its cron is broken/disabled and the org has lost this backstop. Re-enable it."
+              fi
+            done
+          fi
 
           echo "findings=${findings}" >> "$GITHUB_OUTPUT"
           count=$(printf '%s' "$findings" | jq 'length')
