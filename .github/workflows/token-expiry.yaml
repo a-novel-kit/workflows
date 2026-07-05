@@ -32,9 +32,9 @@ jobs:
             ## Regenerate and update the secret
             https://github.com/settings/personal-access-tokens/new
             New fine-grained PAT
-             -> **owner**:            `${{ github.repository_owner }}`
-             -> **Scope**:             `All Repositories`
-             -> **Permissions**: `Administration (read-only)`
+             -> **owner**: ${{ github.repository_owner }}
+             -> **Scope**: All Repositories
+             -> **Permissions**: Administration (read-only)
 
             ```
             gh secret set BYPASS_AUDIT_PAT --org ${{ github.repository_owner }} --app actions --visibility all --body <pat>
