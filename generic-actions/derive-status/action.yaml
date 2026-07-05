@@ -176,7 +176,7 @@ runs:
       # Gated on `halted` too: a composite action has no early return, so the guard step's exit 0
       # does not stop this mutating step — it must be skipped explicitly when the org is halted.
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.halted != 'true' }}
-      uses: a-novel-kit/workflows/generic-actions/board-write@v1.16.0
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.16.1
       with:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
@@ -191,7 +191,7 @@ runs:
     - name: Stamp Start date (once)
       # Gated on `halted` too (see Write Status) — the guard's exit 0 cannot stop this later step.
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.activated == 'true' && steps.derive.outputs.halted != 'true' }}
-      uses: a-novel-kit/workflows/generic-actions/board-write@v1.16.0
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.16.1
       with:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
