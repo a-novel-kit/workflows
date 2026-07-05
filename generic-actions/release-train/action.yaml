@@ -1,0 +1,448 @@
+name: release train
+description: >
+  Release an entire Epic from one human decision (a-novel-kit/workflows#236). Given a landed Epic N,
+  reconstruct the set of repos its `epic:<N>` PRs merged into, derive each repo's semver bump from its
+  conventional-commit history, and drive each repo's OWN `release.yaml` (cross-repo workflow_dispatch)
+  to cut the release — any order, since an atomic Epic means the repos are independent. It records the
+  released tag per repo as a receipt on the Epic issue and is idempotent: a re-dispatch skips every
+  repo that has already shipped this Epic's merge (derived from live tags, never from the receipt), so
+  a partial train resumes cleanly.
+
+  It never cuts the release itself — each repo's `release.yaml` (`release-core`) owns the bump, tag,
+  push, and GitHub Release, minting its own repo-scoped `contents:write`. The orchestrator holds only
+  `actions:write` (dispatch + read runs) plus read scopes for the ledger and tag reads. `dry_run`
+  defaults on: it reconstructs the plan and dispatches each `release.yaml` with `dry_run=true` (a
+  rehearsal that runs to success but cuts no tag), reporting the per-repo bump it WOULD apply.
+
+  The single human gate is this dispatch itself (admin-gated + the protected `release` environment on
+  each repo). Cross-EPIC release ordering is manage-versions' concern, not this action's.
+
+inputs:
+  client_id:
+    required: true
+    description: >
+      [Agent] App client ID. Mints three least-privilege org-wide tokens: a READ token (issues +
+      pull-requests + contents read — the epic:<N> ledger search, the per-repo commit range for the
+      bump, and tag/release reads); a DISPATCH token (actions:write — trigger each repo's release.yaml
+      and poll the run); and an ISSUE token (issues:write, scoped to the planning repo — splice the
+      receipt block into the Epic body). It never mints a contents:write / push token: the release
+      itself is cut by each repo's release-core, which mints its own.
+  app_private_key:
+    required: true
+    description: Private key (PEM) of that App — the AGENT_BOT_PRIVATE_KEY org secret.
+  epic_number:
+    required: true
+    description: >
+      The Epic number N to release (numeric). Builds the `label:"epic:<N>"` search qualifier, so it is
+      re-validated numeric here (injection guard) even though the dispatch shell already checked it.
+  org:
+    required: false
+    default: ${{ github.repository_owner }}
+    description: >
+      Organization login. The `epic:<N>` search is scoped `org:<org>` and every token is installed
+      here. Defaults to the workflow's org.
+  planning_repo:
+    required: false
+    default: .github
+    description: >
+      Repository (name only; owner is `org`) where Epic issues live — the Epic issue whose body holds
+      the receipt block, and whose `automation:paused` label gates this run. Defaults to `.github`.
+  dry_run:
+    required: false
+    default: "true"
+    description: >
+      When "true" (default), reconstruct the plan and dispatch each release.yaml with dry_run=true —
+      a rehearsal that validates the release mechanics (bump computes, docs stamp, tag resolves) and
+      cuts NO tag. Set "false" to actually cut the releases (each repo is rehearsed first, then cut).
+  kill_switch:
+    required: false
+    default: ""
+    description: >
+      Org-level HALT, threaded from the caller as `kill_switch: vars.AGENT_KILL_SWITCH` (a composite
+      action cannot read the `vars` context itself, so the caller passes the variable's value as this
+      input). FAIL-SAFE: RUNNING only when the value (lowercased, whitespace-stripped) is an explicit
+      off-token — empty/unset, 0, off, false, no, disabled; ANYTHING ELSE engages the halt. When
+      engaged this action aborts LOUD (exit 1) as its FIRST step, before the admin check or any mint.
+
+runs:
+  using: composite
+  steps:
+    # Org-level HALT (read FIRST, before the admin check or any token mint): AGENT_KILL_SWITCH engaged
+    # → refuse to run. Cutting releases is a deliberate, un-halted decision, so this aborts loud rather
+    # than silently no-opping. FAIL-SAFE: running only for an explicit off-token.
+    - name: Halt guard (kill-switch)
+      shell: bash
+      env:
+        KILL_SWITCH: ${{ inputs.kill_switch }}
+      run: |
+        set -euo pipefail
+        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+          "" | 0 | off | false | no | disabled) : ;;
+          *)
+            echo "::error::AGENT_KILL_SWITCH engaged — [Agent] automation is halted org-wide; refusing to run the release train. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) before releasing."
+            exit 1
+            ;;
+        esac
+
+    # Defense in depth: re-check the dispatcher is a repo admin HERE, as the action's own step — the
+    # gate must not live ONLY in the caller's dispatch shell. Copied from epic-rollback: the
+    # collaborator-permission endpoint needs only Metadata:read; `|| echo ""` keeps a failed lookup
+    # from tripping `set -e` (empty permission fails closed).
+    - name: Require admin (defense in depth)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO_FULL: ${{ github.repository }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
+        if [ "$perm" != "admin" ]; then
+          echo "::error::release-train is admin-only; @${ACTOR} has permission '${perm:-none}'."
+          exit 1
+        fi
+        echo "@${ACTOR} is a repo admin (action-level re-check passed)." | tee -a "$GITHUB_STEP_SUMMARY"
+
+    # Read token: the ledger search + per-repo commit-range + tag/release reads span every repo in the
+    # org, and the single-repo GITHUB_TOKEN can't see siblings. Least privilege: read only.
+    - name: Mint read token
+      id: read
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.org }}
+        permission-issues: read
+        permission-pull-requests: read
+        permission-contents: read
+
+    # Dispatch token: actions:write to trigger each repo's release.yaml (the dispatches endpoint) and
+    # read the runs. NOT contents:write — the orchestrator never pushes; release-core mints its own.
+    - name: Mint dispatch token
+      id: dispatch
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.org }}
+        permission-actions: write
+
+    # Issue token: issues:write, scoped to the planning repo only, to splice the receipt block into the
+    # Epic body (best-effort audit; the receipt is NEVER the source of truth for resume — live tags are).
+    - name: Mint issue token
+      id: issue
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.org }}
+        repositories: ${{ inputs.planning_repo }}
+        permission-issues: write
+
+    - name: Reconstruct the Epic, derive bumps, drive each release.yaml
+      shell: bash
+      env:
+        # Default GH_TOKEN is the READ token (bare `gh` for every read); the dispatch + issue tokens are
+        # applied inline at their call sites so a read can't hold a write scope.
+        GH_TOKEN: ${{ steps.read.outputs.token }}
+        DISPATCH_TOKEN: ${{ steps.dispatch.outputs.token }}
+        ISSUE_TOKEN: ${{ steps.issue.outputs.token }}
+        APP_SLUG: ${{ steps.dispatch.outputs.app-slug }}
+        ORG: ${{ inputs.org }}
+        EPIC: ${{ inputs.epic_number }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+
+        # ---- Validate untrusted inputs before they reach a search grammar / an API path ------------
+        if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
+          echo "::error::epic_number must be an integer, got \"${EPIC:-}\""; exit 1
+        fi
+        if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
+          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""; exit 1
+        fi
+        if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""; exit 1
+        fi
+        # dry_run defaults on; only the literal "false" mutates (cuts real releases).
+        dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
+
+        # ---- Per-Epic pause: refuse to release a paused Epic (best-effort read; a read error does NOT
+        # block — the admin gate already fenced this dispatch). Mirrors epic-rollback.
+        paused=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.labels[].name' 2>/dev/null || echo "")
+        if printf '%s\n' "$paused" | grep -qx 'automation:paused'; then
+          echo "::error::epic:#${EPIC} is automation:paused — remove the \`automation:paused\` label from the Epic issue before releasing it."
+          exit 1
+        fi
+
+        # ================= Shared helpers ==========================================================
+
+        # PR-search node: number + repo + the authoritative-squash cross-check inputs.
+        SEARCH_Q='query($q:String!,$cursor:String){
+          search(query:$q, type:ISSUE, first:100, after:$cursor){
+            pageInfo{ hasNextPage endCursor }
+            nodes{ ... on PullRequest{ number repository{ nameWithOwner } } } } }'
+
+        # Page an ISSUE search to completion, retrying transient GraphQL errors; prints the aggregated
+        # PR-node array. Returns 1 on failure so the caller fails closed. (epic-rollback pattern.)
+        search_prs() { # $1 = search query
+          local search="$1" cursor="" agg='[]' data page ok args
+          while :; do
+            ok=false
+            for attempt in 1 2 3; do
+              args=(-f query="$SEARCH_Q" -f q="$search")
+              [ -n "$cursor" ] && args+=(-f cursor="$cursor")
+              if data=$(gh api graphql "${args[@]}" 2>&1) \
+                && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
+                ok=true; break
+              fi
+              [ "$attempt" -lt 3 ] && sleep 2
+            done
+            [ "$ok" = true ] || { printf 'search_prs failed for "%s": %s\n' "$search" "$data" >&2; return 1; }
+            page=$(printf '%s' "$data" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')
+            agg=$(jq -s '.[0] + .[1]' <(printf '%s' "$agg") <(printf '%s' "$page"))
+            [ "$(printf '%s' "$data" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
+            cursor=$(printf '%s' "$data" | jq -r '.data.search.pageInfo.endCursor')
+          done
+          printf '%s' "$agg"
+        }
+
+        # REST authority for one PR: prints "<merged> <merge_commit_sha>" (the search index lags).
+        rest_pr_merge() { # $1=owner/repo $2=number
+          local data
+          for attempt in 1 2 3; do
+            if data=$(gh api "repos/$1/pulls/$2" 2>/dev/null); then
+              printf '%s' "$data" | jq -r '"\(.merged) \(.merge_commit_sha // "")"'; return 0
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          printf 'rest_pr_merge failed for %s#%s\n' "$1" "$2" >&2; return 1
+        }
+
+        # Newest release tag of a repo, honoring the sub-dir Go-module prefix (<dir>/vX.Y.Z): list all
+        # tag refs, keep the v-namespaced ones, take the semver-max. Empty if the repo has no tag yet.
+        latest_tag() { # $1=owner/repo
+          gh api "repos/$1/git/matching-refs/tags" --paginate --jq '.[].ref' 2>/dev/null \
+            | sed 's|refs/tags/||' | grep -E '(^|/)v[0-9]' | sort -V | tail -n1 || true
+        }
+
+        # Does <tag> contain <merge_sha>? compare base=merge_sha head=tag: status ahead|identical means
+        # the tag is at or after the merge, i.e. the sibling shipped in that release. (render-epic-status.)
+        tag_contains() { # $1=owner/repo $2=tag $3=merge_sha
+          local st
+          st=$(gh api "repos/$1/compare/$3...$2" --jq '.status' 2>/dev/null || echo "")
+          [ "$st" = "ahead" ] || [ "$st" = "identical" ]
+        }
+
+        # Does a PUBLISHED GitHub Release exist for <tag>? (A tag-only botched cut has none → not shipped.)
+        release_exists() { # $1=owner/repo $2=tag
+          gh api "repos/$1/releases/tags/$2" --silent >/dev/null 2>&1
+        }
+
+        # Derive the semver bump for a repo from its commit range since the last tag. Highest-wins:
+        # `!`/BREAKING footer → major; any feat → minor; else patch. Empty range → "none" (skip). Uses
+        # the compare API (no checkout); reads the full commit message so the BREAKING footer is visible.
+        derive_bump() { # $1=owner/repo $2=last_tag ("" for a first release)
+          local repo="$1" last="$2" msgs bump="patch"
+          if [ -z "$last" ]; then
+            # First release: bump the scan over the recent default-branch history; default minor if quiet.
+            msgs=$(gh api "repos/$repo/commits" --jq '.[].commit.message' 2>/dev/null || echo "")
+            [ -z "$msgs" ] && { printf 'minor'; return 0; }
+          else
+            local base head
+            head=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null || echo "")
+            [ -n "$head" ] || { printf 'patch'; return 0; }
+            # 250-commit cap on compare is far above a single Epic's range.
+            msgs=$(gh api "repos/$repo/compare/${last}...${head}" --jq '.commits[].commit.message' 2>/dev/null || echo "")
+            # Empty range → nothing new since the last tag → skip this repo.
+            [ -z "$(printf '%s' "$msgs" | tr -d '[:space:]')" ] && { printf 'none'; return 0; }
+          fi
+          # Scan per-commit: a `!` before the `:` (after an optional scope) or a BREAKING[ -]CHANGE
+          # footer line forces major; any feat forces minor; otherwise patch.
+          if printf '%s\n' "$msgs" | grep -qE '^[[:alpha:]]+(\([^)]*\))?!:'; then bump="major"
+          elif printf '%s\n' "$msgs" | grep -qE '^BREAKING[ -]CHANGE:'; then bump="major"
+          elif printf '%s\n' "$msgs" | grep -qE '^feat(\([^)]*\))?!?:'; then bump="minor"
+          fi
+          printf '%s' "$bump"
+        }
+
+        # Dispatch a repo's release.yaml and return the created run id. Uses return_run_details so the
+        # dispatch response carries workflow_run_id directly (GA 2026-02-19); falls back to correlating
+        # by the App-bot actor + a created>= timestamp when the endpoint answers 204 (older behavior).
+        dispatch_release() { # $1=owner/repo $2=default_branch $3=release_type $4=run_dry(true|false) $5=since_ts
+          local repo="$1" ref="$2" rt="$3" rdry="$4" ts="$5" body resp run_id
+          body=$(jq -n --arg ref "$ref" --arg rt "$rt" --argjson dry "$rdry" \
+            '{ref:$ref, inputs:{release_type:$rt, dry_run:$dry}, return_run_details:true}')
+          resp=$(printf '%s' "$body" | GH_TOKEN="$DISPATCH_TOKEN" gh api \
+            "repos/$repo/actions/workflows/release.yaml/dispatches" --method POST --input - 2>/dev/null || echo "")
+          run_id=$(printf '%s' "$resp" | jq -r '.workflow_run_id // empty' 2>/dev/null || echo "")
+          if [ -z "$run_id" ]; then
+            # 204 fallback: find the newest workflow_dispatch run on release.yaml by the App bot since ts.
+            local enc; enc=$(printf '%s' "$ts" | sed 's/:/%3A/g')
+            for attempt in 1 2 3 4 5; do
+              sleep 3
+              run_id=$(GH_TOKEN="$DISPATCH_TOKEN" gh api \
+                "repos/$repo/actions/workflows/release.yaml/runs?event=workflow_dispatch&actor=${APP_SLUG}%5Bbot%5D&created=%3E%3D${enc}&per_page=5" \
+                --jq '.workflow_runs[0].id // empty' 2>/dev/null || echo "")
+              [ -n "$run_id" ] && break
+            done
+          fi
+          [ -n "$run_id" ] || { echo "::error::could not resolve the dispatched run id for ${repo}" >&2; return 1; }
+          printf '%s' "$run_id"
+        }
+
+        # Poll a run to completion. Prints the conclusion (success/failure/…). Special-cases the protected
+        # `release` environment approval gate (waiting/action_required): a fully-autonomous train needs
+        # the bot allowed as an approver, so surface it and stop waiting rather than hang forever.
+        poll_run() { # $1=owner/repo $2=run_id
+          local repo="$1" run_id="$2" i st cc
+          for i in $(seq 1 120); do   # ~20 min cap at 10s
+            read -r st cc < <(GH_TOKEN="$DISPATCH_TOKEN" gh api "repos/$repo/actions/runs/$run_id" \
+              --jq '"\(.status) \(.conclusion // "")"' 2>/dev/null || echo "unknown ")
+            case "$st" in
+              completed) printf '%s' "$cc"; return 0 ;;
+              waiting | action_required)
+                echo "::error::${repo} run ${run_id} is parked at '${st}' — the protected \`release\` environment needs an approval the [Agent] can't give. Allow the bot as a reviewer or relax the env, then resume." >&2
+                printf 'blocked'; return 0 ;;
+            esac
+            sleep 10
+          done
+          echo "::error::${repo} run ${run_id} did not complete within the poll window" >&2
+          printf 'timeout'; return 0
+        }
+
+        # ================= 1. Discover the Epic's landed repos =====================================
+        echo "## 🚂 Release train — epic:#${EPIC} (org=${ORG})" | tee -a "$GITHUB_STEP_SUMMARY"
+        echo "Requested by @${ACTOR}. dry_run=${dry}." | tee -a "$GITHUB_STEP_SUMMARY"
+
+        if ! cands=$(search_prs "is:pr is:merged label:\"epic:${EPIC}\" org:${ORG}"); then
+          echo "::error::could not reconstruct the Epic (GraphQL search failed after retries)"; exit 1
+        fi
+        # One row per repo: keep the authoritative merge_commit_sha of ANY merged sibling in that repo
+        # (all of the Epic's PRs in a repo land on the same base, so any one anchors the ship-test).
+        ledger='[]'
+        n=$(printf '%s' "$cands" | jq 'length')
+        for i in $(seq 0 $((n - 1)) 2>/dev/null); do
+          [ "$n" -gt 0 ] || break
+          repo=$(printf '%s' "$cands" | jq -r ".[$i].repository.nameWithOwner")
+          number=$(printf '%s' "$cands" | jq -r ".[$i].number")
+          # first sibling per repo wins the anchor
+          if printf '%s' "$ledger" | jq -e --arg r "$repo" 'any(.repo==$r)' >/dev/null; then continue; fi
+          if ! info=$(rest_pr_merge "$repo" "$number"); then
+            echo "::error::REST read failed for ${repo}#${number} — cannot confirm the Epic; aborting."; exit 1
+          fi
+          merged=$(printf '%s' "$info" | awk '{print $1}'); sha=$(printf '%s' "$info" | awk '{print $2}')
+          [ "$merged" = "true" ] && [ -n "$sha" ] || continue
+          ledger=$(jq -cn --argjson acc "$ledger" --arg r "$repo" --arg s "$sha" '$acc + [{repo:$r, sha:$s}]')
+        done
+        repo_n=$(printf '%s' "$ledger" | jq 'length')
+        if [ "$repo_n" -eq 0 ]; then
+          echo "::error::no merged PRs carry epic:${EPIC} in org ${ORG} — nothing to release."; exit 1
+        fi
+        echo "### ${repo_n} repo(s) in epic:#${EPIC}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        # ================= 2. Per repo: resume-skip → derive bump → rehearse → cut → receipt =======
+        receipts='[]'   # [{repo, tag, status}]  status: shipped|rehearsed|skipped|nochange|failed
+        had_failure=false
+        for i in $(seq 0 $((repo_n - 1))); do
+          repo=$(printf '%s' "$ledger" | jq -r ".[$i].repo")
+          merge_sha=$(printf '%s' "$ledger" | jq -r ".[$i].sha")
+          owner="${repo%%/*}"; name="${repo#*/}"
+
+          # -- Resume-skip: already shipped THIS Epic's merge? (live tags, never the receipt) ---------
+          last=$(latest_tag "$repo")
+          if [ -n "$last" ] && tag_contains "$repo" "$last" "$merge_sha" && release_exists "$repo" "$last"; then
+            echo "- ⏭️  **${repo}** already shipped epic:#${EPIC} in \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"skipped"}]')
+            continue
+          fi
+
+          # -- Derive the bump from the commit range ------------------------------------------------
+          bump=$(derive_bump "$repo" "$last")
+          if [ "$bump" = "none" ]; then
+            echo "- ⏭️  **${repo}** has nothing new since \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"nochange"}]')
+            continue
+          fi
+          default_branch=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null || echo "master")
+
+          # -- Rehearse: dispatch release.yaml with dry_run=true; it must run to success -------------
+          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" true "$ts"); then
+            had_failure=true
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed"}]')
+            echo "- ❌ **${repo}** — could not dispatch the rehearsal." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+          fi
+          concl=$(poll_run "$repo" "$rid")
+          if [ "$concl" != "success" ]; then
+            had_failure=true
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg c "$concl" '$a + [{repo:$r, tag:null, status:("failed:"+$c)}]')
+            echo "- ❌ **${repo}** — rehearsal (${bump}) did not pass (${concl}); not cutting." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+          fi
+
+          if [ "$dry" != "false" ]; then
+            echo "- 🧪 **${repo}** — rehearsed **${bump}** OK (dry-run; no tag cut)." | tee -a "$GITHUB_STEP_SUMMARY"
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg b "$bump" '$a + [{repo:$r, tag:$b, status:"rehearsed"}]')
+            continue
+          fi
+
+          # -- Cut: snapshot tags, dispatch live, poll, recover the new tag from the tag-set diff -----
+          before=$(gh api "repos/$repo/git/matching-refs/tags" --paginate --jq '.[].ref' 2>/dev/null \
+            | sed 's|refs/tags/||' | grep -E '(^|/)v[0-9]' | sort -u || true)
+          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" false "$ts"); then
+            had_failure=true
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed"}]')
+            echo "- ❌ **${repo}** — could not dispatch the live release." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+          fi
+          concl=$(poll_run "$repo" "$rid")
+          after=$(gh api "repos/$repo/git/matching-refs/tags" --paginate --jq '.[].ref' 2>/dev/null \
+            | sed 's|refs/tags/||' | grep -E '(^|/)v[0-9]' | sort -u || true)
+          newtags=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep -E '(^|/)v[0-9]' || true)
+          newtag=$(printf '%s\n' "$newtags" | sort -V | tail -n1)
+          if [ "$concl" = "success" ] && [ -n "$newtag" ]; then
+            echo "- ✅ **${repo}** — released \`${newtag}\` (${bump})." | tee -a "$GITHUB_STEP_SUMMARY"
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$newtag" '$a + [{repo:$r, tag:$t, status:"shipped"}]')
+          else
+            had_failure=true
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg c "$concl" '$a + [{repo:$r, tag:null, status:("failed:"+$c)}]')
+            echo "::error::${repo} — live release ${bump} did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A botched tag-only cut self-corrects on the next re-dispatch (resume re-cuts a repo with no published Release)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+        done
+
+        # ================= 3. Receipt block on the Epic body (best-effort audit — NOT authority) ====
+        table=$(printf '%s' "$receipts" | jq -r '
+          "| Repo | Result |", "| --- | --- |",
+          (.[] | "| \(.repo) | \(
+            if .status=="shipped" then "✅ `"+.tag+"`"
+            elif .status=="skipped" then "⏭️ already `"+.tag+"`"
+            elif .status=="rehearsed" then "🧪 rehearsed "+.tag
+            elif .status=="nochange" then "— nothing new"
+            else "❌ "+.status end)) |")')
+        body_block=$(printf '<!-- release-train:receipts:start -->\n### 🚂 Release train — epic:#%s (%s)\n%s\n<!-- release-train:receipts:end -->' \
+          "$EPIC" "$(date -u +%Y-%m-%dT%H:%MZ)" "$table")
+        cur=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null || echo "")
+        # Splice in place if exactly one balanced marker pair exists; else strip any stray markers and
+        # append — a hand-edit can never drop the human prose (render-epic-status splice discipline).
+        stripped=$(printf '%s' "$cur" | grep -vxE '<!-- release-train:receipts:(start|end) -->' | sed '/<!-- release-train:receipts:start -->/,/<!-- release-train:receipts:end -->/d' 2>/dev/null || printf '%s' "$cur")
+        newbody=$(printf '%s\n\n%s' "$stripped" "$body_block")
+        printf '%s' "$newbody" | GH_TOKEN="$ISSUE_TOKEN" gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" \
+          --method PATCH --field body=@- >/dev/null 2>&1 \
+          || echo "::warning::could not update the receipt block on epic:#${EPIC} (issues:write?) — the table is still in the run summary."
+
+        # ================= 4. Final status =========================================================
+        {
+          echo ""
+          printf '%s\n' "$table"
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+        if [ "$had_failure" = true ]; then
+          echo "::error::Release train for epic:#${EPIC} finished with failures — re-dispatch to resume (shipped repos are skipped from live tags; only the unshipped are re-cut)."
+          exit 1
+        fi
+        if [ "$dry" != "false" ]; then
+          echo "DRY RUN — rehearsed every repo, cut no tag. Re-dispatch with dry_run=false to release." | tee -a "$GITHUB_STEP_SUMMARY"
+        else
+          echo "Release train for epic:#${EPIC} complete." | tee -a "$GITHUB_STEP_SUMMARY"
+        fi
