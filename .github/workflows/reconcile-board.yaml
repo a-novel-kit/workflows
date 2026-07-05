@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.12.0
+      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.12.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -150,7 +150,7 @@ jobs:
           permission-contents: read
           permission-issues: read
           permission-pull-requests: read
-      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.12.0
+      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.12.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -174,7 +174,7 @@ jobs:
       matrix:
         pr: ${{ fromJSON(needs.enumerate.outputs.epic_prs) }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.12.0
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.12.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -194,7 +194,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.12.0
+      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.12.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -213,7 +213,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.12.0
+      - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.12.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
