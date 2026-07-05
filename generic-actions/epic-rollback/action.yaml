@@ -48,11 +48,12 @@ inputs:
   client_id:
     required: true
     description: >
-      Client ID of the [Agent] App. Mints three least-privilege org-wide tokens: read (issues +
-      pull-requests + contents read, for the ledger), write (contents + pull-requests + issues write,
-      for branches / revert commits / PRs / labels / the rollback-Epic issue), and an org-Projects
-      write token for the board reset. Org-wide (not per-repo) because a composite action can't loop
-      `create-github-app-token` over repos discovered at runtime.
+      Client ID of the [Agent] App. Mints three least-privilege tokens: a read token (issues +
+      pull-requests + contents read, org-wide, for the cross-repo ledger search), a write token
+      (contents + pull-requests + issues write, for branches / revert commits / PRs / labels / the
+      rollback-Epic issue) SCOPED via `repositories:` to just the reconstructed ledger's repos + the
+      planning repo — not org-wide — and minted only on a live, gate-cleared run, and an org-Projects
+      write token for the board reset (org-scoped, since `repositories:` does not apply to it).
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -171,46 +172,20 @@ runs:
         permission-pull-requests: read
         permission-contents: read
 
-    # Write token: branch push + revert commit (contents), open + label + auto-merge the revert PRs
-    # (pull-requests), and open the rollback-Epic issue + edit its body + apply the `epic:<M>` label
-    # (issues). It never APPROVES — the App authors these reverts and GitHub 422s a self-approval, so a
-    # human approves the wave. Minted unconditionally (an ephemeral installation token is not a
-    # mutation); every actual write is gated on dry_run==false in the script.
-    - name: Mint write token
-      id: write
-      uses: actions/create-github-app-token@v3
-      with:
-        client-id: ${{ inputs.client_id }}
-        private-key: ${{ inputs.app_private_key }}
-        owner: ${{ inputs.org }}
-        permission-contents: write
-        permission-pull-requests: write
-        permission-issues: write
-
-    # Board token: org-Projects write, and nothing else — bounds a leak of this token to board edits
-    # (the same isolation board-write uses).
-    - name: Mint board token
-      id: board
-      uses: actions/create-github-app-token@v3
-      with:
-        client-id: ${{ inputs.client_id }}
-        private-key: ${{ inputs.app_private_key }}
-        owner: ${{ inputs.org }}
-        permission-organization-projects: write
-
-    - name: Reconstruct ledger, generate reverts, land + reset
+    # Reconstruct the epic:<N> ledger (READ-only) and derive the epic-scoped repo set. Emits `proceed`
+    # (true only for a live run that cleared every gate), `ledger` (the reconstructed JSON — the single
+    # source of truth the mutation step consumes), and `repos` (the ledger's repos + the planning repo,
+    # the scope the write token is then minted for). Splitting reconstruct from mutate is what lets the
+    # write token be scoped to exactly the epic's repos — and not minted at all on a dry run.
+    - name: Reconstruct ledger + plan (read-only)
+      id: plan
       shell: bash
       env:
-        # Default GH_TOKEN is the READ token (bare `gh` for every ledger read); the write + board
-        # tokens are applied inline at the mutating call sites so a read can't hold a write scope.
+        # Read token only — this step performs no writes.
         GH_TOKEN: ${{ steps.read.outputs.token }}
-        WRITE_TOKEN: ${{ steps.write.outputs.token }}
-        BOARD_TOKEN: ${{ steps.board.outputs.token }}
-        APP_SLUG: ${{ steps.write.outputs.app-slug }}
         ORG: ${{ inputs.org }}
         EPIC: ${{ inputs.epic_number }}
         REASON: ${{ inputs.reason }}
-        PROJECT_ID: ${{ inputs.project_id }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
         DRY_RUN: ${{ inputs.dry_run }}
         MAX_ROLLBACK_REPOS: ${{ inputs.max_rollback_repos }}
@@ -232,6 +207,14 @@ runs:
         fi
         if [ -z "${REASON:-}" ]; then
           echo "::error::reason is required (it is the audit trail for the rollback)"
+          exit 1
+        fi
+        # planning_repo now feeds TWO sinks: the write token's `repositories:` scope (via the repos
+        # output) and the rollback-Epic issue's API path. Require a bare repo name so a stray value
+        # can't widen the token scope (a comma would add a repo) or break the `repos=` output (a
+        # newline). Mirrors the merge-gate / detect-partial-landing guard.
+        if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
           exit 1
         fi
         # BLAST-CAP bound feeds shell arithmetic + a `-gt` compare; require a positive integer.
@@ -451,11 +434,95 @@ runs:
           exit 1
         fi
 
+        # ---- Emit the ledger + the epic-scoped repo set for the gated, scoped write-token mint -----
+        # repos = the ledger's repo NAMES (the owner comes from the token's `owner:`) plus the planning
+        # repo, where the rollback-Epic issue + labels are written. create-github-app-token then scopes
+        # the write token to EXACTLY these repos, so a leaked token cannot reach a repo outside this
+        # rollback. The ledger is passed verbatim so the mutation reverts precisely what was scoped —
+        # one reconstruction, no time-of-check/time-of-use drift against a re-search.
+        repos_csv=$(printf '%s' "$ledger" | jq -r --arg pr "$PLANNING_REPO" '([.[].repo | split("/")[1]] + [$pr]) | unique | join(",")')
+        {
+          echo "repos=${repos_csv}"
+          echo "ledger<<__ROLLBACK_LEDGER__"
+          printf '%s\n' "$ledger"
+          echo "__ROLLBACK_LEDGER__"
+        } >> "$GITHUB_OUTPUT"
+
         if [ "$dry" != "false" ]; then
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "DRY RUN — no writes performed. Re-dispatch with dry_run=false to open + land the reverts." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "DRY RUN — no writes performed (no write token minted). Re-dispatch with dry_run=false to open + land the reverts." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
+        # Live run, every gate cleared → authorize the scoped write-token mint + the mutation step.
+        echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+    # Write token — minted ONLY on a live, gate-cleared run (steps.plan.outputs.proceed) and SCOPED
+    # via repositories: to just the epic's repos + the planning repo, not org-wide. Branch push + revert
+    # commit (contents), open + label + auto-merge the revert PRs (pull-requests), and open the
+    # rollback-Epic issue + edit its body + apply epic:<M> (issues). It never APPROVES — the App authors
+    # these reverts and GitHub 422s a self-approval, so a human approves the wave.
+    - name: Mint scoped write token
+      id: write
+      if: ${{ steps.plan.outputs.proceed == 'true' }}
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.org }}
+        repositories: ${{ steps.plan.outputs.repos }}
+        permission-contents: write
+        permission-pull-requests: write
+        permission-issues: write
+
+    # Board token: org-Projects write only — bounds a leak of this token to board edits. Also minted
+    # only on a live, gate-cleared run. organization-projects:write is org-scoped (repositories: does
+    # not apply), so it cannot be epic-scoped; gating the mint is the only blast-radius lever, and it
+    # suffices — no board token exists on a dry run.
+    - name: Mint board token
+      id: board
+      if: ${{ steps.plan.outputs.proceed == 'true' }}
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.org }}
+        permission-organization-projects: write
+
+    # Generate the reverts, land the wave, reset the board — the MUTATIONS, gated on the live-run flag
+    # and running with the SCOPED write token. Rehydrates the reconstructed ledger from the plan step
+    # (the single source of truth the scoped token was minted for).
+    - name: Generate reverts, land + reset
+      id: mutate
+      if: ${{ steps.plan.outputs.proceed == 'true' }}
+      shell: bash
+      env:
+        # Default GH_TOKEN is the READ token (bare `gh` for any read); the write + board tokens are
+        # applied inline at the mutating call sites so a read can't hold a write scope.
+        GH_TOKEN: ${{ steps.read.outputs.token }}
+        WRITE_TOKEN: ${{ steps.write.outputs.token }}
+        BOARD_TOKEN: ${{ steps.board.outputs.token }}
+        APP_SLUG: ${{ steps.write.outputs.app-slug }}
+        LEDGER: ${{ steps.plan.outputs.ledger }}
+        ORG: ${{ inputs.org }}
+        EPIC: ${{ inputs.epic_number }}
+        REASON: ${{ inputs.reason }}
+        PROJECT_ID: ${{ inputs.project_id }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+
+        # Rehydrate the reconstructed ledger from the plan step — the single source of truth, and
+        # exactly the repos the scoped write token was minted for. Recompute the derived sets the
+        # mutation uses (repos = owner/name for the per-repo loop; task_n = the total Task count).
+        # INVARIANT (no-partial-rollback scope guarantee): the mutation MUST derive its repo set only
+        # from THIS ledger — never re-search the epic:<N> set here. The write token was scoped to
+        # exactly these repos (+ planning), so a repo from a fresh query would 403 mid-wave.
+        ledger="$LEDGER"
+        repos=$(printf '%s' "$ledger" | jq -r '[.[].repo] | unique | .[]')
+        task_n=$(printf '%s' "$ledger" | jq -r '[.[].tasks[]] | unique | length')
+        MARKER="ROLLBACK-HELD.md"
 
         # ================= MUTATIONS (dry_run==false only) =====================================
 
