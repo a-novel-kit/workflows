@@ -522,7 +522,7 @@ runs:
     - name: Drive the ticket's board Status
       id: board
       if: ${{ always() && steps.ticket.outputs.issue_node_id != '' }}
-      uses: a-novel-kit/workflows/generic-actions/board-write@v1.15.7
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.16.0
       with:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
