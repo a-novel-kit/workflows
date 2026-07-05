@@ -91,11 +91,12 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `publish-actions`
 
-| Action         | Purpose                                                    |
-| -------------- | ---------------------------------------------------------- |
-| `auto-release` | Turn a pushed tag into a GitHub release with notes.        |
-| `npm`          | Publish the workspace packages to the GitHub registry.     |
-| `release-core` | Cut a release in CI: bump the version, tag, push, release. |
+| Action                | Purpose                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `auto-release`        | Turn a pushed tag into a GitHub release with notes.                                            |
+| `npm`                 | Publish the workspace packages to the GitHub registry.                                         |
+| `release-core`        | Cut a release in CI: bump the version, tag, push, release.                                     |
+| `release-core-hotfix` | Cut a hotfix release from an ephemeral branch off a release tag (patch, tag-only, not-latest). |
 
 ### Reusable workflows
 
