@@ -1,18 +1,12 @@
 # Daily fine-grained-PAT expiry reminders to a dedicated Discord channel (TOKEN_EXPIRY_WEBHOOK).
-# Currently watches the bypass-audit read PAT. warn_days is set above the token's lifetime so it
-# posts EVERY run — a daily countdown (green→red as it runs down). The `push` trigger (scoped to the
-# action + this caller) is for iterating on the message from a branch, since workflow_dispatch and
-# schedule only fire on the default branch; production is the daily schedule.
+# Watches BYPASS_AUDIT_PAT. warn_days is set above the token's lifetime so it posts EVERY run — a
+# daily countdown (green→red as it runs down). workflow_dispatch is there for an ad-hoc check.
 name: token-expiry
 
 on:
   schedule:
     - cron: "0 8 * * *" # daily 08:00 UTC
   workflow_dispatch:
-  push:
-    paths:
-      - generic-actions/token-expiry-notify/**
-      - .github/workflows/token-expiry.yaml
 
 jobs:
   bypass-audit-pat:
