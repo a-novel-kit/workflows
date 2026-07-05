@@ -69,7 +69,7 @@ inputs:
     default: ""
     description: >
       Org-level HALT. The caller threads the org variable through as
-      `kill_switch: ${{ vars.AGENT_KILL_SWITCH }}`, because a composite action cannot read the
+      `kill_switch: vars.AGENT_KILL_SWITCH`, because a composite action cannot read the
       `vars` context itself. FAIL-SAFE semantics: the gate is RUNNING only when the value
       (lowercased, whitespace-stripped) is an explicit off-token — empty/unset, `0`, `off`, `false`,
       `no`, or `disabled`; ANYTHING ELSE engages the halt. A fat-fingered `halt` / `engage` / garbage
@@ -153,7 +153,7 @@ runs:
         # only when the value (lowercased, whitespace-stripped) is an explicit off-token —
         # empty/unset, 0, off, false, no, disabled; ANYTHING ELSE (a fat-fingered "halt"/"engage", or
         # garbage) ENGAGES the halt. Threaded in as an input because a composite action cannot read
-        # the `vars` context — the caller passes ${{ vars.AGENT_KILL_SWITCH }}, so the value is
+        # the `vars` context — the caller passes vars.AGENT_KILL_SWITCH, so the value is
         # resolved with NO token and NO API call before anything gates. A required-check gate must
         # HOLD (post `failure`), never skip: a skipped or neutral required check passes OPEN. So when
         # halted we post `failure` on the head (which also dequeues a live merge_group) and stop. This

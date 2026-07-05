@@ -21,7 +21,7 @@ inputs:
     required: false
     default: ""
     description: >
-      Org-level HALT, threaded from the caller as `kill_switch: ${{ vars.AGENT_KILL_SWITCH }}`
+      Org-level HALT, threaded from the caller as `kill_switch: vars.AGENT_KILL_SWITCH`
       (a composite action cannot read the `vars` context itself). FAIL-SAFE: this action is RUNNING
       only when the value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset,
       0, off, false, no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) engages the halt.
