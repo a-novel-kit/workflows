@@ -57,6 +57,9 @@ jobs:
       fix_head: ${{ steps.prepare.outputs.fix_head }}
       version: ${{ steps.cut.outputs.version }}
       tag: ${{ steps.cut.outputs.tag }}
+      cleanup_task: ${{ steps.cleanup_task.outputs.number }}
+      reconcile_pr: ${{ steps.reconcile.outputs.pr_url }}
+      reconcile_conflicted: ${{ steps.reconcile.outputs.conflicted }}
     steps:
       # Bot-authenticated full checkout: the baseline tag, the fix, and the ephemeral-branch push all
       # need the bot's rights + complete history and tags. release-core-hotfix re-checks-out the
@@ -70,6 +73,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+          permission-issues: write # open the per-hotfix cleanup Task
       - uses: actions/checkout@v7
         with:
           token: ${{ steps.token.outputs.token }}
@@ -140,6 +144,9 @@ jobs:
           # records the origin SHA, one of the signals the reconcile uses to prove the fix reached
           # master). Empty fix_ref = a drill that just re-cuts the baseline.
           if [ -n "${FIX_REF:-}" ]; then
+            # Make sure the fix commits are present (a fix pushed to another branch isn't fetched by
+            # the default checkout); harmless when FIX_REF is already reachable.
+            git fetch origin "$FIX_REF" 2>/dev/null || true
             git cherry-pick -x "$FIX_REF"
             echo "Applied fix \`$FIX_REF\`." | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -148,6 +155,11 @@ jobs:
 
           fix_head=$(git rev-parse HEAD)
           git push origin "$ephemeral"
+
+          # Restore the main workspace to the triggering commit so the local `./` actions (the cut,
+          # reconcile, and escalate steps) resolve from the CURRENT ref — not the old baseline this
+          # step checked out. release-core-hotfix re-checks-out the ephemeral branch from the remote.
+          git checkout --force "$GITHUB_SHA" >/dev/null 2>&1
 
           {
             echo "baseline=$baseline"
@@ -166,14 +178,72 @@ jobs:
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
           dry_run: ${{ inputs.dry_run }}
 
-      # TODO(hotfix reconcile — next layer): cherry-pick -x the baseline..fix_head range onto master
-      # via a squash hotfix-reconcile/* PR (epic-rollback conflict-degrade skeleton), machine-verify
-      # it reached master (patch-id / -x trailer / Closes #cleanup-task), open the per-hotfix cleanup
-      # Task, and escalate on failure. The ephemeral branch (the fix, pre-bump) is intentionally kept
-      # until the reconcile records fix_head; that layer deletes it once reconciled.
+      # The per-hotfix cleanup Task: a durable, escalatable marker that the fix MUST reach the default
+      # branch. The reconcile PR `Closes` it; if it lingers open the fix never reconciled and the
+      # watchdog escalates. Per-hotfix identity (the version in the title) so concurrent hotfixes don't
+      # collapse into one marker. Only opened once the cut succeeded (nothing to reconcile otherwise).
+      - name: Open cleanup Task
+        id: cleanup_task
+        if: ${{ steps.cut.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          LINE: ${{ inputs.line }}
+          VERSION: ${{ steps.cut.outputs.version }}
+          BASELINE: ${{ steps.prepare.outputs.baseline }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "[dry-run] would open a hotfix-reconcile cleanup Task for v${VERSION}." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "number=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh label create hotfix-reconcile --repo "$REPO" --force \
+            --color FBCA04 --description "Tracks a hotfix's forward-port to the default branch." >/dev/null 2>&1 || true
+          body=$(printf 'The **v%s** hotfix (patched from `%s`) must be forward-ported to the default branch, or a later minor cut from it would silently reintroduce the fixed bug.\n\nA `hotfix-reconcile/*` PR `Closes` this Task when the fix lands. While this Task stays open the hotfix has NOT reconciled — the watchdog escalates a rotting reconcile.' "$VERSION" "$BASELINE")
+          url=$(gh issue create --repo "$REPO" --label hotfix-reconcile \
+            --title "Reconcile hotfix v${VERSION} to the default branch" --body "$body")
+          num=$(printf '%s' "$url" | grep -oE '[0-9]+$')
+          echo "Opened cleanup Task #${num} (${url})." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "number=$num" >> "$GITHUB_OUTPUT"
 
-      # Until the reconcile layer lands, clean up the ephemeral branch here so a drill leaves no trace
-      # (the tag, if cut, preserves the commit). always() so an earlier failure still cleans up.
+      # Forward-port the fix diff (never the bump) to the default branch — a squash hotfix-reconcile/*
+      # PR that Closes the cleanup Task, degrading a conflict to a draft PR. Runs BEFORE the ephemeral
+      # branch is deleted (it fetches the fix commits from it).
+      - name: Reconcile fix to the default branch
+        id: reconcile
+        if: ${{ steps.cut.outcome == 'success' }}
+        uses: ./generic-actions/hotfix-reconcile
+        with:
+          client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
+          app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
+          source_ref: ${{ steps.prepare.outputs.ephemeral }}
+          baseline: ${{ steps.prepare.outputs.baseline }}
+          fix_head: ${{ steps.prepare.outputs.fix_head }}
+          line: ${{ inputs.line }}
+          cleanup_task: ${{ steps.cleanup_task.outputs.number }}
+          dry_run: ${{ inputs.dry_run }}
+
+      # Any failure in the hotfix path pulls a human in — the emergency path must be loud, never silent.
+      # Passes the dispatch severity; a wired ESCALATE_PUSH_WEBHOOK pages SEV1. dry-run just logs it.
+      - name: Escalate on failure
+        if: ${{ failure() }}
+        uses: ./generic-actions/escalate
+        with:
+          client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
+          app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
+          project_id: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
+          severity: ${{ inputs.severity }}
+          summary: "hotfix v${{ inputs.line }}.x failed"
+          dedup_key: "hotfix-failed:${{ github.repository }}:${{ inputs.line }}"
+          repo: ${{ github.repository }}
+          mention: ${{ vars.SEV1_MENTION }}
+          push_webhook: ${{ secrets.ESCALATE_PUSH_WEBHOOK }}
+          dry_run: ${{ inputs.dry_run }}
+
+      # Clean up the ephemeral branch — AFTER the reconcile fetched its commits. The tag (if cut)
+      # preserves the fix commit. always() so an earlier failure still cleans up.
       - name: Clean up ephemeral branch
         if: ${{ always() && steps.prepare.outputs.ephemeral != '' }}
         env:
