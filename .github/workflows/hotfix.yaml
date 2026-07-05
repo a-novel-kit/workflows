@@ -29,7 +29,7 @@ on:
           - sev1
         default: sev2
       dry_run:
-        description: Cut & report only — no tag, push, or release
+        description: No tag, release, reconcile PR, or cleanup Task — but a transient ephemeral branch is still pushed then deleted (the cut checks it out from the remote)
         required: false
         type: boolean
         default: true
@@ -90,19 +90,28 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          deadline=$((SECONDS + 1800)) # 30-minute cap → then abort (retry after the release)
+          deadline=$((SECONDS + 1800)) # 30-minute cap → then abort (retry after the release lands)
           while :; do
+            # Only an ACTIVELY-RUNNING release blocks: in_progress or queued. A release parked in
+            # `waiting` (pending its environment approval) is deliberately IGNORED — it may never be
+            # approved, and the emergency hotfix must not spin on an unapproved dispatch. A gh error →
+            # "err", retry (don't abort the emergency path on a transient API blip).
             active=$(gh run list --repo "$REPO" --workflow release.yaml --limit 30 \
-              --json status --jq '[.[] | select(.status | IN("in_progress","queued","waiting","requested","pending"))] | length')
-            [ "$active" -eq 0 ] && break
+              --json status --jq '[.[] | select(.status | IN("in_progress","queued"))] | length' 2>/dev/null || echo "err")
+            if [ "$active" = "0" ]; then
+              break
+            elif [ "$active" = "err" ]; then
+              echo "::warning::couldn't read in-flight release runs (gh error) — retrying in 30s."
+            else
+              echo "⏳ ${active} release run(s) actively in flight — waiting 30s before re-checking…"
+            fi
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::a release has been in flight > 30m — aborting the hotfix; retry once it completes."
+              echo "::error::a release has been actively in flight (or its status unreadable) > 30m — aborting the hotfix; retry once it completes."
               exit 1
             fi
-            echo "⏳ $active in-flight release run(s) — waiting 30s before re-checking…"
             sleep 30
           done
-          echo "✓ no release in flight — proceeding." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "✓ no release actively in flight — proceeding." | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Resolve the baseline (latest live tag on the line), cut the ephemeral branch from it, apply
       # the fix, and capture fix-HEAD BEFORE the bump — that SHA range (baseline..fix_head) is what
@@ -144,6 +153,9 @@ jobs:
           # records the origin SHA, one of the signals the reconcile uses to prove the fix reached
           # master). Empty fix_ref = a drill that just re-cuts the baseline.
           if [ -n "${FIX_REF:-}" ]; then
+            # Reject a value git could parse as an option (leading dash) — fix_ref flows into git fetch
+            # + cherry-pick as a revision.
+            case "$FIX_REF" in -*) echo "::error::fix_ref must not begin with '-' (got \"$FIX_REF\")."; exit 1 ;; esac
             # Make sure the fix commits are present (a fix pushed to another branch isn't fetched by
             # the default checkout); harmless when FIX_REF is already reachable.
             git fetch origin "$FIX_REF" 2>/dev/null || true
@@ -184,7 +196,7 @@ jobs:
       # collapse into one marker. Only opened once the cut succeeded (nothing to reconcile otherwise).
       - name: Open cleanup Task
         id: cleanup_task
-        if: ${{ steps.cut.outcome == 'success' }}
+        if: ${{ success() && steps.cut.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -213,7 +225,7 @@ jobs:
       # branch is deleted (it fetches the fix commits from it).
       - name: Reconcile fix to the default branch
         id: reconcile
-        if: ${{ steps.cut.outcome == 'success' }}
+        if: ${{ success() && steps.cut.outcome == 'success' }}
         uses: ./generic-actions/hotfix-reconcile
         with:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
@@ -224,6 +236,20 @@ jobs:
           line: ${{ inputs.line }}
           cleanup_task: ${{ steps.cleanup_task.outputs.number }}
           dry_run: ${{ inputs.dry_run }}
+
+      # If the reconcile short-circuited (the fix was ALREADY on the default branch, patch-id match),
+      # no PR closes the cleanup Task — so close it here, or the watchdog would later escalate a hotfix
+      # that did reach master. reconcile has no issues:write; the git token (this job) does.
+      - name: Close cleanup Task (already reconciled)
+        if: ${{ success() && steps.reconcile.outputs.already_on_master == 'true' && steps.cleanup_task.outputs.number != '' && steps.cleanup_task.outputs.number != '0' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ steps.cleanup_task.outputs.number }}
+        run: |
+          gh issue close "$NUM" --repo "$REPO" --reason completed \
+            --comment "The fix was already on the default branch (patch-id match) — no reconcile PR was needed."
+          echo "Closed cleanup Task #${NUM} (fix already on the default branch)." | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Any failure in the hotfix path pulls a human in — the emergency path must be loud, never silent.
       # Passes the dispatch severity; a wired ESCALATE_PUSH_WEBHOOK pages SEV1. dry-run just logs it.

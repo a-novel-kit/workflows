@@ -6,6 +6,9 @@ on:
       - "**"
     branches:
       - "**"
+      # The transient ephemeral hotfix branches (pushed then deleted by hotfix.yaml, incl. dry-run
+      # drills) never become PRs, so there's nothing to lint — skip them to avoid churn runs.
+      - "!hotfix/**"
 
 # Cancel an in-progress lint run when a newer commit lands on the same ref —
 # the superseded run's result is never useful. Safe here because this workflow
