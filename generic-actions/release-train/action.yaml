@@ -255,11 +255,13 @@ runs:
           return 2
         }
 
-        # Does a PUBLISHED GitHub Release exist for <tag>? (A tag-only botched cut has none.) Retries.
+        # Does a PUBLISHED GitHub Release exist for <tag>? (A tag-only botched cut has none.) Retries all
+        # failures 3× (can't cheaply distinguish a definitive 404 from a transient error over --silent);
+        # any persistent failure returns 1 → fail-closed to "botched", which is loud and self-heals on
+        # a re-dispatch, so a transient blip at worst costs one extra loud-and-recoverable cycle.
         release_exists() { # $1=owner/repo $2=tag
           for attempt in 1 2 3; do
             if gh api "repos/$1/releases/tags/$2" --silent >/dev/null 2>&1; then return 0; fi
-            # 404 is a definitive "no release" (retry only ambiguous failures): probe once more then decide.
             [ "$attempt" -lt 3 ] && sleep 1
           done
           return 1
@@ -347,12 +349,17 @@ runs:
         # strip any stray marker LINES and append one fresh region — a hand-edit can never drop the
         # human prose, and stale content never accumulates. Prints the new body.
         splice_body() { # $1=current body   $2=new region (incl. its markers)
-          local body="$1" block="$2" s='<!-- release-train:receipts:start -->' e='<!-- release-train:receipts:end -->' ns ne
+          local body="$1" block="$2" s='<!-- release-train:receipts:start -->' e='<!-- release-train:receipts:end -->' ns ne sl el
           ns=$(printf '%s\n' "$body" | grep -cxF "$s" || true)
           ne=$(printf '%s\n' "$body" | grep -cxF "$e" || true)
-          if [ "$ns" = "1" ] && [ "$ne" = "1" ]; then
-            printf '%s\n' "$body" | awk -v s="$s" -v e="$e" -v blk="$block" '
-              $0==s { print blk; skip=1; next } $0==e { skip=0; next } !skip { print }'
+          sl=$(printf '%s\n' "$body" | grep -nxF "$s" | head -1 | cut -d: -f1)
+          el=$(printf '%s\n' "$body" | grep -nxF "$e" | head -1 | cut -d: -f1)
+          # In-place replace ONLY for a well-formed single pair with START before END (render-epic-status
+          # discipline) — an END-before-START hand-edit must fall through to strip+append, never eat prose.
+          # BLK via the environment (ENVIRON), not -v, so awk does not interpret backslash escapes.
+          if [ "$ns" = "1" ] && [ "$ne" = "1" ] && [ -n "$sl" ] && [ -n "$el" ] && [ "$sl" -lt "$el" ]; then
+            printf '%s\n' "$body" | BLK="$block" awk -v s="$s" -v e="$e" '
+              $0==s { print ENVIRON["BLK"]; skip=1; next } $0==e { skip=0; next } !skip { print }'
           else
             { printf '%s\n' "$body" | grep -vxF "$s" | grep -vxF "$e"; printf '\n%s' "$block"; }
           fi
@@ -417,7 +424,10 @@ runs:
             echo "- ❌ **${repo}** — tag read failed after retries; skipping (fail-closed, never assume first-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ -n "$last" ]; then
-            tag_contains "$repo" "$last" "$merge_sha"; tc=$?
+            # Capture via `|| tc=$?` — a bare `tag_contains ...; tc=$?` would let the function's
+            # non-zero return (1 = not-yet-shipped, the normal case; 2 = read error) trip `set -e` and
+            # abort the whole action before tc is read. The `||` list suspends set -e through the call.
+            tc=0; tag_contains "$repo" "$last" "$merge_sha" || tc=$?
             if [ "$tc" -eq 2 ]; then
               had_failure=true
               receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:compare"}]')
@@ -499,9 +509,11 @@ runs:
           if [ "$concl" = "success" ] && [ -n "$newtag" ]; then
             echo "- ✅ **${repo}** — released \`${newtag}\` (${bump})." | tee -a "$GITHUB_STEP_SUMMARY"
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$newtag" '$a + [{repo:$r, tag:$t, status:"shipped"}]')
-          elif [ "$concl" = "success" ] && release_exists "$repo" "$last"; then
-            # Ran clean but the new tag isn't visible yet AND no better signal — record success, let
-            # resume confirm from live tags (it self-heals; never double-releases).
+          elif [ "$concl" = "success" ]; then
+            # Ran clean but the new tag isn't visible yet (ref-index lag) — the run succeeded, so a tag
+            # WAS cut; record success with a null tag and let resume confirm it from live tags (it
+            # self-heals; never double-releases). (Gating on the run conclusion alone — NOT on the OLD
+            # tag's Release, which is absent for a first-release repo.)
             echo "- ✅ **${repo}** — release ${bump} ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"shipped"}]')
           else
