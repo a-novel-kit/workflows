@@ -112,7 +112,7 @@ runs:
         # caller's regen Markdown.
         desc="## ⏳ [Token] ${TOKEN_NAME} - ${days} days left"$'\n'"-# Expires ${exp}${pctline}"
         if [ -n "${REGEN_MD:-}" ]; then
-          desc="${desc}"$'\n'"${REGEN_MD}"
+          desc="${desc}"$'\n\n'"${REGEN_MD}"
         fi
         desc=$(printf '%s' "$desc" | head -c 3900)
         desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true

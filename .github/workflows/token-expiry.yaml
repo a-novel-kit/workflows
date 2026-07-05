@@ -29,7 +29,6 @@ jobs:
           warn_days: "400"
           lifetime_days: "366"
           regen_md: |
-            ## Regenerate and update the secret
             [New fine-grained PAT](https://github.com/settings/personal-access-tokens/new)
              -> **owner**: ${{ github.repository_owner }}
              -> **Scope**: All Repositories
