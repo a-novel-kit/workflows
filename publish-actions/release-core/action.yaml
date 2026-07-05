@@ -1,10 +1,9 @@
 name: release core
 description: >
-  Cut a release in CI: bump the version (workspace-aware, no pnpm), refresh doc
-  version refs (prepublish:doc / `a-novel publish stamp`), commit, tag, push,
-  and create the GitHub Release — and output the computed version for the
-  downstream build/publish jobs. The release-type selector and the protected
-  `release` environment live in the caller (the per-repo release workflow).
+  Cut a release in CI: bump the version (package.json, workspace-aware), stamp
+  in-repo version refs, commit, push the tags (a root vX.Y.Z plus any sub-module
+  tags — see plan.cjs), and create the GitHub Release. The release-type selector
+  and the protected `release` environment live in the caller.
 
 inputs:
   release_type:
@@ -32,8 +31,11 @@ outputs:
     description: The bumped version (e.g. 1.2.3).
     value: ${{ steps.cut.outputs.version }}
   tag:
-    description: The release tag — vX.Y.Z, or <subdir>/vX.Y.Z for a sub-directory Go module.
+    description: The root release tag — always vX.Y.Z.
     value: ${{ steps.cut.outputs.tag }}
+  tags:
+    description: Every tag cut, newline-separated — root vX.Y.Z plus any <subdir>/vX.Y.Z sub-module tags.
+    value: ${{ steps.cut.outputs.tags }}
 
 runs:
   using: composite
@@ -94,8 +96,7 @@ runs:
       uses: actions/setup-go@v6
       with:
         go-version: stable
-        # Nothing in this repo's Go (if any) is built here — we only `go install`
-        # the a-novel CLI — so skip the module cache and its "no go.sum" warning.
+        # Only `go install` the a-novel CLI here; no build, so skip the cache.
         cache: false
     - name: Install a-novel CLI (for stamp)
       if: ${{ steps.stamp.outputs.needed == 'true' }}
@@ -125,68 +126,49 @@ runs:
         git config user.name "${APP_SLUG}[bot]"
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
-        # Bump the root + every workspace member package.json with a small Node
-        # script instead of `pnpm version`. In CI's cold pnpm store `pnpm version`
-        # runs pnpm's supply-chain verification ("Verifying lockfile against
-        # supply-chain policies") and fails the release whenever any transitive
-        # dep is younger than minimumReleaseAge — a race that has nothing to do
-        # with cutting a release, and the `--config.*` flags don't reach that
-        # path. A version bump needs no dependency resolution (a package's own
-        # version isn't recorded in the lockfile), so the script just rewrites the
-        # version field — no resolution, no supply-chain pass. See bump.cjs.
+        # Version bump (package.json, root + workspace members). Plain Node, not
+        # `pnpm version`, to skip pnpm's cold-store supply-chain pass. See bump.cjs.
         node "$GITHUB_ACTION_PATH/bump.cjs"
 
-        # Refresh vX.Y.Z references in docs/config to the new version, before the
-        # commit — `a-novel publish stamp`, invoked via the prepublish:doc script.
-        # Gated on the detector so a repo without that script never invokes pnpm.
-        #
-        # PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false stops pnpm from running an
-        # install before the script. The stamp only needs the a-novel CLI (already
-        # installed), never node_modules; that pre-run install would otherwise need
-        # npm-registry auth (private @a-novel deps -> 401) and re-run the
-        # supply-chain verification. It's an env var (not a --config flag) so the
-        # script's nested `pnpm` calls inherit it; npm_config_* is ignored by pnpm.
+        # Refresh doc version refs (a-novel publish stamp) where that script exists.
+        # The env var skips pnpm's pre-run install, which would need npm-registry auth.
         if [ "$STAMP_NEEDED" = "true" ]; then
           PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm run prepublish:doc
         fi
 
         version=$(node -p "require('./package.json').version")
 
-        # Tag prefix: a sub-directory Go module releases as <dir>/vX.Y.Z (that is
-        # how Go resolves it); a root module or a JS-only repo uses plain vX.Y.Z.
-        # The pathspec also matches lookalikes (cargo.mod), so require an exact
-        # go.mod basename. No bash arrays here — keep it portable and testable.
-        gomods=$(git ls-files '*go.mod' | grep -E '(^|/)go\.mod$' || true)
-        count=$(printf '%s' "$gomods" | grep -c . || true)
-        prefix=""
-        if [ "$count" -gt 1 ]; then
-          echo "::error::multiple Go modules — no single release tag; tag manually:"
-          printf '%s\n' "$gomods"
-          exit 1
-        elif [ "$count" -eq 1 ]; then
-          d=$(dirname "$gomods")
-          [ "$d" != "." ] && prefix="$d/"
-        fi
-        tag="${prefix}v${version}"
+        # Stamp in-repo version refs and compute the tags (root vX.Y.Z plus any
+        # sub-module tags). Add an ecosystem in plan.cjs, never here.
+        tags=$(node "$GITHUB_ACTION_PATH/plan.cjs")
+        root_tag="v${version}"
 
         {
           echo "version=$version"
-          echo "tag=$tag"
+          echo "tag=$root_tag"
+          echo "tags<<__TAGS__"
+          printf '%s\n' "$tags"
+          echo "__TAGS__"
         } >> "$GITHUB_OUTPUT"
-        echo "Release **$tag** (bump: $RELEASE_TYPE)" | tee -a "$GITHUB_STEP_SUMMARY"
+        {
+          echo "Release **$version** (bump: $RELEASE_TYPE) — tags:"
+          printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
+        } | tee -a "$GITHUB_STEP_SUMMARY"
 
         if [ "$DRY_RUN" = "true" ]; then
-          echo "- [dry-run] bumped to $version; would tag \`$tag\`, push to \`$BRANCH\`, and release — no mutation." \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "[dry-run] no commit, tag, push, or release." | tee -a "$GITHUB_STEP_SUMMARY"
           git checkout -- . 2>/dev/null || true
           exit 0
         fi
 
         git add -A
         git commit -m "$version"
-        git tag "$tag"
         git push origin "HEAD:$BRANCH"
-        git push origin "refs/tags/$tag"
-        gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+        while IFS= read -r t; do
+          [ -n "$t" ] || continue
+          git tag "$t"
+          git push origin "refs/tags/$t"
+        done <<< "$tags"
+        gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes
-        echo "- ✓ released \`$tag\`" | tee -a "$GITHUB_STEP_SUMMARY"
+        echo "- ✓ released $(printf '%s\n' "$tags" | grep -c .) tag(s), root \`$root_tag\`" | tee -a "$GITHUB_STEP_SUMMARY"
