@@ -133,7 +133,15 @@ runs:
         # baseline..fix_head '+' (not upstream) or '-' (already upstream, by patch-id). Zero '+' → the
         # fix is already reconciled (e.g. a re-run after the PR merged, or the fix also went to master
         # directly) → close the loop without a redundant PR.
-        pending=$(git -C "$dir" cherry "origin/${default_branch}" "$FIX_HEAD" "$BASELINE" 2>/dev/null | grep -c '^+' || true)
+        # Capture git-cherry's output and check its EXIT explicitly — piping straight into grep would
+        # swallow a real error (unresolvable baseline/fix_head) as "0 pending" and skip the reconcile
+        # on a genuine failure (fails open on the emergency path).
+        if ! cherry_out=$(git -C "$dir" cherry "origin/${default_branch}" "$FIX_HEAD" "$BASELINE" 2>&1); then
+          echo "::error::git cherry failed (baseline/fix_head unresolvable?): ${cherry_out}"
+          rm -rf "$dir"
+          exit 1
+        fi
+        pending=$(printf '%s\n' "$cherry_out" | grep -c '^+' || true)
         if [ "$pending" -eq 0 ]; then
           echo "Fix is already on \`${default_branch}\` (patch-id match) — no reconcile PR needed." | tee -a "$GITHUB_STEP_SUMMARY"
           rm -rf "$dir"
@@ -144,21 +152,26 @@ runs:
         branch="hotfix-reconcile/v${LINE}-${CLEANUP_TASK}"
         git -C "$dir" switch -c "$branch" "origin/${default_branch}" >/dev/null 2>&1
 
+        # The full range, for the draft-PR body when we degrade (so the human knows EVERY commit to
+        # finish, not just the one that stopped it). Computed before the cherry-pick mutates the tree.
+        range_commits=$(git -C "$dir" log --oneline --reverse "${BASELINE}..${FIX_HEAD}" 2>/dev/null | sed 's/^/- /')
+
         # Cherry-pick the fix range (fix diff only — the bump is excluded by construction, it is past
         # fix_head). -x records "(cherry picked from …)" — one of the reached-master signals. On a
-        # conflict, DON'T abort: stage the markers and commit them so a human resolves in the PR.
+        # conflict, DON'T abort: stage whatever's there and commit it so a human resolves in the PR.
         conflicted=false
         if git -C "$dir" cherry-pick -x "${BASELINE}..${FIX_HEAD}" >/dev/null 2>&1; then
           conflicted=false
         else
           conflicted=true
           conflict_paths=$(git -C "$dir" diff --name-only --diff-filter=U | tr '\n' ' ')
-          # Commit the conflict markers as-is (the human resolves them in the PR), then abandon any
-          # remaining commits in the range — the draft PR tells the human to finish the port by hand.
+          # Commit whatever the cherry-pick left — conflict markers (unmerged paths) OR nothing (an
+          # already-applied intermediate commit stops it "empty"). --allow-empty so the empty case
+          # can't hard-fail under set -e. Then abandon the remaining range; the draft PR lists it all.
           git -C "$dir" add -A
-          git -C "$dir" commit --quiet --no-edit \
-            -m "hotfix reconcile v${LINE} (UNRESOLVED CONFLICTS — resolve before merge)" \
-            -m "cherry-pick -x ${BASELINE}..${FIX_HEAD} conflicted on: ${conflict_paths}"
+          git -C "$dir" commit --quiet --allow-empty --no-edit \
+            -m "hotfix reconcile v${LINE} (INCOMPLETE — resolve/finish before merge)" \
+            -m "cherry-pick -x ${BASELINE}..${FIX_HEAD} stopped on: ${conflict_paths:-<already-applied / empty>}"
           git -C "$dir" cherry-pick --quit >/dev/null 2>&1 || true
         fi
 
@@ -172,8 +185,8 @@ runs:
         git -C "$dir" push --quiet -u origin "$branch"
 
         if [ "$conflicted" = true ]; then
-          body=$(printf 'Forward-ports the **v%s** hotfix fix diff to `%s`, but `git cherry-pick -x %s..%s` **CONFLICTED** — the conflict markers are committed as-is on this branch.\n\n**Resolve by hand:** check out `%s`, fix the `<<<<<<<` markers (paths: %s), re-run any dropped commits from the range if needed, push, and mark this PR ready. Then squash-merge.\n\nCloses #%s' \
-            "$LINE" "$default_branch" "$BASELINE" "${FIX_HEAD:0:12}" "$branch" "${conflict_paths:-—}" "$CLEANUP_TASK")
+          body=$(printf 'Forward-ports the **v%s** hotfix fix diff to `%s`, but `git cherry-pick -x %s..%s` did not complete cleanly — whatever applied is committed as-is on this branch (conflict markers where paths conflicted: %s), and the rest of the range was NOT applied.\n\n**Resolve by hand:** check out `%s`, finish porting every commit in the range below (resolving any `<<<<<<<` markers), push, mark this PR ready, then squash-merge.\n\nCommits in the range:\n%s\n\nCloses #%s' \
+            "$LINE" "$default_branch" "$BASELINE" "${FIX_HEAD:0:12}" "${conflict_paths:-—}" "$branch" "${range_commits:-—}" "$CLEANUP_TASK")
           pr_url=$(gh pr create --repo "$REPO" --base "$default_branch" --head "$branch" --draft \
             --title "[CONFLICTS] hotfix reconcile v${LINE} → ${default_branch}" --body "$body")
           echo "::warning::reconcile CONFLICTED — opened DRAFT PR for manual resolution: ${pr_url}"
