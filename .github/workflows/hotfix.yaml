@@ -1,0 +1,184 @@
+name: hotfix
+
+# Patch an ALREADY-RELEASED line without touching the default branch. Dispatched from the UI (like
+# release.yaml — the protected `release` environment is the human "who may publish" gate), it cuts
+# an ephemeral branch from the latest live tag on the target X.Y line, applies the fix, and cuts a
+# vX.Y.(Z+1) tag via release-core-hotfix. The fix is then reconciled to master (added on this branch
+# next); this first layer is the cut path, drillable in dry-run.
+#
+# Kill-switch note: a hotfix is deliberately NOT gated on the org kill switch. The kill switch pauses
+# normal automation; the emergency PATCH path must stay open (it's human-gated by `release` + admin).
+on:
+  workflow_dispatch:
+    inputs:
+      line:
+        description: 'X.Y line to patch (e.g. "1.4") — baseline auto-resolves to its latest live tag'
+        required: true
+        type: string
+      fix_ref:
+        description: "Git revision carrying the fix (a commit SHA, or an A..B range) to cherry-pick onto the baseline; empty = re-cut the baseline (drill)"
+        required: false
+        type: string
+        default: ""
+      severity:
+        description: Escalation severity if the hotfix fails
+        required: false
+        type: choice
+        options:
+          - sev2
+          - sev1
+        default: sev2
+      dry_run:
+        description: Cut & report only — no tag, push, or release
+        required: false
+        type: boolean
+        default: true
+
+run-name: "🚑 hotfix v${{ inputs.line }}.x${{ inputs.dry_run && ' (dry-run)' || '' }}"
+
+# hotfix-vs-hotfix: serialize on this repo (a second hotfix waits, never races). hotfix-vs-release
+# is handled at runtime by the lock step below (asymmetric — release.yaml stays lock-free so
+# release-vs-release keeps its deliberate collision-fail). cancel-in-progress:false = queue, don't
+# cancel a hotfix mid-flight.
+concurrency:
+  group: hotfix-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # push the ephemeral branch + tag
+      actions: read # the lock step reads in-flight release runs
+    outputs:
+      baseline: ${{ steps.prepare.outputs.baseline }}
+      ephemeral: ${{ steps.prepare.outputs.ephemeral }}
+      fix_head: ${{ steps.prepare.outputs.fix_head }}
+      version: ${{ steps.cut.outputs.version }}
+      tag: ${{ steps.cut.outputs.tag }}
+    steps:
+      # Bot-authenticated full checkout: the baseline tag, the fix, and the ephemeral-branch push all
+      # need the bot's rights + complete history and tags. release-core-hotfix re-checks-out the
+      # ephemeral branch itself later with its own token.
+      - name: Mint git token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.AGENT_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Asymmetric lock: wait out any in-flight release before cutting a hotfix, so the two never
+      # interleave. Only the hotfix waits — release.yaml never locks, so release-vs-release keeps its
+      # collision-fail. Best-effort ordering (a hotfix and a release compute different tags, so they
+      # can't collide); a small post-wait race is acceptable.
+      - name: Acquire lock (wait for in-flight release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1800)) # 30-minute cap → then abort (retry after the release)
+          while :; do
+            active=$(gh run list --repo "$REPO" --workflow release.yaml --limit 30 \
+              --json status --jq '[.[] | select(.status | IN("in_progress","queued","waiting","requested","pending"))] | length')
+            [ "$active" -eq 0 ] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::a release has been in flight > 30m — aborting the hotfix; retry once it completes."
+              exit 1
+            fi
+            echo "⏳ $active in-flight release run(s) — waiting 30s before re-checking…"
+            sleep 30
+          done
+          echo "✓ no release in flight — proceeding." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Resolve the baseline (latest live tag on the line), cut the ephemeral branch from it, apply
+      # the fix, and capture fix-HEAD BEFORE the bump — that SHA range (baseline..fix_head) is what
+      # reconciles to master (the fix diff only, never the bump). Push the branch so release-core-
+      # hotfix can check it out.
+      - name: Prepare ephemeral branch
+        id: prepare
+        env:
+          LINE: ${{ inputs.line }}
+          FIX_REF: ${{ inputs.fix_ref }}
+        run: |
+          set -euo pipefail
+
+          # Validate the line (guards the glob/grep below against a malformed or injected value) and
+          # escape its dots so the grep can't match a stray character (e.g. line 1.4 vs a tag v1x4.0).
+          if ! printf '%s' "$LINE" | grep -qE '^[0-9]+\.[0-9]+$'; then
+            echo "::error::line must be MAJOR.MINOR (e.g. 1.4), got \"$LINE\"."
+            exit 1
+          fi
+          line_re=$(printf '%s' "$LINE" | sed 's/\./\\./g')
+
+          # Baseline = highest vLINE.PATCH release tag (exclude sub-module tags <dir>/v… and pre-releases).
+          baseline=$(git tag -l "v${LINE}.*" | grep -E "^v${line_re}\.[0-9]+$" | sort -V | tail -1 || true)
+          if [ -z "$baseline" ]; then
+            echo "::error::no released tag on line v${LINE}.x — nothing to hotfix."
+            exit 1
+          fi
+          ephemeral="hotfix/v${LINE}.x"
+          echo "Baseline: \`$baseline\` → ephemeral branch \`$ephemeral\`." | tee -a "$GITHUB_STEP_SUMMARY"
+
+          git config user.name "${{ steps.token.outputs.app-slug }}[bot]"
+          git config user.email "${{ steps.token.outputs.app-slug }}[bot]@users.noreply.github.com"
+
+          # A leftover ephemeral branch from an aborted run would block a fresh cut — remove it first.
+          git push origin --delete "$ephemeral" 2>/dev/null || true
+          git checkout -b "$ephemeral" "$baseline"
+
+          # Apply the fix. A single SHA or an A..B range both work with cherry-pick -x (the -x trailer
+          # records the origin SHA, one of the signals the reconcile uses to prove the fix reached
+          # master). Empty fix_ref = a drill that just re-cuts the baseline.
+          if [ -n "${FIX_REF:-}" ]; then
+            git cherry-pick -x "$FIX_REF"
+            echo "Applied fix \`$FIX_REF\`." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No fix_ref — drill mode (re-cutting the baseline)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+          fix_head=$(git rev-parse HEAD)
+          git push origin "$ephemeral"
+
+          {
+            echo "baseline=$baseline"
+            echo "ephemeral=$ephemeral"
+            echo "fix_head=$fix_head"
+          } >> "$GITHUB_OUTPUT"
+
+      # Cut the hotfix release from the ephemeral branch (patch bump, tag-only, --latest=false). In
+      # dry-run it bumps + reports without tagging/pushing.
+      - name: Cut hotfix
+        id: cut
+        uses: ./publish-actions/release-core-hotfix
+        with:
+          ref: ${{ steps.prepare.outputs.ephemeral }}
+          client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
+          app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
+          dry_run: ${{ inputs.dry_run }}
+
+      # TODO(hotfix reconcile — next layer): cherry-pick -x the baseline..fix_head range onto master
+      # via a squash hotfix-reconcile/* PR (epic-rollback conflict-degrade skeleton), machine-verify
+      # it reached master (patch-id / -x trailer / Closes #cleanup-task), open the per-hotfix cleanup
+      # Task, and escalate on failure. The ephemeral branch (the fix, pre-bump) is intentionally kept
+      # until the reconcile records fix_head; that layer deletes it once reconciled.
+
+      # Until the reconcile layer lands, clean up the ephemeral branch here so a drill leaves no trace
+      # (the tag, if cut, preserves the commit). always() so an earlier failure still cleans up.
+      - name: Clean up ephemeral branch
+        if: ${{ always() && steps.prepare.outputs.ephemeral != '' }}
+        env:
+          EPHEMERAL: ${{ steps.prepare.outputs.ephemeral }}
+        run: |
+          git push origin --delete "$EPHEMERAL" 2>/dev/null \
+            && echo "Deleted ephemeral branch \`$EPHEMERAL\`." | tee -a "$GITHUB_STEP_SUMMARY" \
+            || echo "Ephemeral branch \`$EPHEMERAL\` already gone."
