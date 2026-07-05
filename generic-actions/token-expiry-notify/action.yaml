@@ -1,0 +1,107 @@
+name: token-expiry-notify
+description: >
+  Remind (via a chat webhook) before a fine-grained PAT expires, so a token the automation depends
+  on — like the bypass-audit's read PAT, which no bot can mint — gets rotated instead of silently
+  lapsing. A fine-grained PAT carries its own expiry in the `github-authentication-token-expiration`
+  response header on any authenticated request; this action reads that header, and if the token is
+  within `warn_days` of expiring, posts a Discord reminder that includes the exact regen steps. One
+  call = one token = one notification, so a caller checks several tokens with a matrix / repeated
+  calls and each gets its own message. No-ops for a token with no expiry header (a classic PAT or a
+  non-expiring credential).
+
+inputs:
+  token:
+    required: true
+    description: The fine-grained PAT to check (threaded from the caller as a secret). Only its expiry header is read.
+  token_name:
+    required: true
+    description: Human name of the token/secret (e.g. "BYPASS_AUDIT_PAT") — shown in the reminder.
+  regen_hint:
+    required: false
+    default: ""
+    description: >
+      The exact steps/command to regenerate + re-store the token, shown in the reminder's code block
+      (e.g. the fine-grained-PAT settings + the `gh secret set …` command). Empty = omit.
+  webhook:
+    required: false
+    default: ""
+    description: >
+      Discord (chat) webhook URL for the reminder — wire it from the caller as a secret. Empty makes
+      the action a no-op (nothing to post to).
+  warn_days:
+    required: false
+    default: "21"
+    description: Remind once the token is within this many days of expiring.
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", log the reminder that would be posted without posting it.
+
+runs:
+  using: composite
+  steps:
+    - name: Check expiry and remind
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        TOKEN_NAME: ${{ inputs.token_name }}
+        REGEN_HINT: ${{ inputs.regen_hint }}
+        WEBHOOK: ${{ inputs.webhook }}
+        WARN_DAYS: ${{ inputs.warn_days }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        # A fine-grained PAT's expiry rides on the response header of ANY authenticated request. A
+        # non-expiring credential (classic PAT / App token) has no such header → nothing to remind.
+        exp=$(curl -sfS -o /dev/null -D - -H "Authorization: Bearer ${TOKEN}" https://api.github.com/ 2>/dev/null \
+          | grep -i '^github-authentication-token-expiration:' | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r' || true)
+        if [ -z "$exp" ]; then
+          echo "Token \"${TOKEN_NAME}\" has no expiration header (non-expiring / not a fine-grained PAT) — nothing to remind." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        exp_ts=$(date -u -d "$exp" +%s 2>/dev/null || echo 0)
+        if [ "$exp_ts" -eq 0 ]; then
+          echo "::warning::couldn't parse the expiry \"${exp}\" for \"${TOKEN_NAME}\" — skipping."
+          exit 0
+        fi
+        days=$(( (exp_ts - $(date -u +%s)) / 86400 ))
+        echo "Token \"${TOKEN_NAME}\" expires in ${days} day(s) (${exp})." | tee -a "$GITHUB_STEP_SUMMARY"
+        if [ "$days" -gt "$WARN_DAYS" ]; then
+          echo "More than ${WARN_DAYS} days out — no reminder." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # Build the Discord message: name, days left, and the regen steps in a code block.
+        content="⏳ **Token expiring: \`${TOKEN_NAME}\`** — in **${days} day(s)** (${exp})."
+        if [ -n "${REGEN_HINT:-}" ]; then
+          content="${content}"$'\n\n'"Regenerate and update the secret:"$'\n'"\`\`\`"$'\n'"${REGEN_HINT}"$'\n'"\`\`\`"
+        fi
+        content=$(printf '%s' "$content" | head -c 1900)
+        content=$(printf '%s' "$content" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
+        # allowed_mentions parse:[] — a maintenance nudge should never ping a role/@everyone.
+        payload=$(jq -n --arg c "$content" '{content: $c, allowed_mentions: {parse: []}}')
+
+        if [ "$DRY_RUN" = "true" ]; then
+          { echo "[dry-run] would post the ${TOKEN_NAME} expiry reminder:"; printf '%s\n' "$content"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if [ -z "${WEBHOOK:-}" ]; then
+          echo "::warning::no webhook configured — can't post the \"${TOKEN_NAME}\" expiry reminder (${days}d left)."
+          exit 0
+        fi
+
+        max=3; code=000
+        for attempt in $(seq 1 "$max"); do
+          code=$(curl -sS --connect-timeout 5 --max-time 15 -o "$RUNNER_TEMP/tok_resp" -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "Posted the ${TOKEN_NAME} expiry reminder (HTTP $code)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::warning::reminder post attempt $attempt/$max failed (HTTP $code)."
+          [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
+        done
+        echo "::error::couldn't post the ${TOKEN_NAME} expiry reminder after $max attempts (last HTTP $code)."
+        exit 1
