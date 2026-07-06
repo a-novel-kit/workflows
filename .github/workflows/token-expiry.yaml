@@ -135,13 +135,19 @@ jobs:
             | .[]
             | [ (.token_name // "unnamed"), (.owner.login // "?"),
                 (.token_expires_at // ""), (.token_expired // false | tostring),
-                (.access_granted_at // "") ]
+                (.access_granted_at // ""),
+                (.repository_selection // "?"),
+                ( [ (.permissions // {}) | to_entries[]
+                    | if (.value | type) == "object"
+                      then (.value | to_entries[] | "\(.key): \(.value)")
+                      else "\(.key): \(.value)" end ]
+                  | join("; ") ) ]
             | @tsv')
 
           total=0; posted=0; failures=0
           hdr=$([ "$TEST_RUN" = "true" ] && echo "### ${ORG} — 🧪 TEST RUN (all PATs, admin only)" || echo "### ${ORG} — fine-grained PAT inventory")
           echo "$hdr" >> "$GITHUB_STEP_SUMMARY"
-          while IFS=$'\t' read -r name login exp expired granted; do
+          while IFS=$'\t' read -r name login exp expired granted repo_sel perms; do
             [ -n "${name:-}" ] || continue
             total=$((total + 1))
 
@@ -165,54 +171,68 @@ jobs:
             fi
 
             status=$([ "$expired" = "true" ] && echo "EXPIRED" || echo "${days}d left")
-            # Test run pings every token; otherwise the policy decides.
-            if [ "$TEST_RUN" = "true" ]; then
-              reason="🧪 test — ${status}"
-            else
-              reason=$(ping_reason "$days" "$life" || true)
-            fi
+            reason=$(ping_reason "$days" "$life" || true)
+            # A test run pings EVERY token (bypasses the policy) so we can validate the REAL message
+            # rendering — so it still needs a reason when no milestone fired: fall back to the token's
+            # status. Everything below is otherwise IDENTICAL to a genuine ping (same content, embed,
+            # color, reason format); only the recipient differs (admin, since we can't ping owners in a
+            # drill). The 🧪 markers live in the run summary only, never in the delivered message.
+            if [ "$TEST_RUN" = "true" ] && [ -z "$reason" ]; then reason="$status"; fi
             if [ -z "$reason" ]; then
               echo "  - ${name} (${login}): ${status} — no ping today" >> "$GITHUB_STEP_SUMMARY"; continue
             fi
             echo "  - ${name} (${login}): ${status} — PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
 
-            # Every ping goes to the admin (default_mention), who triages; the owner login is shown in
-            # the message. Per-owner pinging is deferred to the Bitwarden resolver (#104) — swap the
-            # line below for a login→Discord-id lookup then.
-            did="${DEFAULT_MENTION:-}"
-            ping=""; target=admin; note=""
-            if [ -n "$did" ]; then
-              echo "::add-mask::$did"   # defensive: keep the admin id out of logs
-              ping="<@${did}> "
-              [ "$TEST_RUN" = "true" ] && note="  _(🧪 test run — all PATs, admin only)_"
-            else
-              target="no-one"
-              note="  _(no admin configured — posted without a ping)_"
+            # ── "Our shape" — single source of truth is generic-actions/token-expiry-notify ────────
+            # The whole message is ONE embed description (no title field): a heading with days-left, a
+            # `-#` grey subtext, a blank line, then the masked regen link. Adapted for the org-wide
+            # sweep: the owner login is shown in the subtext (the owner isn't the runner), and a single
+            # admin is @mentioned via `content` — Discord only fires a notification on a content
+            # mention, never one inside an embed.
+            hdays=$([ "$days" -lt 0 ] && echo 0 || echo "$days")   # heading never shows a negative
+            pctline=""
+            if [ "$life" -gt 0 ]; then
+              pct=$(( days * 100 / life )); [ "$pct" -gt 100 ] && pct=100; pctline=" | ${pct}% left"
             fi
-
-            # Color by absolute days-remaining: red ≤7 / expired, orange ≤14, yellow ≤30, green beyond.
+            # Color by absolute days remaining: green >30, yellow >14, orange >7, red ≤7 / expired.
             if [ "$expired" = "true" ] || [ "$days" -le 7 ]; then color=15158332
             elif [ "$days" -le 14 ]; then color=15105570
             elif [ "$days" -le 30 ]; then color=15844367
             else color=3066993; fi
-
-            desc="## ⏳ [Token] ${name} — ${reason}"$'\n'"-# owner \`${login}\` · expires ${exp:-n/a}${note}"
+            # Scope + permissions come from the live per-token API data (not hardcoded), then the same
+            # regen recipe as the original notify-action message: masked link, owner/scope/permissions,
+            # and the `gh secret set` block. SECRET_NAME is a fill-in — the org PAT API exposes the
+            # token's own name, not the Actions-secret name it may be stored under.
+            case "$repo_sel" in
+              all)      scope="All repositories" ;;
+              selected) scope="Selected repositories" ;;
+              *)        scope="${repo_sel:-unknown}" ;;
+            esac
+            regen=$(printf '%s\n' \
+              "[New fine-grained PAT](https://github.com/settings/personal-access-tokens/new)" \
+              " -> **owner**: ${ORG}" \
+              " -> **Scope**: ${scope}" \
+              " -> **Permissions**: ${perms:-—}" \
+              "" '```' \
+              "gh secret set <SECRET_NAME> --org ${ORG} --app actions --visibility all --body <pat>" \
+              '```')
+            desc="## ⏳ [Token] ${name} - ${hdays} days left"$'\n'"-# owner \`${login}\` · Expires ${exp:-n/a}${pctline}"$'\n\n'"${regen}"
             desc=$(printf '%s' "$desc" | head -c 3900)
             desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc")
-            if [ "$TEST_RUN" = "true" ]; then
-              content=$(printf '%s' "${ping}🧪 Test message from the token-expiry tracker." | head -c 1900)
-            else
-              content=$(printf '%s' "${ping}A fine-grained PAT needs rotation." | head -c 1900)
-            fi
 
-            # allowed_mentions: parse:[] blocks @everyone/@here/roles; users:[id] allows ONLY the one
-            # admin (empty list when no admin is configured → the post pings no one).
+            # The admin @mention lives in `content` (fail-soft: no admin → post the embed WITHOUT a
+            # ping, which then matches the notify action's own payload exactly). users:[id] allows ONLY
+            # that one admin; parse:[] blocks @everyone/@here/roles.
+            did="${DEFAULT_MENTION:-}"; target=admin
             if [ -n "$did" ]; then
-              payload=$(jq -n --arg c "$content" --arg d "$desc" --argjson col "$color" --arg uid "$did" \
+              echo "::add-mask::$did"   # defensive: keep the admin id out of logs
+              payload=$(jq -n --arg c "<@${did}>" --arg d "$desc" --argjson col "$color" --arg uid "$did" \
                 '{content:$c, embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[], users:[$uid]}}')
             else
-              payload=$(jq -n --arg c "$content" --arg d "$desc" --argjson col "$color" \
-                '{content:$c, embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[]}}')
+              target="no-one"
+              echo "::warning::no admin (default_mention) configured — posting ${name} without a ping."
+              payload=$(jq -n --arg d "$desc" --argjson col "$color" \
+                '{embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[]}}')
             fi
 
             if [ "$DRY_RUN" = "true" ]; then
