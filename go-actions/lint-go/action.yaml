@@ -16,12 +16,24 @@ runs:
         # Go module is not at the repo root. An empty working-directory falls back
         # to the repo-root go.mod.
         go-version-file: ${{ inputs.working-directory && format('{0}/go.mod', inputs.working-directory) || 'go.mod' }}
+    # Resolve the golangci-lint version from the repo's own tool modfile, so CI
+    # lints with the exact version developers run locally (`go tool -modfile=
+    # golangci-lint.mod golangci-lint`). This is the single source of truth:
+    # Renovate bumps golangci-lint.mod and CI follows on the next run, with no
+    # version literal to keep in sync here — the workflow and the repo cannot
+    # drift, and `latest`'s fleet-wide cache-busting on every upstream release
+    # is avoided.
+    - id: golangci-version
+      shell: bash
+      run: |
+        dir='${{ inputs.working-directory }}'
+        version="$(cd "${dir:-.}" && go list -modfile=golangci-lint.mod -m -f '{{.Version}}' github.com/golangci/golangci-lint/v2)"
+        if [ -z "$version" ]; then
+          echo "::error::could not resolve golangci-lint version from golangci-lint.mod" >&2
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
     - uses: golangci/golangci-lint-action@v9
       with:
-        # Pinned, not `latest`: the action keys its download + analysis cache on
-        # the resolved version, so `latest` busts that cache fleet-wide whenever
-        # upstream releases, and a new linter can turn a green branch red with no
-        # repo change. Matches the version the services pin in golangci-lint.mod;
-        # Renovate bumps it.
-        version: v2.12.2
+        version: ${{ steps.golangci-version.outputs.version }}
         working-directory: ${{ inputs.working-directory }}
