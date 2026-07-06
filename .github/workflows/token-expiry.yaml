@@ -165,12 +165,13 @@ jobs:
             fi
 
             status=$([ "$expired" = "true" ] && echo "EXPIRED" || echo "${days}d left")
-            # Test run pings every token; otherwise the policy decides.
-            if [ "$TEST_RUN" = "true" ]; then
-              reason="🧪 test — ${status}"
-            else
-              reason=$(ping_reason "$days" "$life" || true)
-            fi
+            reason=$(ping_reason "$days" "$life" || true)
+            # A test run pings EVERY token (bypasses the policy) so we can validate the REAL message
+            # rendering — so it still needs a reason when no milestone fired: fall back to the token's
+            # status. Everything below is otherwise IDENTICAL to a genuine ping (same content, embed,
+            # color, reason format); only the recipient differs (admin, since we can't ping owners in a
+            # drill). The 🧪 markers live in the run summary only, never in the delivered message.
+            if [ "$TEST_RUN" = "true" ] && [ -z "$reason" ]; then reason="$status"; fi
             if [ -z "$reason" ]; then
               echo "  - ${name} (${login}): ${status} — no ping today" >> "$GITHUB_STEP_SUMMARY"; continue
             fi
@@ -184,7 +185,6 @@ jobs:
             if [ -n "$did" ]; then
               echo "::add-mask::$did"   # defensive: keep the admin id out of logs
               ping="<@${did}> "
-              [ "$TEST_RUN" = "true" ] && note="  _(🧪 test run — all PATs, admin only)_"
             else
               target="no-one"
               note="  _(no admin configured — posted without a ping)_"
@@ -199,11 +199,7 @@ jobs:
             desc="## ⏳ [Token] ${name} — ${reason}"$'\n'"-# owner \`${login}\` · expires ${exp:-n/a}${note}"
             desc=$(printf '%s' "$desc" | head -c 3900)
             desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc")
-            if [ "$TEST_RUN" = "true" ]; then
-              content=$(printf '%s' "${ping}🧪 Test message from the token-expiry tracker." | head -c 1900)
-            else
-              content=$(printf '%s' "${ping}A fine-grained PAT needs rotation." | head -c 1900)
-            fi
+            content=$(printf '%s' "${ping}A fine-grained PAT needs rotation." | head -c 1900)
 
             # allowed_mentions: parse:[] blocks @everyone/@here/roles; users:[id] allows ONLY the one
             # admin (empty list when no admin is configured → the post pings no one).
