@@ -1,0 +1,234 @@
+# Reusable daily fine-grained-PAT expiry watcher for a WHOLE org. Runs every day, but only PINGS the
+# dedicated Discord channel (TOKEN_EXPIRY_WEBHOOK) when a token hits a milestone in the PING POLICY
+# below — so quiet days stay silent. Each ping @mentions a single configured admin (default_mention)
+# who triages; the token's OWNER login is shown in the message. Per-owner pinging is deferred to the
+# Bitwarden resolver (a-novel-kit/.github#101, resolver #104) — wire it where `did` is resolved below.
+# Per-org caller pattern, like watchdog: the caller owns schedule + concurrency; this owns
+# enumeration + the policy + the pings.
+#
+# TEST RUN: fire the caller from the UI with test_run=true to post for EVERY PAT regardless of the
+# policy (still admin-only, still for real) — a safe end-to-end drill of the channel + formatting.
+#
+# It reads ONLY metadata via the org PAT endpoint (the App token carries
+# organization_personal_access_tokens: READ) — owner login, name, expiry, access-granted date. It
+# never holds a token value: unlike a header-based check it can't leak a credential.
+name: token-expiry
+
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        required: true
+        type: string
+        description: The org's [Agent] bot App client id (vars.AGENT_BOT_CLIENT_ID).
+      dry_run:
+        required: false
+        type: string
+        default: "false"
+        description: When "true", log every ping that WOULD be sent without posting it (arm by flipping to "false"). Ignored during a test_run.
+      test_run:
+        required: false
+        type: boolean
+        default: false
+        description: >
+          Test drive: post to the channel for EVERY PAT regardless of the ping policy (still admin-only).
+          Forces a real post (overrides dry_run) so you actually see the messages land. Wire it to the
+          caller's workflow_dispatch.
+    secrets:
+      private_key:
+        required: true
+        description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+      webhook:
+        required: false
+        description: Discord webhook for the DEDICATED token-expiry channel (TOKEN_EXPIRY_WEBHOOK). Empty makes the ping a no-op.
+      default_mention:
+        required: false
+        description: >
+          Discord user id that every ping is sent to (the admin who triages). Per-owner pinging is
+          deferred to the Bitwarden resolver (#104); until then the owner login is shown in the message
+          and the admin is @mentioned. Empty means post WITHOUT a ping (fail-soft, never fail).
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      # Metadata-only token: only organization_personal_access_tokens:read, scoped to this org.
+      - name: Mint org PAT-read token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-organization-personal-access-tokens: read
+
+      - name: Enumerate org PATs and ping on milestones
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+          WEBHOOK: ${{ secrets.webhook }}
+          DEFAULT_MENTION: ${{ secrets.default_mention }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TEST_RUN: ${{ inputs.test_run }}
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+
+          # ── PING POLICY — edit here ─────────────────────────────────────────────────────────────
+          # Ping ONCE as %-of-lifetime-remaining crosses BELOW each milestone (stateless: fired iff
+          # yesterday's % was above and today's is at/below it), AND every day within
+          # FINAL_STRETCH_DAYS of expiry (an already-expired token counts as within the stretch).
+          # Lifetime is derived as (expires_at − access_granted_at): EXACT for the final-stretch rule,
+          # APPROXIMATE for the % milestones (a token re-approval resets access_granted_at). A token
+          # with no derivable lifetime still gets the final-stretch pings.
+          LIFETIME_MILESTONES="50 30 10"
+          FINAL_STRETCH_DAYS=7
+          # ────────────────────────────────────────────────────────────────────────────────────────
+          # Returns a human ping reason (→ ping) or nothing (→ stay silent). $1 days-left, $2 lifetime-days.
+          ping_reason() {
+            local days="$1" life="$2" m pct pct_yst
+            if [ "$days" -le "$FINAL_STRETCH_DAYS" ]; then
+              if [ "$days" -lt 0 ]; then echo "EXPIRED"; else echo "${days}d left"; fi
+              return 0
+            fi
+            if [ "$life" -gt 0 ]; then
+              pct=$(( days * 100 / life ))
+              pct_yst=$(( (days + 1) * 100 / life ))
+              for m in $LIFETIME_MILESTONES; do
+                if [ "$pct_yst" -gt "$m" ] && [ "$pct" -le "$m" ]; then
+                  echo "crossed ${m}% lifetime (${pct}% left)"; return 0
+                fi
+              done
+            fi
+            return 1
+          }
+
+          # A test run posts for EVERY token, for real (overrides dry_run).
+          TEST_RUN=$(printf '%s' "${TEST_RUN:-false}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          [ "$TEST_RUN" = "true" ] || TEST_RUN=false
+          [ "$TEST_RUN" = "true" ] && DRY_RUN=false
+
+          # Post one Discord payload with a small retry + timeouts. $1 = JSON payload.
+          post_discord() {
+            local payload="$1" max=3 code=000 attempt
+            for attempt in $(seq 1 "$max"); do
+              code=$(curl -sS --connect-timeout 5 --max-time 15 -o "$RUNNER_TEMP/tok_resp" -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
+              if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then return 0; fi
+              echo "::warning::ping post attempt $attempt/$max failed (HTTP $code)."
+              [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
+            done
+            echo "::error::Discord ping failed after $max attempts (last HTTP $code)."
+            return 1
+          }
+
+          # Every fine-grained PAT with org access + its expiry/grant metadata. Fail LOUD (not to [])
+          # so a read error can't masquerade as "nothing to ping".
+          if ! pats=$(gh api "/orgs/${ORG}/personal-access-tokens" --paginate 2>"$RUNNER_TEMP/pat.err"); then
+            echo "::error::could not list PATs for ${ORG} ($(tr '\n' ' ' < "$RUNNER_TEMP/pat.err")). A 404 means the App lacks organization_personal_access_tokens:read on this org."
+            exit 1
+          fi
+          rows=$(printf '%s' "$pats" | jq -r '
+            (if type=="array" then . else [] end)
+            | sort_by(.token_expires_at // "9999")
+            | .[]
+            | [ (.token_name // "unnamed"), (.owner.login // "?"),
+                (.token_expires_at // ""), (.token_expired // false | tostring),
+                (.access_granted_at // "") ]
+            | @tsv')
+
+          total=0; posted=0; failures=0
+          hdr=$([ "$TEST_RUN" = "true" ] && echo "### ${ORG} — 🧪 TEST RUN (all PATs, admin only)" || echo "### ${ORG} — fine-grained PAT inventory")
+          echo "$hdr" >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r name login exp expired granted; do
+            [ -n "${name:-}" ] || continue
+            total=$((total + 1))
+
+            # Days remaining (expired → -1; a parsed past date clamps to 0).
+            exp_ts=0
+            if [ "$expired" = "true" ]; then
+              days=-1
+            elif [ -n "$exp" ]; then
+              exp_ts=$(date -u -d "$exp" +%s 2>/dev/null || echo 0)
+              if [ "$exp_ts" -eq 0 ]; then echo "::warning::couldn't parse expiry \"$exp\" for \"$name\" — skipping."; continue; fi
+              days=$(( (exp_ts - now) / 86400 )); [ "$days" -lt 0 ] && days=0
+            else
+              echo "  - ${name} (${login}): no expiry metadata — skipped" >> "$GITHUB_STEP_SUMMARY"; continue
+            fi
+
+            # Lifetime (days) from access_granted_at → expires_at; 0 when not derivable.
+            life=0
+            if [ "$expired" != "true" ] && [ -n "$granted" ] && [ "$exp_ts" -gt 0 ]; then
+              g_ts=$(date -u -d "$granted" +%s 2>/dev/null || echo 0)
+              [ "$g_ts" -gt 0 ] && [ "$exp_ts" -gt "$g_ts" ] && life=$(( (exp_ts - g_ts) / 86400 ))
+            fi
+
+            status=$([ "$expired" = "true" ] && echo "EXPIRED" || echo "${days}d left")
+            # Test run pings every token; otherwise the policy decides.
+            if [ "$TEST_RUN" = "true" ]; then
+              reason="🧪 test — ${status}"
+            else
+              reason=$(ping_reason "$days" "$life" || true)
+            fi
+            if [ -z "$reason" ]; then
+              echo "  - ${name} (${login}): ${status} — no ping today" >> "$GITHUB_STEP_SUMMARY"; continue
+            fi
+            echo "  - ${name} (${login}): ${status} — PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
+
+            # Every ping goes to the admin (default_mention), who triages; the owner login is shown in
+            # the message. Per-owner pinging is deferred to the Bitwarden resolver (#104) — swap the
+            # line below for a login→Discord-id lookup then.
+            did="${DEFAULT_MENTION:-}"
+            ping=""; target=admin; note=""
+            if [ -n "$did" ]; then
+              echo "::add-mask::$did"   # defensive: keep the admin id out of logs
+              ping="<@${did}> "
+              [ "$TEST_RUN" = "true" ] && note="  _(🧪 test run — all PATs, admin only)_"
+            else
+              target="no-one"
+              note="  _(no admin configured — posted without a ping)_"
+            fi
+
+            # Color by absolute days-remaining: red ≤7 / expired, orange ≤14, yellow ≤30, green beyond.
+            if [ "$expired" = "true" ] || [ "$days" -le 7 ]; then color=15158332
+            elif [ "$days" -le 14 ]; then color=15105570
+            elif [ "$days" -le 30 ]; then color=15844367
+            else color=3066993; fi
+
+            desc="## ⏳ [Token] ${name} — ${reason}"$'\n'"-# owner \`${login}\` · expires ${exp:-n/a}${note}"
+            desc=$(printf '%s' "$desc" | head -c 3900)
+            desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc")
+            if [ "$TEST_RUN" = "true" ]; then
+              content=$(printf '%s' "${ping}🧪 Test message from the token-expiry tracker." | head -c 1900)
+            else
+              content=$(printf '%s' "${ping}A fine-grained PAT needs rotation." | head -c 1900)
+            fi
+
+            # allowed_mentions: parse:[] blocks @everyone/@here/roles; users:[id] allows ONLY the one
+            # admin (empty list when no admin is configured → the post pings no one).
+            if [ -n "$did" ]; then
+              payload=$(jq -n --arg c "$content" --arg d "$desc" --argjson col "$color" --arg uid "$did" \
+                '{content:$c, embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[], users:[$uid]}}')
+            else
+              payload=$(jq -n --arg c "$content" --arg d "$desc" --argjson col "$color" \
+                '{content:$c, embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[]}}')
+            fi
+
+            if [ "$DRY_RUN" = "true" ]; then
+              { echo "[dry-run] would post for ${name} — ${reason} (ping: ${target}):"; printf '%s\n' "$desc"; } | tee -a "$GITHUB_STEP_SUMMARY"
+              posted=$((posted + 1)); continue
+            fi
+            if [ -z "${WEBHOOK:-}" ]; then
+              echo "::warning::no webhook — can't post for ${name} (${reason})."; continue
+            fi
+            if post_discord "$payload"; then
+              posted=$((posted + 1)); echo "Posted for ${name} — ${reason} (ping: ${target})." | tee -a "$GITHUB_STEP_SUMMARY"
+              sleep 1   # be polite to the webhook rate limit between per-token posts
+            else
+              failures=$((failures + 1))
+            fi
+          done <<< "$rows"
+
+          echo "Org ${ORG}: ${total} PAT(s) scanned, ${posted} posted, ${failures} post failure(s)$([ "$TEST_RUN" = "true" ] && echo ' [TEST RUN]')." | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$failures" -eq 0 ]

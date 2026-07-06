@@ -1,0 +1,144 @@
+name: token-expiry-notify
+description: >
+  Remind (via a dedicated Discord channel) before a fine-grained PAT expires, so a token the
+  automation depends on — like a rule-suites read PAT, which no bot can mint — gets rotated instead
+  of silently lapsing. A fine-grained PAT carries its own expiry in the
+  `github-authentication-token-expiration` response header on any authenticated request; this action
+  reads that header and, when the token is within `warn_days` of expiring, posts a color-coded
+  Discord embed (green → red as time runs out) with the days remaining and the exact regen steps.
+  Run it DAILY from the caller so the countdown updates and the color escalates. One call = one
+  token = one message, so a caller checks several tokens with a matrix and each gets its own notice.
+  No-ops for a token with no expiry header (a classic PAT or a non-expiring credential).
+
+inputs:
+  token:
+    required: true
+    description: The fine-grained PAT to check (threaded from the caller as a secret). Only its expiry header is read.
+  token_name:
+    required: true
+    description: Human name of the token/secret (e.g. "BYPASS_AUDIT_PAT") — shown in the reminder.
+  regen_md:
+    required: false
+    default: ""
+    description: >
+      Free-form Markdown appended under the header — the caller formats the regen instructions
+      however it likes. Discord renders ## / ### headings, **bold**, `code`, and ``` blocks in an
+      embed description, so the caller owns the layout. Empty = omit.
+  webhook:
+    required: false
+    default: ""
+    description: >
+      Discord webhook URL for a DEDICATED token-expiry channel — wire it from the caller as its own
+      secret (keep it separate from the escalation webhook so these maintenance nudges have their own
+      home). Empty makes the action a no-op.
+  warn_days:
+    required: false
+    default: "21"
+    description: >
+      Post once the token is within this many days of expiring. Set it to the token's full validity
+      (e.g. 365) for a daily countdown that always posts; leave it at 21 for reminders only in the
+      final stretch. The caller supplies the daily cadence.
+  lifetime_days:
+    required: false
+    default: ""
+    description: >
+      The token's full validity period in days (e.g. 365). When set, the embed color reflects the
+      PERCENTAGE of lifetime remaining (green >50%, yellow >25%, orange >10%, red ≤10%) and shows it;
+      when empty, the color falls back to absolute days remaining (green >30, yellow >14, orange >7,
+      red ≤7).
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", log the embed that would be posted without posting it.
+
+runs:
+  using: composite
+  steps:
+    - name: Check expiry and remind
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        TOKEN_NAME: ${{ inputs.token_name }}
+        REGEN_MD: ${{ inputs.regen_md }}
+        WEBHOOK: ${{ inputs.webhook }}
+        WARN_DAYS: ${{ inputs.warn_days }}
+        LIFETIME_DAYS: ${{ inputs.lifetime_days }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+
+        # A fine-grained PAT's expiry rides on the response header of ANY authenticated request. A
+        # non-expiring credential (classic PAT / App token) has no such header → nothing to remind.
+        exp=$(curl -sfS -o /dev/null -D - -H "Authorization: Bearer ${TOKEN}" https://api.github.com/ 2>/dev/null \
+          | grep -i '^github-authentication-token-expiration:' | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r' || true)
+        if [ -z "$exp" ]; then
+          echo "Token \"${TOKEN_NAME}\" has no expiration header (non-expiring / not a fine-grained PAT) — nothing to remind." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        exp_ts=$(date -u -d "$exp" +%s 2>/dev/null || echo 0)
+        if [ "$exp_ts" -eq 0 ]; then
+          echo "::warning::couldn't parse the expiry \"${exp}\" for \"${TOKEN_NAME}\" — skipping."
+          exit 0
+        fi
+        days=$(( (exp_ts - $(date -u +%s)) / 86400 ))
+        [ "$days" -lt 0 ] && days=0
+        echo "Token \"${TOKEN_NAME}\" expires in ${days} day(s) (${exp})." | tee -a "$GITHUB_STEP_SUMMARY"
+        if [ "$days" -gt "$WARN_DAYS" ]; then
+          echo "More than ${WARN_DAYS} days out — no reminder." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # Color-code by percentage of lifetime left (if lifetime_days given) or by absolute days.
+        # Discord embed colors are decimal RGB: green 0x2ECC71 / yellow 0xF1C40F / orange 0xE67E22 /
+        # red 0xE74C3C.
+        pctline=""
+        if [ -n "${LIFETIME_DAYS:-}" ] && [ "${LIFETIME_DAYS}" -gt 0 ] 2>/dev/null; then
+          pct=$(( days * 100 / LIFETIME_DAYS ))
+          [ "$pct" -gt 100 ] && pct=100
+          pctline=" | ${pct}% left"
+          if   [ "$pct" -gt 50 ]; then color=3066993
+          elif [ "$pct" -gt 25 ]; then color=15844367
+          elif [ "$pct" -gt 10 ]; then color=15105570
+          else color=15158332; fi
+        else
+          if   [ "$days" -gt 30 ]; then color=3066993
+          elif [ "$days" -gt 14 ]; then color=15844367
+          elif [ "$days" -gt 7 ];  then color=15105570
+          else color=15158332; fi
+        fi
+
+        # The whole message is the embed DESCRIPTION (Discord renders ## / ### headings there) — no
+        # separate title field. Header, then the expiry as `-#` subtext (small + grey), then the
+        # caller's regen Markdown.
+        desc="## ⏳ [Token] ${TOKEN_NAME} - ${days} days left"$'\n'"-# Expires ${exp}${pctline}"
+        if [ -n "${REGEN_MD:-}" ]; then
+          desc="${desc}"$'\n\n'"${REGEN_MD}"
+        fi
+        desc=$(printf '%s' "$desc" | head -c 3900)
+        desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
+        # allowed_mentions parse:[] — a maintenance nudge should never ping a role/@everyone.
+        payload=$(jq -n --arg d "$desc" --argjson c "$color" \
+          '{embeds: [{description: $d, color: $c}], allowed_mentions: {parse: []}}')
+
+        if [ "$DRY_RUN" = "true" ]; then
+          { echo "[dry-run] would post the ${TOKEN_NAME} expiry embed (color ${color}, ${days}d left):"; printf '%s\n' "$desc"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if [ -z "${WEBHOOK:-}" ]; then
+          echo "::warning::no webhook configured — can't post the \"${TOKEN_NAME}\" expiry reminder (${days}d left)."
+          exit 0
+        fi
+
+        max=3; code=000
+        for attempt in $(seq 1 "$max"); do
+          code=$(curl -sS --connect-timeout 5 --max-time 15 -o "$RUNNER_TEMP/tok_resp" -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "Posted the ${TOKEN_NAME} expiry reminder (HTTP $code, ${days}d left)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::warning::reminder post attempt $attempt/$max failed (HTTP $code)."
+          [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
+        done
+        echo "::error::couldn't post the ${TOKEN_NAME} expiry reminder after $max attempts (last HTTP $code)."
+        exit 1

@@ -64,6 +64,7 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
 | `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
+| `token-expiry-notify`    | Remind (Discord) before a fine-grained PAT expires, with the regen steps.                                         |
 
 ### `github-pages-actions`
 
