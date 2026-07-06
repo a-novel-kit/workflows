@@ -135,13 +135,19 @@ jobs:
             | .[]
             | [ (.token_name // "unnamed"), (.owner.login // "?"),
                 (.token_expires_at // ""), (.token_expired // false | tostring),
-                (.access_granted_at // "") ]
+                (.access_granted_at // ""),
+                (.repository_selection // "?"),
+                ( [ (.permissions // {}) | to_entries[]
+                    | if (.value | type) == "object"
+                      then (.value | to_entries[] | "\(.key): \(.value)")
+                      else "\(.key): \(.value)" end ]
+                  | join("; ") ) ]
             | @tsv')
 
           total=0; posted=0; failures=0
           hdr=$([ "$TEST_RUN" = "true" ] && echo "### ${ORG} — 🧪 TEST RUN (all PATs, admin only)" || echo "### ${ORG} — fine-grained PAT inventory")
           echo "$hdr" >> "$GITHUB_STEP_SUMMARY"
-          while IFS=$'\t' read -r name login exp expired granted; do
+          while IFS=$'\t' read -r name login exp expired granted repo_sel perms; do
             [ -n "${name:-}" ] || continue
             total=$((total + 1))
 
@@ -193,7 +199,23 @@ jobs:
             elif [ "$days" -le 14 ]; then color=15105570
             elif [ "$days" -le 30 ]; then color=15844367
             else color=3066993; fi
-            regen="[New fine-grained PAT](https://github.com/settings/personal-access-tokens/new)"
+            # Scope + permissions come from the live per-token API data (not hardcoded), then the same
+            # regen recipe as the original notify-action message: masked link, owner/scope/permissions,
+            # and the `gh secret set` block. SECRET_NAME is a fill-in — the org PAT API exposes the
+            # token's own name, not the Actions-secret name it may be stored under.
+            case "$repo_sel" in
+              all)      scope="All repositories" ;;
+              selected) scope="Selected repositories" ;;
+              *)        scope="${repo_sel:-unknown}" ;;
+            esac
+            regen=$(printf '%s\n' \
+              "[New fine-grained PAT](https://github.com/settings/personal-access-tokens/new)" \
+              " -> **owner**: ${ORG}" \
+              " -> **Scope**: ${scope}" \
+              " -> **Permissions**: ${perms:-—}" \
+              "" '```' \
+              "gh secret set <SECRET_NAME> --org ${ORG} --app actions --visibility all --body <pat>" \
+              '```')
             desc="## ⏳ [Token] ${name} - ${hdays} days left"$'\n'"-# owner \`${login}\` · Expires ${exp:-n/a}${pctline}"$'\n\n'"${regen}"
             desc=$(printf '%s' "$desc" | head -c 3900)
             desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc")
