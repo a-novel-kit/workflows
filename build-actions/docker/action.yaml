@@ -23,6 +23,12 @@ inputs:
     required: false
     description: Timeout (in deciseconds) for the container healthcheck.
     default: "300"
+  skip_healthcheck:
+    required: false
+    description: >
+      Skip the build-then-run smoke test (build + push only). Set true when the
+      image is exercised by a downstream job anyway, so the caller can drop the
+      service containers this smoke test would otherwise need.
   github_token:
     required: true
     description: The GitHub token to use for publication.
@@ -115,6 +121,7 @@ runs:
         secret-files: ${{ inputs.secret-files }}
         secrets: ${{ inputs.secrets }}
     - name: wait for container to be ready
+      if: ${{ inputs.skip_healthcheck != 'true' }}
       shell: bash
       run: |
         docker run -d --network="host" ${{ inputs.run_args }} --name test-container \
