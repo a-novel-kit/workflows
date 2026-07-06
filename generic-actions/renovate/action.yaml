@@ -130,6 +130,11 @@ runs:
               "matchManagers": ["npm"],
               "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
               "groupName": "javascript dependencies"
+            },
+            {
+              "description": "Leave pnpm audit-managed overrides to the audit action. node-actions/audit runs `pnpm audit --fix=override` daily and pins vulnerable transitive dependencies to the minimal patched version within each consumer's supported range. Renovate's npm manager otherwise re-reads the override value as an ordinary dependency and bumps it to the latest major, pushing the pin past the parent's compatibility ceiling (e.g. undici v8 breaks jsdom's private wrap-handler.js deep-import). Audit owns these values; Renovate must not touch them.",
+              "matchDepTypes": ["pnpm.overrides", "overrides"],
+              "enabled": false
             }
           ]
         # Authenticate npm installs against the private GitHub Packages registry.
