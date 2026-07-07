@@ -155,6 +155,21 @@ runs:
           printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
         } | tee -a "$GITHUB_STEP_SUMMARY"
 
+        # Internal-consistency: rewrite every self-reference to THIS repo's own actions/workflows
+        # (owner/repo/...@vX.Y.Z) to the version being cut, so the released tag runs its OWN siblings —
+        # not whatever older tag the pins lagged at. A reusable workflow can't use a relative ref, so its
+        # sibling pins would otherwise always trail a release (Renovate bumps them, but each bump needs
+        # its own release, so the tag is forever one behind). Only self-refs are rewritten; cross-repo pins
+        # stay Renovate-managed. A no-op in a repo that doesn't self-reference. Discarded under dry-run.
+        repo_esc=$(printf '%s' "$GITHUB_REPOSITORY" | sed 's/\./\\./g')
+        selfpin_files=$(git ls-files '*.yaml' '*.yml' | xargs -r grep -lE "${repo_esc}/[A-Za-z0-9._/-]+@v[0-9]+\.[0-9]+\.[0-9]+" 2>/dev/null || true)
+        if [ -n "$selfpin_files" ]; then
+          printf '%s\n' "$selfpin_files" | while IFS= read -r f; do
+            sed -i -E "s#(${repo_esc}/[A-Za-z0-9._/-]+)@v[0-9]+\.[0-9]+\.[0-9]+#\1@v${version}#g" "$f"
+          done
+          { echo "Self-pins synced → v${version}:"; printf '%s\n' "$selfpin_files" | sed 's/^/- /'; } | tee -a "$GITHUB_STEP_SUMMARY"
+        fi
+
         if [ "$DRY_RUN" = "true" ]; then
           echo "[dry-run] no commit, tag, push, or release." | tee -a "$GITHUB_STEP_SUMMARY"
           git checkout -- . 2>/dev/null || true
