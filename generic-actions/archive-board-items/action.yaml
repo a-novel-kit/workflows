@@ -1,10 +1,12 @@
 name: archive board items
 description: >
-  Archive a repository's "Awaiting release" items from the org "Tasks" project.
-  Run it from the release workflow when the repo publishes (everything on master
-  ships, so its awaiting-release work is now released), or — for repos that never
-  publish (e.g. .github) — on merge to the default branch, to clear shipped work
-  off the board automatically. Idempotent and safe to re-run.
+  Archive (and close) terminal items from the org "Tasks" project. Run it from the
+  release workflow when the repo publishes (everything on master ships, so its
+  awaiting-release work is now released), or — for repos that never publish (e.g.
+  .github) — on merge to the default branch. The reconcile sweep also runs it org-wide
+  (repo "*") over "Applied" items to clear resolved meta work. Archiving a Projects-v2
+  item does not close the issue, so it also CLOSES each one (archive = terminal signal).
+  Idempotent and safe to re-run.
 
 inputs:
   client_id:
@@ -18,7 +20,23 @@ inputs:
   status:
     required: false
     default: Awaiting release
-    description: Archive this repo's items whose Status equals this value.
+    description: >
+      Comma-separated list of Status values to archive (e.g. "Awaiting release" on
+      publish, or "Applied" for the sweep's meta pass). An item matches if its Status
+      is any of them.
+  repo:
+    required: false
+    default: ""
+    description: >
+      Restrict to this repo's items (owner/name). Empty = the running repo
+      (github.repository). Pass "*" to sweep ALL repos — used by the reconcile sweep
+      to clear org-wide Applied items that aren't tied to a single repo's release.
+  close:
+    required: false
+    default: "true"
+    description: >
+      Also CLOSE each archived issue. Archiving a Projects-v2 item does not close the
+      tracker; terminal board work should leave its issue closed too (rule: archived → closed).
   project_id:
     required: true
     description: >
@@ -44,13 +62,15 @@ runs:
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
         permission-organization-projects: write
+        permission-issues: write # close each archived issue (rule: archived → closed)
 
-    - name: Archive this repo's awaiting-release items
+    - name: Archive (and close) terminal board items
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
-        REPO_FULL: ${{ github.repository }}
+        REPO_IN: ${{ inputs.repo }}
         STATUS: ${{ inputs.status }}
+        CLOSE: ${{ inputs.close }}
         PROJECT_ID: ${{ inputs.project_id }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: |
@@ -62,6 +82,9 @@ runs:
           echo "::error::project_id is required (the org \"Tasks\" board node id)"
           exit 1
         fi
+
+        # Repo scope: empty → the running repo; "*" → every repo (the org-wide sweep).
+        REPO_FULL="${REPO_IN:-$GITHUB_REPOSITORY}"
 
         # Page the board, keeping this repo's still-on-board items in $STATUS.
         #    isArchived guards idempotency: an already-archived item is skipped,
@@ -84,12 +107,13 @@ runs:
           [ -n "$cursor" ] && args+=(-F cursor="$cursor")
           resp=$(gh api graphql -f query="$items_q" "${args[@]}")
           echo "$resp" | jq -c --arg repo "$REPO_FULL" --arg status "$STATUS" '
-            .data.node.items.nodes[]
+            ($status | split(",") | map(gsub("^\\s+|\\s+$";""))) as $statuses
+            | .data.node.items.nodes[]
             | select(
                 (.isArchived | not)
-                and .status.name == $status
-                and (.content.repository.nameWithOwner // "") == $repo)
-            | {id, number: .content.number, url: .content.url}' >> "$matches"
+                and ((.status.name // "") as $sn | ($statuses | any(. == $sn)))
+                and ($repo == "*" or (.content.repository.nameWithOwner // "") == $repo))
+            | {id, number: .content.number, url: .content.url, repo: (.content.repository.nameWithOwner // "")}' >> "$matches"
           [ "$(echo "$resp" | jq -r '.data.node.items.pageInfo.hasNextPage')" = "true" ] || break
           cursor=$(echo "$resp" | jq -r '.data.node.items.pageInfo.endCursor')
         done
@@ -105,10 +129,17 @@ runs:
           id=$(echo "$row" | jq -r '.id')
           num=$(echo "$row" | jq -r '.number')
           url=$(echo "$row" | jq -r '.url')
+          rp=$(echo "$row" | jq -r '.repo')
+          verb=$([ "$CLOSE" = "true" ] && echo "archive+close" || echo "archive")
           if [ "$DRY_RUN" = "true" ]; then
-            echo "- [dry-run] would archive #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "- [dry-run] would $verb #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             gh api graphql -f query="$archive_m" -F proj="$proj_id" -F item="$id" >/dev/null
-            echo "- archived #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+            # Close the tracker too — archiving a board item does NOT close the issue. Best-effort:
+            # a board item that is a PR/draft has no closable issue, so tolerate a failure.
+            if [ "$CLOSE" = "true" ] && [ -n "$num" ] && [ "$num" != "null" ] && [ -n "$rp" ] && [ "$rp" != "null" ]; then
+              gh issue close "$num" --repo "$rp" --reason completed >/dev/null 2>&1 || true
+            fi
+            echo "- ${verb}d #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
         done < "$matches"

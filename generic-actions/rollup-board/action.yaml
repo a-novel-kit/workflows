@@ -1,17 +1,18 @@
 name: rollup-board
 description: >
-  Roll each epic's board Status + Start date up from its direct children, as the
-  [Agent] App. For every epic on the board it aggregates its children's statuses into
-  one epic status — all-terminal → the least-advanced terminal (an epic isn't released
-  until every child is); any child active, or a mix of done and not-done → In progress;
-  all pre-work → the most-ready — and sets the epic's Start date to the earliest child's.
-  Deep trees converge over successive runs (it rolls up direct children each pass), so
-  it is eventually consistent under the periodic reconcile sweep that invokes it.
+  Roll each parent's board Status + Start date up from its direct children, as the
+  [Agent] App. For every Epic / Feature / Initiative on the board it aggregates its
+  children's statuses into one parent status — the FLOOR (least-advanced child) once all
+  children are In review or above (so all-In-review → In review, all-Awaiting-release →
+  Awaiting release, an Applied meta child counting as ≥ Awaiting release); any child still
+  below In review → In progress; all pre-work → the most-ready — and sets the parent's
+  Start date to the earliest child's. Deep trees (Initiative → Epic → Feature → Task)
+  converge over successive runs (it rolls up direct children each pass), so it is
+  eventually consistent under the periodic reconcile sweep that invokes it.
 
   Ships read-only: with dry_run "true" (the default) it only logs what it would change,
   so the aggregation can be validated against the live board before it starts moving
-  statuses. Initiatives (lifecycle Tracking/Applied) are left alone — only Epics/Features
-  roll up.
+  statuses.
 
 inputs:
   client_id:
@@ -51,6 +52,7 @@ runs:
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
         permission-organization-projects: write
+        permission-issues: write # close a parent whose sub-issues are all closed (rule 5/6 archival)
 
     - name: Roll up epics
       shell: bash
@@ -117,7 +119,7 @@ runs:
         # the rollup never drifts from what the board actually defines.
         ORDER = [o["name"] for o in sfield.get("options", [])]
         RANK = {s: i for i, s in enumerate(ORDER)}
-        for needed in ("Done", "In progress"):
+        for needed in ("In review", "Done", "In progress"):
             if needed not in RANK:
                 raise SystemExit("::error::rollup-board: board Status is missing the %r option" % needed)
 
@@ -126,8 +128,8 @@ runs:
               'items(first:100,after:$cursor){pageInfo{hasNextPage endCursor}nodes{id '
               'status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}} '
               'start:fieldValueByName(name:"Start date"){... on ProjectV2ItemFieldDateValue{date}} '
-              'content{... on Issue{number repository{nameWithOwner} issueType{name} '
-              'parent{number repository{nameWithOwner}} subIssues(first:1){totalCount}}}}}}}}')
+              'content{... on Issue{number state repository{nameWithOwner} issueType{name} '
+              'parent{number repository{nameWithOwner}} subIssues(first:50){totalCount nodes{state}}}}}}}}}')
         items, cursor = [], ""
         while True:
             d = gh(iq, proj=PROJECT, **({"cursor": cursor} if cursor else {}))
@@ -151,7 +153,9 @@ runs:
                 pk = "%s#%s" % (p["repository"]["nameWithOwner"], p["number"])
                 children.setdefault(pk, []).append(it)
             typ = (c.get("issueType") or {}).get("name")
-            if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ in ("Epic", "Feature"):
+            # Any parent with children rolls up — Initiatives included (rule 6), so an
+            # Initiative reaches Awaiting release once all its Epics do, over successive passes.
+            if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ in ("Epic", "Feature", "Initiative"):
                 epics.append(it)
 
         def rollup_status(kids):
@@ -159,16 +163,38 @@ runs:
             if not rs:
                 return None
             mn, mx = min(rs), max(rs)
-            if mn >= RANK["Done"]:          # all terminal → least-advanced terminal
-                return ORDER[mn]
-            if mx >= RANK["In progress"]:   # any active, or a mix of done + not-done
+            if mn >= RANK["In review"]:     # ALL children In review or above → the floor
+                return ORDER[mn]            # (In review / Done / Awaiting release / Applied)
+            if mx >= RANK["In progress"]:   # some child still below In review → In progress
                 return "In progress"
             return ORDER[mx]                # all pre-work → most-ready
 
         changes = 0
+        archived = 0
+        arch_m = 'mutation($p:ID!,$i:ID!){archiveProjectV2Item(input:{projectId:$p,itemId:$i}){item{id}}}'
         for e in epics:
             c = e["content"]
             ek = "%s#%s" % (c["repository"]["nameWithOwner"], c["number"])
+
+            # Parent-archival (rules 5/6): once EVERY sub-issue is closed (children get archived+closed
+            # on publish), the parent is terminal — archive it off the board and close its tracker. It
+            # propagates up over successive passes (Task -> Feature -> Epic -> Initiative). Guard on the
+            # full node set: an epic with >50 sub-issues isn't fully seen here, so fall through to status.
+            sub = c.get("subIssues") or {}
+            tc = sub.get("totalCount", 0)
+            nodes = sub.get("nodes") or []
+            if tc > 0 and tc <= len(nodes) and all(n.get("state") == "CLOSED" for n in nodes):
+                archived += 1
+                emit("- %s %s: all %d sub-issue(s) closed -> archive + close"
+                     % ("would archive" if DRY else "archived", ek, tc))
+                if not DRY:
+                    gh(arch_m, p=PROJECT, i=e["id"])
+                    if c.get("state") == "OPEN":
+                        subprocess.run(["gh", "issue", "close", str(c["number"]),
+                                        "--repo", c["repository"]["nameWithOwner"], "--reason", "completed"],
+                                       check=False, capture_output=True)
+                continue
+
             kids = children.get(ek, [])
             if not kids:
                 continue
@@ -192,7 +218,7 @@ runs:
                     gh('mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}',
                        p=PROJECT, i=e["id"], f=sfield["id"], o=opt[new])
 
-        emit("\nrollup-board: %d epic(s) scanned, %d change(s) (%s)." % (len(epics), changes, "DRY RUN — no writes" if DRY else "written"))
+        emit("\nrollup-board: %d parent(s) scanned, %d status change(s), %d archived (%s)." % (len(epics), changes, archived, "DRY RUN — no writes" if DRY else "written"))
         if summary:
             summary.close()
         PY

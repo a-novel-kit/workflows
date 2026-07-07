@@ -47,6 +47,14 @@ on:
           When "true" (default), the Epic status read-model only logs the table it would render; set
           "false" to rewrite it into each active Epic's issue body. Display-only (no board write, no
           check-run), so it flips live on its own schedule, independent of the other passes.
+      archive_dry_run:
+        required: false
+        type: string
+        default: "true"
+        description: >
+          When "true" (default), the Applied-archive pass only logs. Set "false" to archive + close
+          every org-wide "Applied" item (resolved escalation tickets, completed meta work that no
+          release ever ships). Independent of the other flags so it flips live on its own schedule.
     secrets:
       private_key:
         required: true
@@ -74,6 +82,24 @@ jobs:
           # and ENGAGES for anything else — so an unset variable runs, and a fat-fingered value halts.
           # Engaged → this writer no-ops.
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
+
+  # Clear terminal META work off the board: archive + close every org-wide "Applied" item (a resolved
+  # escalation ticket, a completed meta task). Per-repo "Awaiting release" archival happens on each
+  # repo's publish (release.yaml → archive-board-items); this sweep handles the Applied items that no
+  # release ever ships. Independent of the rollup pass, so it flips live on its own schedule.
+  archive:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.17.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          project_id: ${{ inputs.project_id }}
+          status: Applied
+          repo: "*"
+          close: "true"
+          dry_run: ${{ inputs.archive_dry_run }}
 
   # Enumerate ALL the org's open PRs (paginated) → matrices for the two per-PR passes.
   enumerate:
