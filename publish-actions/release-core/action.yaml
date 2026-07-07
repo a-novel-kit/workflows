@@ -51,8 +51,10 @@ runs:
           exit 1
         fi
 
-    # Token that can push the bump commit + tag and create the release. Scoped
-    # to this repo and to contents only — the [Agent] App can do more.
+    # Token that can push the bump commit + tag and create the release, scoped to this repo.
+    # `workflows` is required alongside `contents`: the self-pin sync rewrites the version in
+    # `.github/workflows/*` self-refs, and GitHub refuses an App push that touches workflow files
+    # without it (contents alone → GH013 "without workflows permission"). The [Agent] App has it.
     - name: Mint push token
       id: token
       uses: actions/create-github-app-token@v3
@@ -62,6 +64,7 @@ runs:
         owner: ${{ github.repository_owner }}
         repositories: ${{ github.event.repository.name }}
         permission-contents: write
+        permission-workflows: write
 
     # Bot-authenticated checkout so the later push carries the bot's rights;
     # full history + tags so the tag and release notes resolve correctly.
