@@ -88,7 +88,7 @@ jobs:
           fi
           echo "@${ACTOR} is a repo admin; confirmation matches — proceeding with rollback of epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - uses: a-novel-kit/workflows/generic-actions/epic-rollback@v1.19.2
+      - uses: a-novel-kit/workflows/generic-actions/epic-rollback@v1.19.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
