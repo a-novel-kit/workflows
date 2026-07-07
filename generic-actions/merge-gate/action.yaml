@@ -320,7 +320,7 @@ runs:
       id: membership
       if: ${{ steps.discover.outputs.epic_number != '' }}
       continue-on-error: true
-      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.19.1
+      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.19.2
       with:
         epic_number: ${{ steps.discover.outputs.epic_number }}
         client_id: ${{ inputs.client_id }}
