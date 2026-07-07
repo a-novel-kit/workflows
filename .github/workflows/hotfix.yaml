@@ -1,5 +1,9 @@
 name: hotfix
 
+# repocfg-managed, org-wide. This is the REMOTE-pinned copy provisioned to every governed repo
+# (a-novel-kit/workflows/...@vX.Y.Z); the workflows repo itself carries a `./`-pinned twin. Renovate
+# bumps the pins. Do NOT hand-edit on a target repo — `a-novel repo update` overwrites it.
+#
 # Patch an ALREADY-RELEASED line without touching the default branch. Dispatched from the UI (like
 # release.yaml — the protected `release` environment is the human "who may publish" gate), it cuts
 # an ephemeral branch from the latest live tag on the target X.Y line, applies the fix, and cuts a
@@ -168,9 +172,10 @@ jobs:
           fix_head=$(git rev-parse HEAD)
           git push origin "$ephemeral"
 
-          # Restore the main workspace to the triggering commit so the local `./` actions (the cut,
-          # reconcile, and escalate steps) resolve from the CURRENT ref — not the old baseline this
-          # step checked out. release-core-hotfix re-checks-out the ephemeral branch from the remote.
+          # Restore the main workspace to the triggering commit — the ephemeral checkout above left it
+          # on the old baseline tree. The cut/reconcile/escalate actions are remote-pinned + self-
+          # contained (release-core-hotfix re-checks-out the ephemeral branch itself), so this is
+          # workspace hygiene, not action resolution.
           git checkout --force "$GITHUB_SHA" >/dev/null 2>&1
 
           {
@@ -183,7 +188,7 @@ jobs:
       # dry-run it bumps + reports without tagging/pushing.
       - name: Cut hotfix
         id: cut
-        uses: ./publish-actions/release-core-hotfix
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.17.1
         with:
           ref: ${{ steps.prepare.outputs.ephemeral }}
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
@@ -226,7 +231,7 @@ jobs:
       - name: Reconcile fix to the default branch
         id: reconcile
         if: ${{ success() && steps.cut.outcome == 'success' }}
-        uses: ./generic-actions/hotfix-reconcile
+        uses: a-novel-kit/workflows/generic-actions/hotfix-reconcile@v1.17.1
         with:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
@@ -255,7 +260,7 @@ jobs:
       # Passes the dispatch severity; a wired ESCALATE_PUSH_WEBHOOK pages SEV1. dry-run just logs it.
       - name: Escalate on failure
         if: ${{ failure() }}
-        uses: ./generic-actions/escalate
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.17.1
         with:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
