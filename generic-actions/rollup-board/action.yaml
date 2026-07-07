@@ -1,17 +1,18 @@
 name: rollup-board
 description: >
-  Roll each epic's board Status + Start date up from its direct children, as the
-  [Agent] App. For every epic on the board it aggregates its children's statuses into
-  one epic status — all-terminal → the least-advanced terminal (an epic isn't released
-  until every child is); any child active, or a mix of done and not-done → In progress;
-  all pre-work → the most-ready — and sets the epic's Start date to the earliest child's.
-  Deep trees converge over successive runs (it rolls up direct children each pass), so
-  it is eventually consistent under the periodic reconcile sweep that invokes it.
+  Roll each parent's board Status + Start date up from its direct children, as the
+  [Agent] App. For every Epic / Feature / Initiative on the board it aggregates its
+  children's statuses into one parent status — the FLOOR (least-advanced child) once all
+  children are In review or above (so all-In-review → In review, all-Awaiting-release →
+  Awaiting release, an Applied meta child counting as ≥ Awaiting release); any child still
+  below In review → In progress; all pre-work → the most-ready — and sets the parent's
+  Start date to the earliest child's. Deep trees (Initiative → Epic → Feature → Task)
+  converge over successive runs (it rolls up direct children each pass), so it is
+  eventually consistent under the periodic reconcile sweep that invokes it.
 
   Ships read-only: with dry_run "true" (the default) it only logs what it would change,
   so the aggregation can be validated against the live board before it starts moving
-  statuses. Initiatives (lifecycle Tracking/Applied) are left alone — only Epics/Features
-  roll up.
+  statuses.
 
 inputs:
   client_id:
@@ -117,7 +118,7 @@ runs:
         # the rollup never drifts from what the board actually defines.
         ORDER = [o["name"] for o in sfield.get("options", [])]
         RANK = {s: i for i, s in enumerate(ORDER)}
-        for needed in ("Done", "In progress"):
+        for needed in ("In review", "Done", "In progress"):
             if needed not in RANK:
                 raise SystemExit("::error::rollup-board: board Status is missing the %r option" % needed)
 
@@ -151,7 +152,9 @@ runs:
                 pk = "%s#%s" % (p["repository"]["nameWithOwner"], p["number"])
                 children.setdefault(pk, []).append(it)
             typ = (c.get("issueType") or {}).get("name")
-            if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ in ("Epic", "Feature"):
+            # Any parent with children rolls up — Initiatives included (rule 6), so an
+            # Initiative reaches Awaiting release once all its Epics do, over successive passes.
+            if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ in ("Epic", "Feature", "Initiative"):
                 epics.append(it)
 
         def rollup_status(kids):
@@ -159,9 +162,9 @@ runs:
             if not rs:
                 return None
             mn, mx = min(rs), max(rs)
-            if mn >= RANK["Done"]:          # all terminal → least-advanced terminal
-                return ORDER[mn]
-            if mx >= RANK["In progress"]:   # any active, or a mix of done + not-done
+            if mn >= RANK["In review"]:     # ALL children In review or above → the floor
+                return ORDER[mn]            # (In review / Done / Awaiting release / Applied)
+            if mx >= RANK["In progress"]:   # some child still below In review → In progress
                 return "In progress"
             return ORDER[mx]                # all pre-work → most-ready
 
