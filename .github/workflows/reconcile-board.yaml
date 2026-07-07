@@ -100,6 +100,17 @@ jobs:
           repo: "*"
           close: "true"
           dry_run: ${{ inputs.archive_dry_run }}
+      # Rule-4 complement: archive every board item whose ISSUE is CLOSED (org-wide) — done leaf
+      # planning issues in non-publishing .github never get archived by a publish otherwise, so this
+      # keeps closed ⟺ archived true on the board. Idempotent with the Applied pass above.
+      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.19.2
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          project_id: ${{ inputs.project_id }}
+          archive_closed: "true"
+          repo: "*"
+          dry_run: ${{ inputs.archive_dry_run }}
 
   # Enumerate ALL the org's open PRs (paginated) → matrices for the two per-PR passes.
   enumerate:

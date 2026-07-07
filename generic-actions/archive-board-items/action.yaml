@@ -37,6 +37,13 @@ inputs:
     description: >
       Also CLOSE each archived issue. Archiving a Projects-v2 item does not close the
       tracker; terminal board work should leave its issue closed too (rule: archived → closed).
+  archive_closed:
+    required: false
+    default: "false"
+    description: >
+      When "true", IGNORE `status` and archive every board item whose linked ISSUE is CLOSED
+      (the rule-4 complement: closed → archived). The sweep runs this org-wide (repo="*") to
+      clear done leaf planning issues that never publish, so closed ⟺ archived on the board.
   project_id:
     required: true
     description: >
@@ -71,6 +78,7 @@ runs:
         REPO_IN: ${{ inputs.repo }}
         STATUS: ${{ inputs.status }}
         CLOSE: ${{ inputs.close }}
+        ARCHIVE_CLOSED: ${{ inputs.archive_closed }}
         PROJECT_ID: ${{ inputs.project_id }}
         DRY_RUN: ${{ inputs.dry_run }}
       run: |
@@ -97,7 +105,7 @@ runs:
                 status: fieldValueByName(name:"Status"){
                   ... on ProjectV2ItemFieldSingleSelectValue{ name } }
                 content{
-                  ... on Issue{ repository{ nameWithOwner } number url }
+                  ... on Issue{ repository{ nameWithOwner } number url state }
                   ... on PullRequest{ repository{ nameWithOwner } number url } } } } } } }'
 
         matches=$(mktemp)
@@ -106,12 +114,14 @@ runs:
           args=(-F proj="$proj_id")
           [ -n "$cursor" ] && args+=(-F cursor="$cursor")
           resp=$(gh api graphql -f query="$items_q" "${args[@]}")
-          echo "$resp" | jq -c --arg repo "$REPO_FULL" --arg status "$STATUS" '
+          echo "$resp" | jq -c --arg repo "$REPO_FULL" --arg status "$STATUS" --arg closed "$ARCHIVE_CLOSED" '
             ($status | split(",") | map(gsub("^\\s+|\\s+$";""))) as $statuses
             | .data.node.items.nodes[]
             | select(
                 (.isArchived | not)
-                and ((.status.name // "") as $sn | ($statuses | any(. == $sn)))
+                and (if $closed == "true"
+                     then (.content.state == "CLOSED")
+                     else ((.status.name // "") as $sn | ($statuses | any(. == $sn))) end)
                 and ($repo == "*" or (.content.repository.nameWithOwner // "") == $repo))
             | {id, number: .content.number, url: .content.url, repo: (.content.repository.nameWithOwner // "")}' >> "$matches"
           [ "$(echo "$resp" | jq -r '.data.node.items.pageInfo.hasNextPage')" = "true" ] || break
@@ -119,7 +129,8 @@ runs:
         done
 
         count=$(grep -c '' "$matches" || true)
-        echo "Found ${count:-0} '$STATUS' item(s) for $REPO_FULL." | tee -a "$GITHUB_STEP_SUMMARY"
+        kind=$([ "$ARCHIVE_CLOSED" = "true" ] && echo "closed" || echo "'$STATUS'")
+        echo "Found ${count:-0} ${kind} item(s) for $REPO_FULL." | tee -a "$GITHUB_STEP_SUMMARY"
         [ "${count:-0}" -eq 0 ] && exit 0
 
         # Archive each match (or just report, under dry-run).
