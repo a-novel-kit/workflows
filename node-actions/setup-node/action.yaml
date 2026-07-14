@@ -37,7 +37,7 @@ runs:
         app_private_key: ${{ inputs.app_private_key }}
         ref: ${{ inputs.ref }}
     - uses: pnpm/action-setup@v6
-    - uses: actions/setup-node@v6
+    - uses: actions/setup-node@v7
       with:
         package-manager-cache: false
         node-version: "lts/*"
