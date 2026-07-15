@@ -62,10 +62,8 @@ runs:
         RENOVATE_ASSIGN_AUTOMERGE: true
         RENOVATE_ASSIGNEES_FROM_CODE_OWNERS: true
         RENOVATE_LABELS: "['dependencies', 'renovate']"
-        # TODO(deps): the two allowedVersions holds in the rules below are temporary. pnpm is
-        # held off 11.12.0 (its own self-installer is broken) and typescript off v7 (prettier's
-        # .ts-config loader and typescript-eslint don't support the native rewrite yet). Each
-        # rule's description carries its exact removal condition — delete the rule once it is met.
+        # TODO: two temporary allowedVersions holds below — drop each once its condition
+        # clears (see the rule descriptions). Tracked in #308.
         RENOVATE_PACKAGE_RULES: |
           [
             {
