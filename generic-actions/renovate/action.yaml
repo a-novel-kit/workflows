@@ -62,8 +62,8 @@ runs:
         RENOVATE_ASSIGN_AUTOMERGE: true
         RENOVATE_ASSIGNEES_FROM_CODE_OWNERS: true
         RENOVATE_LABELS: "['dependencies', 'renovate']"
-        # TODO: two temporary allowedVersions holds below — drop each once its condition
-        # clears (see the rule descriptions). Tracked in #308.
+        # TODO: two temporary allowedVersions holds below — drop each once its condition clears
+        # (see the rule descriptions). Tracked in https://github.com/a-novel-kit/workflows/issues/308
         RENOVATE_PACKAGE_RULES: |
           [
             {
