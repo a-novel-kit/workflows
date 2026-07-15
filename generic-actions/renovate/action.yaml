@@ -62,12 +62,24 @@ runs:
         RENOVATE_ASSIGN_AUTOMERGE: true
         RENOVATE_ASSIGNEES_FROM_CODE_OWNERS: true
         RENOVATE_LABELS: "['dependencies', 'renovate']"
+        # TODO: two temporary allowedVersions holds below — drop each once its condition clears
+        # (see the rule descriptions). Tracked in https://github.com/a-novel-kit/workflows/issues/308
         RENOVATE_PACKAGE_RULES: |
           [
             {
               "description": "Automerge everything except major updates",
               "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
               "automerge": true
+            },
+            {
+              "description": "Hold pnpm off 11.12.0: that release regressed pnpm's own global self-installer (createFullPkgId throws 'Cannot use in operator to search for integrity in undefined'), so pnpm/action-setup crashes during CI setup the moment a repo bumps its packageManager field to it. The range allows every other version, so Renovate resumes bumping as soon as a fixed patch (11.12.1+) ships — drop this rule then.",
+              "matchPackageNames": ["pnpm"],
+              "allowedVersions": "<11.12.0 || >11.12.0"
+            },
+            {
+              "description": "Hold TypeScript on the v6 line until the toolchain supports the v7 native-compiler rewrite. TS7 removes JS-API surface prettier's .ts-config loader relies on (it reads an undefined ModuleKind member and throws), and typescript-eslint still caps its peer range at typescript <6.1.0, so a frozen-lockfile install fails on the unmet peer. Drop this rule once typescript-eslint's peer range admits v7.",
+              "matchPackageNames": ["typescript"],
+              "allowedVersions": "<7"
             },
             {
               "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to the npm manager (which is what Renovate uses for pnpm: pnpm-lock.yaml, workspaces, catalogs) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
