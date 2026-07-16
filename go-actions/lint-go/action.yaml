@@ -10,7 +10,7 @@ runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v7
-    - uses: actions/setup-go@v6
+    - uses: actions/setup-go@v7.0.0
       with:
         # Resolve go.mod relative to working-directory so the action works when the
         # Go module is not at the repo root. An empty working-directory falls back
