@@ -5,8 +5,10 @@ description: >
   children's statuses into one parent status — the FLOOR (least-advanced child) once all
   children are In review or above (so all-In-review → In review, all-Awaiting-release →
   Awaiting release, an Applied meta child counting as ≥ Awaiting release); any child still
-  below In review → In progress; all pre-work → the most-ready — and sets the parent's
-  Start date to the earliest child's. Deep trees (Initiative → Epic → Feature → Task)
+  below In review → In progress; all pre-work → the most-ready. An **Initiative** is the
+  exception, a tracker rather than a work item, so it holds **Tracking** until every child
+  has reached Awaiting release, then rolls to the floor like the rest. It also sets the
+  parent's Start date to the earliest child's. Deep trees (Initiative → Epic → Feature → Task)
   converge over successive runs (it rolls up direct children each pass), so it is
   eventually consistent under the periodic reconcile sweep that invokes it.
 
@@ -119,7 +121,7 @@ runs:
         # the rollup never drifts from what the board actually defines.
         ORDER = [o["name"] for o in sfield.get("options", [])]
         RANK = {s: i for i, s in enumerate(ORDER)}
-        for needed in ("In review", "Done", "In progress"):
+        for needed in ("In review", "Done", "In progress", "Awaiting release", "Tracking"):
             if needed not in RANK:
                 raise SystemExit("::error::rollup-board: board Status is missing the %r option" % needed)
 
@@ -158,11 +160,17 @@ runs:
             if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ in ("Epic", "Feature", "Initiative"):
                 epics.append(it)
 
-        def rollup_status(kids):
+        def rollup_status(kids, parent_type):
             rs = [RANK[st(k)] for k in kids if st(k) in RANK]
             if not rs:
                 return None
             mn, mx = min(rs), max(rs)
+            # An Initiative is a tracker, not a work item: you work its Epics, never the
+            # Initiative itself, so it never shows a pickup status (Ready / In progress). It
+            # holds Tracking until every child has reached Awaiting release, then rolls to the
+            # floor the same way a work item does (Awaiting release, later Applied).
+            if parent_type == "Initiative":
+                return ORDER[mn] if mn >= RANK["Awaiting release"] else "Tracking"
             if mn >= RANK["In review"]:     # ALL children In review or above → the floor
                 return ORDER[mn]            # (In review / Done / Awaiting release / Applied)
             if mx >= RANK["In progress"]:   # some child still below In review → In progress
@@ -199,7 +207,8 @@ runs:
             if not kids:
                 continue
             starts = [sd(k) for k in kids if sd(k)]
-            plan = [("Status", st(e), rollup_status(kids), False),
+            ptyp = (c.get("issueType") or {}).get("name")
+            plan = [("Status", st(e), rollup_status(kids, ptyp), False),
                     ("Start date", sd(e), (min(starts) if starts else None), True)]
             for field, cur, new, is_date in plan:
                 if not new or new == cur:
