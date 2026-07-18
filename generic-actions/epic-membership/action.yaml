@@ -15,10 +15,11 @@ description: >
 
   Membership freezes at activation. Before the Epic starts landing the set is the live
   `epic:<N>` label search below. Once merge-gate has captured the set into a snapshot marker
-  in the Epic body — the moment the whole set first goes merge-ready — that frozen set is
-  authoritative: a PR de-labeled, closed, or relabeled afterwards stays a member, so a member
-  abandoned mid-landing can no longer vanish, and a PR labeled after landing begins joins the
-  next wave rather than re-freezing an in-flight one. The frozen marker records only
+  in the Epic body — once the whole set has held merge-ready long enough for the eventually-consistent
+  label index to settle (a two-phase pending→frozen capture) — that frozen set is authoritative: a PR
+  de-labeled, closed, or relabeled afterwards stays a member, so a member abandoned mid-landing can no
+  longer vanish, and a PR labeled after landing begins joins the next wave rather than re-freezing an
+  in-flight one. The frozen marker records only
   `{repo, number}`; each member's live state (open/merged/closed, draft, review) is re-read on
   every resolve — the set is frozen, the state is not.
 
@@ -99,24 +100,50 @@ runs:
         fi
 
         # --- Activation snapshot -----------------------------------------------------------------
-        # Once landing is under way the member set is frozen: merge-gate captures it into a marker in
-        # the Epic body at activation. When that marker is present it IS the set — a later de-label,
-        # close, or relabel never changes it. The per-member STATE is still read live below (the set
-        # is frozen, the state is not). No marker → the live label search further down.
-        snap=""
-        if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null); then
-          snap=$(printf '%s\n' "$body" \
-            | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
-            | grep -m1 '^\[' || true)
+        # Once landing has stabilized, merge-gate freezes the member set into a marker in the Epic body
+        # (a two-phase pending→frozen capture, so an index-lagging member is never frozen out). A
+        # FROZEN marker IS the set — a later de-label, close, or relabel never changes it; per-member
+        # STATE is still read live below. A `pending` marker, a malformed one, or none → the live label
+        # search further down (the safe, self-healing default).
+        #
+        # Guard planning_repo before it becomes an API path component (as the sibling actions do).
+        if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
+          exit 1
         fi
-        if [ -n "$snap" ] && printf '%s' "$snap" | jq -e 'type == "array"' >/dev/null 2>&1; then
-          # One GraphQL call, one alias per frozen member, to re-read current state (OPEN / MERGED /
-          # CLOSED-unmerged). A member whose PR 404s (deleted) simply drops from the re-hydrated set.
-          alias_q=$(printf '%s' "$snap" | jq -r 'to_entries | map(
+        frozen=""
+        # GitHub stores bodies with CRLF; strip \r so the marker lines match.
+        if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+          marker=$(printf '%s\n' "$body" \
+            | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
+            | grep -m1 '^{' || true)
+          # Only a well-formed FROZEN marker with a valid member list counts; anything else (pending,
+          # hand-edited garbage, wrong shape) yields an empty `frozen` and falls through to the live
+          # search — never a crash or a permanent HOLD.
+          [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
+            select(type == "object" and .status == "frozen" and (.members | type == "array")
+              and (.members | all(type == "object"
+                and (.repo | type == "string") and (.repo | test("^[^/]+/[^/]+$"))
+                and (.number | type == "number")))) | .members' 2>/dev/null || true)
+        fi
+        if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
+          # Re-read each frozen member's current state (OPEN / MERGED / CLOSED), one GraphQL alias per
+          # member in a single call. Aliases that error (a member repo deleted or renamed) are skipped
+          # and the survivors kept — one bad repo never collapses the set to [] (which would HOLD the
+          # Epic). Only a transport failure (no `data` at all, after retries) falls through to [], the
+          # correct fail-closed.
+          alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
               + "{pullRequest(number:\(.value.number)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
             ) | join("\n")')
-          rh=$(gh api graphql -f query="{ ${alias_q} }" 2>/dev/null || printf '{}')
+          rh='{}'
+          for attempt in 1 2 3; do
+            out=$(gh api graphql -f query="{ ${alias_q} }" 2>&1 || true)
+            if printf '%s' "$out" | jq -e 'has("data") and (.data | length > 0)' >/dev/null 2>&1; then
+              rh="$out"; break
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
           members=$(printf '%s' "$rh" | jq -c '[(.data // {}) | to_entries[] | .value.pullRequest
             | select(. != null)
             | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, state}]
@@ -126,7 +153,7 @@ runs:
             echo "members=$members"
             echo "count=$count"
           } >> "$GITHUB_OUTPUT"
-          echo "Epic #${EPIC}: ${count} member(s) from the activation snapshot (frozen set, live state)." \
+          echo "Epic #${EPIC}: ${count} member(s) from the frozen activation snapshot (live state)." \
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
