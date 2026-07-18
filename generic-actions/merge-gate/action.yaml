@@ -329,6 +329,7 @@ runs:
     # Recompute readiness over the member set and post the gate. Runs for the labeled-Epic
     # path only; standalone / misconfig / hold cases were already posted by the classify step.
     - name: Evaluate readiness + post merge-gate
+      id: evaluate
       if: ${{ steps.discover.outputs.epic_number != '' }}
       shell: bash
       env:
@@ -370,15 +371,112 @@ runs:
         # to draft, or approval dismissed) the set is no longer all-ready and the `failure`
         # below dequeues the group. (Set-shrink — a member closed unmerged — is the
         # partial-landing detector's job, not this gate's.)
+        # Readiness is about the still-OPEN members: with a snapshot the set is frozen and can carry
+        # merged / closed members, which have already left (or abandoned) the landing and are the
+        # partial-landing detector's concern, not the gate's.
         unready=$(printf '%s' "$MEMBERS" | jq -r '.[]
+          | select(.state == "OPEN")
           | select(.isDraft or (.reviewDecision != "APPROVED"))
           | "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"')
 
-        total=$(printf '%s' "$MEMBERS" | jq 'length')
+        total=$(printf '%s' "$MEMBERS" | jq '[.[] | select(.state == "OPEN")] | length')
         if [ -z "$unready" ]; then
           post_check success "Epic #${EPIC} — all ${total} open member(s) merge-ready ${where}. Atomic landing OK."
+          # Activation: the whole set is approved and merge-ready, before any merge or de-label. Freeze
+          # it (write-once) so an abandoned member can't later vanish. Done by the capture step below.
+          echo "capture=true" >> "$GITHUB_OUTPUT"
         else
           count=$(printf '%s\n' "$unready" | grep -c '')
           post_check failure "$(printf 'Epic #%s — holding for atomic landing %s: %s of %s member(s) not ready:\n%s' \
             "$EPIC" "$where" "$count" "$total" "$unready")"
+        fi
+
+    # Activation snapshot: freeze the member set the first time the whole Epic is merge-ready — before
+    # any member merges or is de-labelled. A separate, minimal issues:write token: the gate's own token
+    # stays read-only on issues, so the write capability lives only in this step.
+    - name: Mint snapshot-write token
+      id: snap_token
+      if: ${{ steps.evaluate.outputs.capture == 'true' }}
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        permission-issues: write
+
+    - name: Capture activation snapshot
+      if: ${{ steps.evaluate.outputs.capture == 'true' }}
+      # Best-effort: a failed capture must NEVER fail the gate — the merge-gate check is already posted
+      # success. Membership just stays live-derived until the next ready-pass writes the marker.
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.snap_token.outputs.token }}
+        ORG: ${{ github.repository_owner }}
+        PLANNING_REPO: .github
+        EPIC: ${{ steps.discover.outputs.epic_number }}
+        MEMBERS: ${{ steps.membership.outputs.members }}
+      run: |
+        set -euo pipefail
+        START='<!-- epic-membership:snapshot:start -->'
+        END='<!-- epic-membership:snapshot:end -->'
+
+        # Write-once. This step runs per member PR, so several ready-passes reach it; the FIRST writes
+        # the marker and the rest see it and stop. A late-labelled PR therefore never re-freezes an
+        # in-flight Epic — it joins the next wave. (Concurrent first-passes can race; both write the
+        # SAME {repo,number} set, and epic-membership's reader takes the first marker, so a transient
+        # double-write is idempotent.)
+        body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""')
+        if printf '%s\n' "$body" | grep -qxF -- "$START"; then
+          echo "Epic #${EPIC}: activation snapshot already frozen — leaving it." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # The frozen marker records only {repo, number}; epic-membership re-reads each member's live
+        # state on every resolve.
+        set_json=$(printf '%s' "$MEMBERS" | jq -c '[.[] | {repo, number}] | sort_by(.repo, .number)')
+
+        # splice(): hand-edit-safe marker writer, lifted verbatim from render-epic-status. A well-formed
+        # existing region is replaced in place; otherwise stray marker lines are stripped and one fresh
+        # region is appended — human prose is never dropped. Here there is no marker (checked above), so
+        # it appends.
+        splice() { # $1 = body file, $2 = region file (already wrapped in the markers)
+          local bodyf="$1" regionf="$2" ns ne sl el wellformed=false
+          ns=$(grep -cxF -- "$START" "$bodyf" || true)
+          ne=$(grep -cxF -- "$END" "$bodyf" || true)
+          if [ "$ns" = "1" ] && [ "$ne" = "1" ]; then
+            sl=$(grep -nxF -- "$START" "$bodyf" | cut -d: -f1)
+            el=$(grep -nxF -- "$END" "$bodyf" | cut -d: -f1)
+            if [ "$sl" -lt "$el" ]; then wellformed=true; fi
+          fi
+          if [ "$wellformed" = true ]; then
+            awk -v startm="$START" -v endm="$END" -v regionfile="$regionf" '
+              BEGIN { region=""; while ((getline line < regionfile) > 0) region = region line "\n" }
+              $0 == startm { if (!done) { printf "%s", region; done=1 } inside=1; next }
+              $0 == endm { inside=0; next }
+              inside { next }
+              { print }
+            ' "$bodyf"
+          else
+            grep -vxF -e "$START" -e "$END" -- "$bodyf" || true
+            printf '\n'
+            cat "$regionf"
+          fi
+        }
+
+        bodyf=$(mktemp); regionf=$(mktemp); outf=$(mktemp)
+        printf '%s' "$body" > "$bodyf"
+        {
+          echo "$START"
+          echo "_Epic membership, frozen at activation by the merge-gate. The authoritative set for this landing — a later de-label, close, or relabel does not change it. Do not edit._"
+          printf '%s\n' "$set_json"
+          echo "$END"
+        } > "$regionf"
+        splice "$bodyf" "$regionf" > "$outf"
+
+        if gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" >/dev/null; then
+          n=$(printf '%s' "$set_json" | jq 'length')
+          echo "Epic #${EPIC}: froze the activation snapshot — ${n} member(s)." | tee -a "$GITHUB_STEP_SUMMARY"
+        else
+          echo "::warning::Epic #${EPIC}: could not write the activation snapshot; membership stays live-derived until the next ready-pass."
         fi
