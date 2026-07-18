@@ -9,25 +9,33 @@ description: >
   subIssues` walk serves only as a discovery hint (a way to suggest the label), never as
   the definition of the set here.
 
-  Read-only: it queries the label set and emits it. It mutates nothing — no check post,
-  no board write — so it takes no dry_run. The caller decides what to do with the set
-  (and, on error, whether to hold or fail-open); this action just reports.
+  Read-only: it reads the snapshot marker or the live label set and emits it. It mutates
+  nothing — no check post, no board write — so it takes no dry_run. The caller decides what
+  to do with the set (and, on error, whether to hold or fail-open); this action just reports.
 
-  TODO (follow-up, intentionally not built here to keep the MVP small): membership
-  should be the activation snapshot, not the live label set — a timeline-fold where a PR
-  is a member iff its last `epic:<N>` label event at time <= the Epic's activation
-  timestamp is `labeled` (a pure fold over GET issues/{n}/timeline). That freezes the
-  set so a PR labeled after the Epic starts landing joins the next wave instead of
-  re-freezing an in-flight one, and a reopened/relabeled sibling can't resurrect a
-  finished Epic. The MVP below uses the current open-PR label set, which is correct for
-  a single steady wave and is the input the snapshot fold will later consume.
+  Membership freezes at activation. Before the Epic starts landing the set is the live
+  `epic:<N>` label search below. Once merge-gate has captured the set into a snapshot marker
+  in the Epic body — the moment the whole set first goes merge-ready — that frozen set is
+  authoritative: a PR de-labeled, closed, or relabeled afterwards stays a member, so a member
+  abandoned mid-landing can no longer vanish, and a PR labeled after landing begins joins the
+  next wave rather than re-freezing an in-flight one. The frozen marker records only
+  `{repo, number}`; each member's live state (open/merged/closed, draft, review) is re-read on
+  every resolve — the set is frozen, the state is not.
 
 inputs:
   epic_number:
     required: true
     description: >
       The Epic issue number N. Used to build the authoritative label name `epic:<N>` to
-      search for; informational otherwise (this action does not read the Epic issue).
+      search for, and to locate the Epic issue whose activation snapshot (if present) freezes
+      the member set.
+  planning_repo:
+    required: false
+    default: .github
+    description: >
+      Repository (name only; owner is the workflow's org) where the Epic issue lives — the
+      activation snapshot is read from `<org>/<planning_repo>#<epic_number>`. Defaults to the
+      org `.github` repo, where planning Epics are tracked.
   client_id:
     required: true
     description: Client id of the [Agent] App (issues + pull-requests read for the org-wide label search).
@@ -38,9 +46,11 @@ inputs:
 outputs:
   members:
     description: >
-      Compact JSON array of the authorized members, one object per open `epic:<N>` PR:
-      {repo (nameWithOwner), number, headRefOid, isDraft, reviewDecision}. `[]` when the
-      Epic has no open labeled PRs.
+      Compact JSON array of the authorized members, one object per member:
+      {repo (nameWithOwner), number, headRefOid, isDraft, reviewDecision, state}. Before activation
+      the set is the live open `epic:<N>` PRs (state always `OPEN`); once the Epic carries an
+      activation snapshot it is the frozen set, each member's `state` re-read live
+      (`OPEN` / `MERGED` / `CLOSED`). `[]` when the Epic has no members.
     value: ${{ steps.resolve.outputs.members }}
   count:
     description: Integer count of members (length of the array).
@@ -71,6 +81,7 @@ runs:
         GH_TOKEN: ${{ steps.token.outputs.token }}
         OWNER: ${{ github.repository_owner }}
         EPIC: ${{ inputs.epic_number }}
+        PLANNING_REPO: ${{ inputs.planning_repo }}
       run: |
         set -euo pipefail
 
@@ -85,6 +96,39 @@ runs:
         if ! [[ "$EPIC" =~ ^[0-9]+$ ]]; then
           echo "::error::epic_number must be an integer, got \"$EPIC\""
           exit 1
+        fi
+
+        # --- Activation snapshot -----------------------------------------------------------------
+        # Once landing is under way the member set is frozen: merge-gate captures it into a marker in
+        # the Epic body at activation. When that marker is present it IS the set — a later de-label,
+        # close, or relabel never changes it. The per-member STATE is still read live below (the set
+        # is frozen, the state is not). No marker → the live label search further down.
+        snap=""
+        if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null); then
+          snap=$(printf '%s\n' "$body" \
+            | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
+            | grep -m1 '^\[' || true)
+        fi
+        if [ -n "$snap" ] && printf '%s' "$snap" | jq -e 'type == "array"' >/dev/null 2>&1; then
+          # One GraphQL call, one alias per frozen member, to re-read current state (OPEN / MERGED /
+          # CLOSED-unmerged). A member whose PR 404s (deleted) simply drops from the re-hydrated set.
+          alias_q=$(printf '%s' "$snap" | jq -r 'to_entries | map(
+              "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
+              + "{pullRequest(number:\(.value.number)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
+            ) | join("\n")')
+          rh=$(gh api graphql -f query="{ ${alias_q} }" 2>/dev/null || printf '{}')
+          members=$(printf '%s' "$rh" | jq -c '[(.data // {}) | to_entries[] | .value.pullRequest
+            | select(. != null)
+            | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, state}]
+            | sort_by(.repo, .number)')
+          count=$(printf '%s' "$members" | jq 'length')
+          {
+            echo "members=$members"
+            echo "count=$count"
+          } >> "$GITHUB_OUTPUT"
+          echo "Epic #${EPIC}: ${count} member(s) from the activation snapshot (frozen set, live state)." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
         fi
 
         # The authority: open PRs carrying the permission-gated `epic:<N>` label,
@@ -164,7 +208,8 @@ runs:
           number,
           headRefOid,
           isDraft,
-          reviewDecision
+          reviewDecision,
+          state: "OPEN"
         }] | sort_by(.repo, .number)')
         count=$(printf '%s' "$members" | jq 'length')
 
