@@ -68,7 +68,7 @@ jobs:
           fi
           echo "@${ACTOR} is a repo admin — proceeding with the release train for epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - uses: a-novel-kit/workflows/generic-actions/release-train@v1.19.4
+      - uses: a-novel-kit/workflows/generic-actions/release-train@v1.19.5
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
