@@ -114,17 +114,27 @@ runs:
         frozen=""
         # GitHub stores bodies with CRLF; strip \r so the marker lines match.
         if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+          # Take the whole fenced region and let jq parse it, so the marker is not silently required to
+          # be single-line compact JSON — a pretty-printed one would otherwise fall through to the live
+          # search with no warning. `-s .[0]` takes the first value if a hand-edit left several.
           marker=$(printf '%s\n' "$body" \
             | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
-            | grep -m1 '^{' || true)
+            | jq -s -c '.[0] // empty' 2>/dev/null || true)
           # Only a well-formed FROZEN marker with a valid member list counts; anything else (pending,
           # hand-edited garbage, wrong shape) yields an empty `frozen` and falls through to the live
           # search — never a crash or a permanent HOLD.
+          # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
+          # document below, and the Epic body is writable by anyone with write access to this repo:
+          # `[^/]` would admit quotes and newlines (enough to inject fields), and `type == "number"`
+          # alone would admit 1.5, a document-level validation error rather than a skippable one.
           [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
-            select(type == "object" and .status == "frozen" and (.members | type == "array")
-              and (.members | all(type == "object"
-                and (.repo | type == "string") and (.repo | test("^[^/]+/[^/]+$"))
-                and (.number | type == "number")))) | .members' 2>/dev/null || true)
+            select(type == "object" and .status == "frozen" and (.members | type == "array"))
+            | .members
+            | select(all(.[]; type == "object"
+                and (.repo | type == "string") and (.repo | test("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$"))
+                and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
+            | unique_by(.repo, .number)
+            | select(length > 0 and length <= 200)' 2>/dev/null || true)
         fi
         if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
           # Re-read each frozen member's current state (OPEN / MERGED / CLOSED), one GraphQL alias per

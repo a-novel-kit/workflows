@@ -323,6 +323,10 @@ runs:
       uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.19.5
       with:
         epic_number: ${{ steps.discover.outputs.epic_number }}
+        # Thread it through: this gate WRITES the snapshot to planning_repo below, and this step READS
+        # it back. Left to its own default the two would target different repos the moment a caller
+        # overrides planning_repo, and the gate would gate on a set it never froze.
+        planning_repo: ${{ inputs.planning_repo }}
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
 
