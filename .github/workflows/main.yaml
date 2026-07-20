@@ -59,3 +59,35 @@ jobs:
           done < <(find . -type f -name action.yaml -not -path './node_modules/*')
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "✓ no composite-illegal expression contexts in any action manifest."
+
+  # The landing-saga actions are bash, and their decisions (freeze / clear / hold) are too costly to
+  # get wrong to leave unexercised. Each test in tests/ extracts the functions it covers straight out
+  # of its action manifest and runs them against stubbed network leaves — offline, deterministic, and
+  # no fixture drift, since the shipped code is what executes.
+  test-actions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run the action test suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          suites=(tests/*.sh)
+          if [ ${#suites[@]} -eq 0 ]; then
+            echo "::error::no test suites found under tests/ — the job would pass vacuously"
+            exit 1
+          fi
+          fail=0
+          for suite in "${suites[@]}"; do
+            echo "::group::$suite"
+            bash "$suite" || fail=1
+            echo "::endgroup::"
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::at least one action test suite failed"
+            exit 1
+          fi
+          echo "✓ ${#suites[@]} action test suite(s) passed."

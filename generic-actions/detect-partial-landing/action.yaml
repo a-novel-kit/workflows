@@ -13,7 +13,14 @@ description: >
   uncertainty) so a fresh head is never stranded on "Expected". The sweep (a level-triggered floor,
   roughly every 15 minutes) enumerates active Epics org-wide, rolls strays forward within grace,
   freezes REST-confirmed partials, and backstops every open non-member head; it fails closed. Both
-  re-derive ground truth each pass, so there is no stored state to drift.
+  re-derive every member's state each pass, so no judgment rests on stored state.
+
+  One thing is read from storage: WHICH pull requests are members. Until merge-gate freezes the set,
+  that is the live `epic:<N>` label search; after, it is the activation snapshot merge-gate captured
+  into the Epic body. The snapshot is what makes an abandoned member visible — a PR de-labeled and
+  closed mid-landing leaves no trace the live search can find, because GitHub indexes no "ever
+  carried label X", so without the frozen set the detector would read the remaining siblings as a
+  clean landing.
 
   The freeze is a check-run, not a status: an `epic-freeze` check-run (checks:write) posted with
   `conclusion: failure` — never `neutral`, which GitHub counts as a passing required check — on a
@@ -433,6 +440,90 @@ runs:
           printf '%s\n' "$out" | grep -qx 'automation:paused'
         }
 
+        # Bucket an Epic's FROZEN activation-snapshot members by their live state. Once landing
+        # stabilizes, merge-gate captures the member set into a marker in the Epic body; from then on
+        # membership IS that set, so a member de-labeled mid-landing stays a member and its
+        # abandonment is still seen here. The live label search cannot cover that: GitHub indexes no
+        # "ever carried label X", so a de-labeled PR is unrecoverable from live truth — which is the
+        # whole reason the set is persisted. Only the SET is frozen; every member's STATE is re-read
+        # live on each pass.
+        # Prints nothing; fills SNAP_MERGED / SNAP_CLOSED / SNAP_OPEN with the same node shape
+        # search_prs returns (repository.nameWithOwner, number, headRefOid, mergedAt, baseRefName,
+        # isDraft), so the bucketing downstream is identical whichever source fed it.
+        # Returns 0 = frozen set resolved, 2 = no usable snapshot (caller uses the live searches),
+        # 1 = a frozen set exists but could not be re-read (caller fails closed for this Epic).
+        # The marker contract (fence names, `status`, `members`) is shared with epic-membership and
+        # merge-gate — a change to its shape has to land in all three.
+        snapshot_buckets() { # $1 = epic number
+          SNAP_MERGED='[]'; SNAP_CLOSED='[]'; SNAP_OPEN='[]'
+          local body="" ok=false marker frozen alias_q rh out nodes
+          for attempt in 1 2 3; do
+            # GitHub stores bodies with CRLF; strip \r so the marker fences match. stderr is folded in
+            # so a 404 — the Epic issue simply is not in the planning repo — is recognizable and not retried.
+            if body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/$1" --jq '.body // ""' 2>&1 | tr -d '\r'); then
+              ok=true
+              break
+            fi
+            case "$body" in *"HTTP 404"*) break ;; esac
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          if [ "$ok" != true ]; then
+            # Downgrading to the live set is the recoverable failure (a missed freeze is re-derived by
+            # the next sweep); holding every Epic on a body-read hiccup is not. Warn so it stays visible.
+            echo "::warning::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 — no snapshot applied this pass, using the live label set."
+            return 2
+          fi
+
+          marker=$(printf '%s\n' "$body" \
+            | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
+            | grep -m1 '^{' || true)
+          [ -n "$marker" ] || return 2
+          # Only a well-formed FROZEN marker counts, validated exactly as epic-membership validates it.
+          # A pending marker (the set has not settled yet), a hand-edited one, or the wrong shape falls
+          # back to the live set rather than crashing or freezing the Epic on garbage.
+          frozen=$(printf '%s' "$marker" | jq -c '
+            select(type == "object" and .status == "frozen" and (.members | type == "array")
+              and (.members | all(type == "object"
+                and (.repo | type == "string") and (.repo | test("^[^/]+/[^/]+$"))
+                and (.number | type == "number")))) | .members' 2>/dev/null || true)
+          { [ -n "$frozen" ] && [ "$frozen" != "null" ]; } || return 2
+          # An empty frozen set has nothing to re-read (and would build an empty GraphQL query): leave
+          # the buckets empty, which reads downstream as "nothing has landed" → clear.
+          [ "$(printf '%s' "$frozen" | jq 'length')" -gt 0 ] || return 0
+
+          # One aliased GraphQL call re-reads every member's live state. Aliases that error (a member
+          # repo deleted or renamed) are skipped and the survivors kept, so one bad repo cannot quietly
+          # empty the set. A total failure is an error rather than a fallback: we KNOW a frozen set
+          # exists, and the live set is precisely the weaker answer the snapshot exists to replace.
+          alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
+              "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
+              + "{pullRequest(number:\(.value.number)){number headRefOid mergedAt baseRefName isDraft state repository{nameWithOwner}}}"
+            ) | join("\n")')
+          rh=""
+          for attempt in 1 2 3; do
+            out=$(gh api graphql -f query="{ ${alias_q} }" 2>&1 || true)
+            if printf '%s' "$out" | jq -e 'has("data") and (.data | length > 0)' >/dev/null 2>&1; then
+              rh="$out"
+              break
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          if [ -z "$rh" ]; then
+            # Runs in the caller's shell but the decision is silent (EV_DECISION stays error), so echo
+            # the underlying failure here or the fail-closed pass is undiagnosable.
+            printf 'snapshot_buckets: could not re-read frozen member state for epic #%s after 3 attempts: %s\n' "$1" "$out" >&2
+            return 1
+          fi
+
+          # MERGED / CLOSED / OPEN are exclusive on a PullRequest — a merged PR reports MERGED, never
+          # CLOSED — so CLOSED is exactly the closed-without-merge bucket the live search widens for.
+          nodes=$(printf '%s' "$rh" | jq -c '[(.data // {}) | to_entries[] | .value.pullRequest | select(. != null)]')
+          SNAP_MERGED=$(printf '%s' "$nodes" | jq -c '[.[] | select(.state == "MERGED")]')
+          SNAP_CLOSED=$(printf '%s' "$nodes" | jq -c '[.[] | select(.state == "CLOSED")]')
+          SNAP_OPEN=$(printf '%s' "$nodes" | jq -c '[.[] | select(.state == "OPEN")]')
+          return 0
+        }
+
         # ---- Post helpers (dry-run aware; the checks token posts) -------------------------
 
         # Post an epic-freeze check-run (jq builds the payload so quotes / newlines can't break the JSON).
@@ -501,12 +592,33 @@ runs:
           local EPIC="$1"
           local base_q="label:\"epic:${EPIC}\" org:${ORG}"
 
-          # Widened resolve, three passes: is:closed is:unmerged catches the closed-without-merge blind
-          # spot; is:merged and is:open complete the picture. Any failure → EV_DECISION stays error.
-          local merged closed_unmerged open
-          if ! merged=$(search_prs "is:pr is:merged $base_q"); then return 0; fi
-          if ! closed_unmerged=$(search_prs "is:pr is:closed is:unmerged $base_q"); then return 0; fi
-          if ! open=$(search_prs "is:pr is:open $base_q"); then return 0; fi
+          # The member set comes from the Epic's frozen activation snapshot once it has one, and from
+          # the live `epic:<N>` label search until then. Both hand back the same three buckets in the
+          # same shape, so everything below is source-agnostic: the snapshot changes only WHICH pull
+          # requests are members — a de-labeled one stays — never how a member is judged.
+          local merged closed_unmerged open membership=snapshot snap_rc=0
+          snapshot_buckets "$EPIC" || snap_rc=$?
+          case "$snap_rc" in
+            0)
+              merged="$SNAP_MERGED"
+              closed_unmerged="$SNAP_CLOSED"
+              open="$SNAP_OPEN"
+              ;;
+            2)
+              # Pre-activation, or a marker that is pending / unreadable. Widened resolve, three passes:
+              # is:closed is:unmerged catches the closed-without-merge blind spot; is:merged and is:open
+              # complete the picture. Any failure → EV_DECISION stays error.
+              membership=live
+              if ! merged=$(search_prs "is:pr is:merged $base_q"); then return 0; fi
+              if ! closed_unmerged=$(search_prs "is:pr is:closed is:unmerged $base_q"); then return 0; fi
+              if ! open=$(search_prs "is:pr is:open $base_q"); then return 0; fi
+              ;;
+            *)
+              # A frozen set exists but its state could not be re-read → EV_DECISION stays error, which
+              # fails open here and is re-derived by merge-gate and the next sweep.
+              return 0
+              ;;
+          esac
 
           EV_OPEN="$open"
           EV_MERGED_COUNT=$(printf '%s' "$merged" | jq 'length')
@@ -573,7 +685,7 @@ runs:
             fi
           fi
 
-          echo "epic #$EPIC: merged=$EV_MERGED_COUNT closed_unmerged=$EV_CLOSED_COUNT open=$EV_OPEN_COUNT stray=$EV_STRAY_COUNT grace_elapsed=$grace_elapsed" \
+          echo "epic #$EPIC: membership=$membership merged=$EV_MERGED_COUNT closed_unmerged=$EV_CLOSED_COUNT open=$EV_OPEN_COUNT stray=$EV_STRAY_COUNT grace_elapsed=$grace_elapsed" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
           # Predicate: needs >=1 merged sibling (nothing has landed otherwise); then a closed-unmerged
@@ -750,8 +862,10 @@ runs:
             | unique | .[]')
 
           # Backstop first: running it before the epic loop means any epic-pass success/failure posts last
-          # and wins on a head both could touch (a lagging label index) — flipping a contested head to
-          # fail-closed. Always runs, even with no active Epics.
+          # and wins on a head both could touch — flipping a contested head to fail-closed. Two things
+          # contest a head: a lagging label index, and a snapshot member whose label was removed while it
+          # stayed open (the backstop reads labels, so it sees a non-member; the epic pass reads the frozen
+          # set, so it sees a member — and the member view has to win). Always runs, even with no active Epics.
           standalone_sweep
 
           if [ -n "$epics" ]; then
