@@ -323,6 +323,10 @@ runs:
       uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.19.5
       with:
         epic_number: ${{ steps.discover.outputs.epic_number }}
+        # Thread it through: this gate WRITES the snapshot to planning_repo below, and this step READS
+        # it back. Left to its own default the two would target different repos the moment a caller
+        # overrides planning_repo, and the gate would gate on a set it never froze.
+        planning_repo: ${{ inputs.planning_repo }}
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
 
@@ -418,6 +422,10 @@ runs:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
+        # Scoped to the planning repo. This token exists to edit ONE issue, and that issue is the
+        # trust boundary the readers act on, so org-wide issues:write would let a bug here reach
+        # every issue in the org.
+        repositories: ${{ inputs.planning_repo }}
         permission-issues: write
 
     - name: Capture activation snapshot
@@ -447,10 +455,29 @@ runs:
         # here). GitHub stores bodies with CRLF; strip \r so the exact marker matches (grep + splice).
         body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' | tr -d '\r')
 
-        cur=$(printf '%s' "$MEMBERS" | jq -c '[.[] | {repo, number}] | sort_by(.repo, .number)')
+        # Normalize exactly as the readers validate, so the writer cannot emit a marker they reject —
+        # a frozen marker is never rewritten, so one they refuse is a permanently dead snapshot that
+        # silently degrades every Epic to live membership. Dedup is case-folded (GitHub resolves repo
+        # names case-insensitively) and the 50-member cap matches theirs.
+        cur=$(printf '%s' "$MEMBERS" | jq -c '
+          [.[] | {repo, number}] | unique_by((.repo | ascii_downcase), .number) | sort_by(.repo, .number)')
+        if ! printf '%s' "$cur" | jq -e '
+              length > 0 and length <= 50
+              and all(.[]; (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
+                and (.number | type == "number" and . == floor and . > 0 and . < 2147483648))' >/dev/null 2>&1; then
+          echo "::warning::Epic #${EPIC}: resolved member set is not snapshot-writable (empty, over 50 members, or malformed) — not capturing an activation snapshot this pass." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        # The fenced region holds a human-readable note and then the JSON, so skip to the first line that
+        # opens a value before parsing. Both failure modes here are silent and this one is destructive:
+        # an unreadable FROZEN marker falls to the `pending` branch below, which OVERWRITES it with the
+        # current live set — erasing exactly the de-labeled member the snapshot was frozen to remember.
+        # All three participants extract identically.
         marker=$(printf '%s\n' "$body" \
-          | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
-          | grep -m1 '^{' || true)
+          | awk -v s="$START" -v e="$END" '$0 == s {f=1;next} $0 == e {f=0} f' \
+          | sed -n '/^[[:space:]]*[{[]/,$p' \
+          | jq -s -c '.[0] // empty' 2>/dev/null || true)
         # An unparseable marker (hand-edited garbage) is treated as absent → a fresh pending, which
         # self-heals it rather than crashing or freezing corruption.
         if [ -z "$marker" ] || ! printf '%s' "$marker" | jq empty 2>/dev/null; then marker=null; fi
@@ -465,7 +492,14 @@ runs:
           elif ($mk.status == "pending" and ($mk.members | type == "array") and ($mk.at | type == "string"))
             then (
               if (($mk.members | sort_by(.repo, .number)) != $cur) then "pending"
-              elif (($now | fromdateiso8601) - ($mk.at | try fromdateiso8601 catch 0)) >= $thr then "frozen"
+              # An unparseable `at` rewrites a fresh pending rather than promoting or waiting. Reading it
+              # as epoch 0 made a corrupt timestamp infinitely old and promoted on the next pass, skipping
+              # the stabilization window; reading it as "now" never ages, and since the member set is
+              # unchanged the reset branch above never fires either, so the marker stalls forever and the
+              # Epic silently keeps live membership. Rewriting is the only answer that both refuses the
+              # premature freeze and repairs the marker.
+              elif (($mk.at | try (fromdateiso8601 | true) catch false) | not) then "pending"
+              elif (($now | fromdateiso8601) - ($mk.at | fromdateiso8601)) >= $thr then "frozen"
               else "skip" end)
           else "pending" end' 2>/dev/null || echo skip)
 

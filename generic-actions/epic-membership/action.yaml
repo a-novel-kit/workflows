@@ -112,42 +112,76 @@ runs:
           exit 1
         fi
         frozen=""
+        # The fence strings, matched as WHOLE LINES — see the note in detect-partial-landing: an
+        # unanchored match lets a pseudo-fence planted in an HTML comment shadow the real region.
+        START_M='<!-- epic-membership:snapshot:start -->'
+        END_M='<!-- epic-membership:snapshot:end -->'
         # GitHub stores bodies with CRLF; strip \r so the marker lines match.
         if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+          # The fenced region holds a human-readable note and then the JSON, so skip to the first line
+          # that opens a value before parsing. Requiring the JSON to be one compact line at column 0
+          # (what a `grep '^{'` does) silently kills a pretty-printed marker; parsing the note as JSON
+          # kills every marker merge-gate actually emits. `-s .[0]` takes the first value if a hand-edit
+          # left several — though trailing prose inside the region still voids the whole marker, which fails safe. All three participants extract identically.
           marker=$(printf '%s\n' "$body" \
-            | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
-            | grep -m1 '^{' || true)
+            | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
+            | sed -n '/^[[:space:]]*[{[]/,$p' \
+            | jq -s -c '.[0] // empty' 2>/dev/null || true)
           # Only a well-formed FROZEN marker with a valid member list counts; anything else (pending,
           # hand-edited garbage, wrong shape) yields an empty `frozen` and falls through to the live
           # search — never a crash or a permanent HOLD.
+          # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
+          # document below, and the Epic body is writable by anyone with write access to this repo:
+          # `[^/]` would admit quotes and newlines (enough to inject fields), and `type == "number"`
+          # alone would admit 1.5, a document-level validation error rather than a skippable one.
           [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
-            select(type == "object" and .status == "frozen" and (.members | type == "array")
-              and (.members | all(type == "object"
-                and (.repo | type == "string") and (.repo | test("^[^/]+/[^/]+$"))
-                and (.number | type == "number")))) | .members' 2>/dev/null || true)
+            select(type == "object" and .status == "frozen" and (.members | type == "array"))
+            | .members
+            | select(all(.[]; type == "object"
+                and (.repo | type == "string") and (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
+                and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
+            | unique_by((.repo | ascii_downcase), .number)
+            | select(length > 0 and length <= 50)' 2>/dev/null || true)
         fi
         if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
           # Re-read each frozen member's current state (OPEN / MERGED / CLOSED), one GraphQL alias per
-          # member in a single call. Aliases that error (a member repo deleted or renamed) are skipped
-          # and the survivors kept — one bad repo never collapses the set to [] (which would HOLD the
-          # Epic). Only a transport failure (no `data` at all, after retries) falls through to [], the
-          # correct fail-closed.
+          # member in a single call. The response must account for EVERY member: GitHub answers a
+          # multi-alias query with partial data plus an `errors` array, nulling what failed, and a
+          # dropped member here does not merely shrink a report — this set is what merge-gate gates on,
+          # so a member that silently vanishes is a member never evaluated, and the gate posts success
+          # on a wave that was never whole. That is the premature partial landing the gate exists to
+          # prevent. An incomplete answer therefore yields [], which merge-gate reads as a HOLD: a held
+          # pull request only waits, while a wrongly-passed set has already merged.
+          # Identity is the alias index plus the number, not the repository name: GraphQL follows a
+          # rename silently and answers with the new nameWithOwner, and a frozen marker is never
+          # rewritten, so name-matching would strand a renamed member's Epic permanently.
           alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
-              + "{pullRequest(number:\(.value.number)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
+              + "{pullRequest(number:\(.value.number|floor)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
             ) | join("\n")')
+          want=$(printf '%s' "$frozen" | jq 'length')
           rh='{}'
           for attempt in 1 2 3; do
             out=$(gh api graphql -f query="{ ${alias_q} }" 2>&1 || true)
-            if printf '%s' "$out" | jq -e 'has("data") and (.data | length > 0)' >/dev/null 2>&1; then
+            if printf '%s' "$out" | jq -e --argjson want "$want" '
+                 (has("errors") | not)
+                 and (((.data // {}) | to_entries | map(.value.pullRequest | select(. != null)) | length) == $want)
+               ' >/dev/null 2>&1; then
               rh="$out"; break
             fi
             [ "$attempt" -lt 3 ] && sleep 2
           done
-          members=$(printf '%s' "$rh" | jq -c '[(.data // {}) | to_entries[] | .value.pullRequest
-            | select(. != null)
-            | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, state}]
-            | sort_by(.repo, .number)')
+          members=$(printf '%s' "$rh" | jq -c --argjson members "$frozen" '
+            [ (.data // {}) | to_entries[]
+              | (.key | ltrimstr("m") | tonumber) as $i
+              | .value.pullRequest | select(. != null)
+              | select($members[$i] != null and .number == ($members[$i].number | floor))
+              | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, state} ]
+            | sort_by(.repo, .number)' 2>/dev/null || printf '[]')
+          if [ "$(printf '%s' "$members" | jq 'length')" -ne "$want" ]; then
+            echo "::warning::Epic #${EPIC}: could not re-read all ${want} frozen member(s) — reporting an empty set, which holds the Epic rather than gating on a partial one."
+            members='[]'
+          fi
           count=$(printf '%s' "$members" | jq 'length')
           {
             echo "members=$members"
