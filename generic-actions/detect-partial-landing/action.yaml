@@ -521,7 +521,7 @@ runs:
           # that opens a value before parsing. Requiring the JSON to be one compact line at column 0
           # (what a `grep '^{'` does) silently kills a pretty-printed marker; parsing the note as JSON
           # kills every marker the writer actually emits. `-s .[0]` takes the first value if a hand-edit
-          # left several. All three participants extract identically — see the contract note above.
+          # left several — though trailing prose inside the region still voids the whole marker, which fails safe. All three participants extract identically — see the contract note above.
           marker=$(printf '%s\n' "$body" \
             | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
             | sed -n '/^[[:space:]]*[{[]/,$p' \
@@ -536,11 +536,12 @@ runs:
           # one. The dedup key is case-folded because GitHub resolves repository names case-insensitively,
           # so `org/Repo` and `org/repo` are one member and would otherwise both be queried and both be
           # counted. The cap bounds the single aliased query below.
-          frozen=$(printf '%s' "$marker" | jq -c '
+          frozen=$(printf '%s' "$marker" | jq -c --arg org "$ORG" '
             select(type == "object" and .status == "frozen" and (.members | type == "array"))
             | .members
             | select(all(.[]; type == "object"
                 and (.repo | type == "string") and (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
+                and (.repo | ascii_downcase | startswith(($org | ascii_downcase) + "/"))
                 and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
             | unique_by((.repo | ascii_downcase), .number)
             | select(length > 0 and length <= 50)' 2>/dev/null || true)
@@ -591,8 +592,13 @@ runs:
           # member must show it: either it still carries `epic:<N>`, or its timeline records having been
           # labeled with it. That is exactly the "was a member" claim the snapshot exists to remember —
           # unavailable by SEARCH, which is why the set is persisted, but verifiable per pull request.
-          # Any member that cannot show it means the marker is not trustworthy, so the whole snapshot is
-          # dropped and the pass falls back to the live floor rather than acting on part of it.
+          # A member that cannot show it means the marker is not trustworthy. Dropping just that member
+          # would be worse than useless — the marker is attacker-controlled, so the surviving subset is
+          # attacker-chosen — and falling back to the live floor is worse still: the floor is the blind
+          # spot the snapshot exists to cover, and a `clear` POSTS success, so a single appended object
+          # would LIFT a standing freeze and let the partial landing finish. The only honest answer to
+          # "the authoritative record is untrustworthy" is to decide nothing (rc 1), which leaves any
+          # prior freeze in place and re-derives next pass.
           local unverified
           unverified=$(printf '%s' "$rh" | jq -r --arg lbl "epic:$1" '
             [ (.data // {}) | to_entries[] | .value.pullRequest | select(. != null)
@@ -600,8 +606,8 @@ runs:
                   + [(.timelineItems.nodes // [])[] | .label.name // empty]) | index($lbl)) | not)
               | "\(.repository.nameWithOwner)#\(.number)" ] | join(", ")' 2>/dev/null || printf 'PARSE_FAILURE')
           if [ -n "$unverified" ]; then
-            echo "::error::epic #$1: the activation snapshot names pull request(s) that never carried the \`epic:$1\` label (${unverified}) — ignoring the whole snapshot and using the live label set. Check who edited ${ORG}/${PLANNING_REPO}#$1."
-            return 2
+            echo "::error::epic #$1: the activation snapshot names pull request(s) that never carried the \`epic:$1\` label (${unverified}) — refusing to decide anything for this Epic until it is corrected. Check who edited ${ORG}/${PLANNING_REPO}#$1."
+            return 1
           fi
 
           # Reconcile each node against the member it was asked for, so a response cannot smuggle in a
@@ -700,16 +706,17 @@ runs:
         # to follow that method.
         reenqueue() { # $1=owner/repo $2=number
           local target="$1#$2" already
-          if [ "$dry" != "false" ]; then
-            echo "would re-enqueue (enable auto-merge) on $target (DRY RUN)" | tee -a "$GITHUB_STEP_SUMMARY"
-            return 0
-          fi
-          # The enqueue token is deliberately absent when repo discovery failed (the scope step warns
-          # and mints nothing). Say that plainly here, or every stray reports as a GitHub failure and
-          # the log reads like an outage instead of the deliberate skip it is.
+          # Checked before the dry-run return, so a rehearsal reports what would REALLY happen: the
+          # enqueue token is deliberately absent when repo discovery failed (the scope step warns and
+          # mints nothing), and claiming "would re-enqueue" there is a rehearsal that lies. It also
+          # keeps a live sweep from reporting the deliberate skip as a GitHub outage.
           if [ -z "${WRITE_TOKEN:-}" ]; then
             echo "::warning::no enqueue token this sweep (repo discovery failed) — not rolling $target forward; the next sweep retries." \
               | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+          if [ "$dry" != "false" ]; then
+            echo "would re-enqueue (enable auto-merge) on $target (DRY RUN)" | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
           already=$(GH_TOKEN="$WRITE_TOKEN" gh pr view "$2" --repo "$1" --json autoMergeRequest \

@@ -90,6 +90,12 @@ search_prs() {
   # dropping either would silently make every open pull request in the org a member of every Epic.
   printf '%s\n' "$1" >> "$WORK/searches"
   [ "$FX_SEARCH_FAIL" = true ] && return 1
+  # Fail exactly one of the three searches, so each fail-closed guard is pinned separately.
+  case "$FX_SEARCH_FAIL_ON" in
+    merged) case "$1" in *is:merged*) return 1 ;; esac ;;
+    closed) case "$1" in *is:unmerged*) return 1 ;; esac ;;
+    open) case "$1" in *is:open*) return 1 ;; esac ;;
+  esac
   case "$1" in
     *is:merged*) printf '%s' "$FX_LIVE_MERGED" ;;
     *is:unmerged*) printf '%s' "$FX_LIVE_CLOSED" ;;
@@ -107,6 +113,7 @@ merge_queue_entries() { # $1=owner $2=repo $3=base
 }
 rest_pr_state() {
   [ "$FX_REST_FAIL" = true ] && return 1
+  [ "$FX_REST_FAIL_ON" = "$1#$2" ] && return 1
   printf '%s' "$FX_REST" | jq -er --arg k "$1#$2" '.[$k]' 2>/dev/null || {
     echo "harness gap: no REST fixture for $1#$2" >&2
     return 1
@@ -170,7 +177,9 @@ reset_fixtures() {
   : > "$WORK/searches"
   FX_QUEUE='[{"number":3,"state":"QUEUED","headOid":"sha3"}]' # repo-c is queued → not a stray
   FX_SEARCH_FAIL=false
+  FX_SEARCH_FAIL_ON=none
   FX_REST_FAIL=false
+  FX_REST_FAIL_ON=none
   FX_QUEUE_FAIL=false
 }
 reset_fixtures
@@ -231,7 +240,7 @@ printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/re
   && ok "while a still-labeled member is tagged live" || ko "a live member was mis-tagged"
 # The roll-forward reads exactly this filter; a de-labeled member must not be re-armed.
 printf '%s' "$EV_OPEN" | jq -e '[.[] | select((.isDraft | not) and .liveMember)] | length == 1' >/dev/null \
-  && ok "only the live-labeled member is a roll-forward target" || ko "roll-forward would touch a de-labeled member"
+  && ok "EV_OPEN offers exactly one roll-forward candidate" || ko "EV_OPEN would offer a de-labeled member to roll-forward"
 reset_fixtures
 
 echo
@@ -239,12 +248,28 @@ echo "the marker only widens membership to pull requests that were really member
 # The marker lives in an issue body, so its author is whoever can edit that issue, and every member it
 # names becomes a freeze target posted with an org-wide checks:write token. Membership has to be
 # corroborated against the permission-gated label, or one issue edit blocks merges across the org.
-FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel/VICTIM","number":4242}]')
-FX_REHYDRATE=$(rehydrate "$B" "$(node a-novel/VICTIM 4242 OPEN '' none)")
-check "a named pull request that was never a member voids the marker" clear live 1/0/1
-printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel/VICTIM")' >/dev/null \
+# In-org, so it clears the owner check and really reaches corroboration.
+FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/VICTIM","number":4242}]')
+FX_REHYDRATE=$(rehydrate "$B" "$(node a-novel-kit/VICTIM 4242 OPEN '' none)")
+# `error`, not `clear`: falling back to the live floor would POST success and lift a standing freeze,
+# so an untrustworthy marker must decide nothing rather than decide optimistically.
+check "a named pull request that was never a member decides nothing" error
+# A labeled intruder: corroboration must match THIS Epic's label, not merely "has some label", and
+# not a different Epic's.
+FX_REHYDRATE=$(rehydrate "$B" "$(jq -cn --argjson v "$(node a-novel-kit/VICTIM 4242 OPEN '' none)" \
+  '$v | .labels.nodes = [{name:"bug"}]')")
+check "an intruder carrying an unrelated label is still rejected" error
+FX_REHYDRATE=$(rehydrate "$B" "$(jq -cn --argjson v "$(node a-novel-kit/VICTIM 4242 OPEN '' none)" \
+  '$v | .timelineItems.nodes = [{label:{name:"epic:901"}}]')")
+check "an intruder labeled for a DIFFERENT Epic is rejected" error
+printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/VICTIM")' >/dev/null \
   && ko "the planted pull request reached the freeze target set" \
   || ok "and it never reaches the freeze target set"
+# A repository outside the org can never be a member: the live label search is org-scoped, so a marker
+# naming one would let its author corroborate in a repository they control.
+FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"attacker/anything","number":1}]')
+FX_REHYDRATE=$(rehydrate "$B" "$(node attacker/anything 1 OPEN)")
+check "a member outside the org is rejected outright" clear live 1/0/1
 FX_BODY=$(marker frozen "$BC")
 FX_REHYDRATE=$(rehydrate "$B" "$(node a-novel-kit/repo-c 3 OPEN '' label)")
 check "a member still carrying the label is corroborated" frozen live+snapshot 1/1/1
@@ -268,10 +293,10 @@ FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO5")]"
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
 [ "$(printf '%s' "$EV_STRAYS" | jq '[.[] | select((.isDraft | not) and .liveMember)] | length')" = 1 ] \
-  && ok "no snapshot: a labeled stray is still rolled forward" \
+  && ok "no snapshot: EV_STRAYS still offers a roll-forward candidate" \
   || ko "no snapshot: the roll-forward selected nothing (untagged nodes)"
 [ "$(printf '%s' "$EV_STRAYS" | jq '[.[] | select((.isDraft | not) and (.liveMember | not))] | length')" = 0 ] \
-  && ok "no snapshot: nothing is falsely reported as de-labeled" \
+  && ok "no snapshot: EV_STRAYS reports nothing as de-labeled" \
   || ko "no snapshot: a labeled stray was warned about as de-labeled"
 reset_fixtures
 
@@ -315,6 +340,8 @@ check "a closed member still labeled trips without any snapshot" frozen live 1/1
 reset_fixtures
 FX_LIVE_MERGED='[]'
 check "nothing merged yet, so nothing can be partial" clear live 0/0/1
+FX_LIVE_CLOSED="[$B]" # a closed member, but nothing has landed: there is no partial landing to protect
+check "a closed member with nothing merged is not a partial landing" clear live 0/1/1
 
 echo
 echo "the stray + grace path, under a snapshot"
@@ -350,10 +377,16 @@ reset_fixtures
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
 for want in 'label:"epic:900"' 'org:a-novel-kit'; do
-  grep -qF -- "$want" "$WORK/searches" \
-    && ok "every member search is scoped by $want" \
+  # All THREE searches, not merely one: a grep over the file would pass while two of them ran unscoped.
+  [ "$(grep -cF -- "$want" "$WORK/searches")" = 3 ] \
+    && ok "all three member searches are scoped by $want" \
     || ko "a member search is missing $want — the set would be every open pull request"
 done
+: > "$WORK/searches"
+evaluate_epic 901 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+[ "$(grep -cF 'label:"epic:901"' "$WORK/searches")" = 3 ] \
+  && ok "and the label follows the Epic being evaluated" || ko "the Epic label is not interpolated"
 
 echo
 echo "the merge queue is read per (repo, base), and only members are dequeued"
@@ -377,6 +410,8 @@ echo "a freeze is confirmed against REST before it blocks anyone"
 FX_LIVE_CLOSED="[$B]"
 FX_REST='{"a-novel-kit/repo-a#1":"open false","a-novel-kit/repo-b#2":"closed false","a-novel-kit/repo-c#3":"open false"}'
 check "a 'merged' member REST says is open blocks the freeze" error live 1/1/1
+FX_REST='{"a-novel-kit/repo-a#1":"closed false","a-novel-kit/repo-b#2":"closed false","a-novel-kit/repo-c#3":"open false"}'
+check "a 'merged' member REST says is closed-unmerged blocks it too" error live 1/1/1
 FX_REST='{"a-novel-kit/repo-a#1":"closed true","a-novel-kit/repo-b#2":"open false","a-novel-kit/repo-c#3":"open false"}'
 check "a 'closed' member REST says is open blocks the freeze" error live 1/1/1
 reset_fixtures
@@ -423,6 +458,11 @@ FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/x\"){pullRequest(number:1){number
 check "a member repo carrying a GraphQL injection" clear live 1/0/1
 FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo\nEVIL: rateLimit{cost}","number":1}]')
 check "a member repo carrying a newline" clear live 1/0/1
+# The case the whole-string anchors exist for: jq's `$` matches BEFORE a final newline, so a bare
+# trailing one passes `^…$`. It emits a raw line break inside a GraphQL string literal — a
+# document-level error that no retry clears, wedging the Epic forever.
+FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b\n","number":2}]')
+check "a member repo with a bare trailing newline" clear live 1/0/1
 # One bad member must poison the whole set: validating with `any` instead of `all` would let the
 # injection through alongside a legitimate member.
 FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/x\"){evil","number":1}]')
@@ -445,6 +485,22 @@ FX_REHYDRATE=$(rehydrate "$B" "$C")
 FX_BODY=NOISE
 check "a gh notice on stderr does not corrupt the body" frozen live+snapshot 1/1/1
 FX_REHYDRATE=""
+
+echo
+echo "a pseudo-fence cannot shadow the real marker"
+# Readers once matched the fence as a SUBSTRING while merge-gate's splice matches whole lines, so a
+# decoy fence inside an HTML comment was read as the marker yet was invisible to the writer — a tamper
+# that survived every self-heal pass.
+FX_BODY=$(printf '%s\n%s\n%s\n\n%s' \
+  '<!--- <!-- epic-membership:snapshot:start --> --->' \
+  '{"status":"frozen","members":[{"repo":"a-novel-kit/DECOY","number":4242}]}' \
+  '<!--- <!-- epic-membership:snapshot:end --> --->' \
+  "$(marker frozen "$BC")")
+FX_REHYDRATE=$(rehydrate "$B" "$C")
+check "a decoy fence in an HTML comment is ignored" frozen live+snapshot 1/1/1
+printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/DECOY")' >/dev/null \
+  && ko "the decoy marker was used" || ok "and the real marker is the one that was read"
+reset_fixtures
 
 echo
 echo "the marker is parsed as JSON, not as a single line of text"
@@ -475,6 +531,10 @@ evaluate_epic 900 2>&1 >/dev/null | grep -q 'could not re-read all 2 frozen memb
 : > "$GITHUB_STEP_SUMMARY"
 FX_REHYDRATE=$(jq -cn '{data:{m0:null,m1:null}, errors:[{message:"NOT_FOUND"}]}')
 check "every alias nulled (data has keys, but no members)" error
+# GitHub answers a pullRequest(number:) that does not exist with a null and NO errors array, so the
+# member count is the only thing standing between a short answer and a silent clear.
+FX_REHYDRATE=$(jq -cn --argjson b "$B" '{data:{m0:{pullRequest:$b}, m1:{pullRequest:null}}}')
+check "a short answer carrying no errors array" error
 FX_REHYDRATE=$(jq -cn --argjson b "$B" '{data:{m0:{pullRequest:$b}, m1:{pullRequest:null}}, errors:[{message:"timeout"}]}')
 check "one alias nulled — a short answer is not a clean set" error
 FX_REHYDRATE=$(rehydrate "$B" "$C" | jq -c '. + {errors:[{message:"something went wrong"}]}')
@@ -495,12 +555,29 @@ FX_REHYDRATE=$(rehydrate "$B" "$C")
 printf 2 > "$WORK/rehydrate_fails"
 check "re-hydration recovers on the third attempt" frozen live+snapshot 1/1/1
 reset_fixtures
+for which in merged closed open; do
+  reset_fixtures
+  FX_SEARCH_FAIL_ON="$which"
+  check "a failed '$which' member search fails closed" error
+done
 FX_SEARCH_FAIL=true
-check "a failed label search" error
+check "all searches failing fails closed" error
+reset_fixtures
+FX_LIVE_CLOSED="[$B]"
+FX_REST_FAIL_ON='a-novel-kit/repo-a#1'
+check "a failed REST read of the merged member fails closed" error
+reset_fixtures
+FX_LIVE_CLOSED="[$B]"
+FX_REST_FAIL_ON='a-novel-kit/repo-b#2'
+check "a failed REST read of the closed member fails closed" error
+reset_fixtures
+FX_QUEUE='[]'
+FX_REST_FAIL_ON='a-novel-kit/repo-c#3'
+check "a failed REST read of a candidate stray fails closed" error
 reset_fixtures
 FX_REST_FAIL=true
 FX_LIVE_CLOSED="[$B]"
-check "a failed REST confirmation" error
+check "every REST read failing fails closed" error
 reset_fixtures
 FX_QUEUE_FAIL=true
 check "a failed merge-queue read" error
@@ -520,8 +597,15 @@ printf '%d passed, %d failed\n' "$pass" "$fail"
 # A floor on the count, not just on failures: a suite that runs no assertions at all exits 0 and reads
 # as green, which is the one way a test file can protect nothing while looking like it protects
 # everything. Raise this when assertions are added; never lower it to make a run pass.
-if [ "$pass" -lt 75 ]; then
-  echo "::error::only $pass assertion(s) ran (expected at least 75) — the suite did not execute fully"
+# Report failures first: they are the useful diagnosis. The floor below is about assertions that never
+# RAN, so it counts executions (pass + fail) — counting passes alone would make any ordinary failure
+# masquerade as a truncated suite.
+ran=$((pass + fail))
+if [ "$fail" -gt 0 ]; then
+  echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-[ "$fail" -eq 0 ]
+if [ "$ran" -lt 95 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 95) — the suite did not execute fully"
+  exit 1
+fi

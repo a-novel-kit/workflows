@@ -122,7 +122,7 @@ runs:
           # that opens a value before parsing. Requiring the JSON to be one compact line at column 0
           # (what a `grep '^{'` does) silently kills a pretty-printed marker; parsing the note as JSON
           # kills every marker merge-gate actually emits. `-s .[0]` takes the first value if a hand-edit
-          # left several. All three participants extract identically.
+          # left several — though trailing prose inside the region still voids the whole marker, which fails safe. All three participants extract identically.
           marker=$(printf '%s\n' "$body" \
             | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
             | sed -n '/^[[:space:]]*[{[]/,$p' \

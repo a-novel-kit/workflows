@@ -458,14 +458,14 @@ runs:
         # Normalize exactly as the readers validate, so the writer cannot emit a marker they reject —
         # a frozen marker is never rewritten, so one they refuse is a permanently dead snapshot that
         # silently degrades every Epic to live membership. Dedup is case-folded (GitHub resolves repo
-        # names case-insensitively) and the 200 cap matches theirs.
+        # names case-insensitively) and the 50-member cap matches theirs.
         cur=$(printf '%s' "$MEMBERS" | jq -c '
           [.[] | {repo, number}] | unique_by((.repo | ascii_downcase), .number) | sort_by(.repo, .number)')
         if ! printf '%s' "$cur" | jq -e '
               length > 0 and length <= 50
               and all(.[]; (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
                 and (.number | type == "number" and . == floor and . > 0 and . < 2147483648))' >/dev/null 2>&1; then
-          echo "::warning::Epic #${EPIC}: resolved member set is not snapshot-writable (empty, over 200, or malformed) — not capturing an activation snapshot this pass." \
+          echo "::warning::Epic #${EPIC}: resolved member set is not snapshot-writable (empty, over 50 members, or malformed) — not capturing an activation snapshot this pass." \
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
@@ -492,10 +492,14 @@ runs:
           elif ($mk.status == "pending" and ($mk.members | type == "array") and ($mk.at | type == "string"))
             then (
               if (($mk.members | sort_by(.repo, .number)) != $cur) then "pending"
-              # An unparseable `at` must read as NOT aged. Defaulting it to epoch 0 made any corrupt or
-              # hand-edited timestamp infinitely old, promoting on the very next pass and skipping the
-              # stabilization window the two-phase capture exists to enforce.
-              elif (($now | fromdateiso8601) - ($mk.at | try fromdateiso8601 catch ($now | fromdateiso8601))) >= $thr then "frozen"
+              # An unparseable `at` rewrites a fresh pending rather than promoting or waiting. Reading it
+              # as epoch 0 made a corrupt timestamp infinitely old and promoted on the next pass, skipping
+              # the stabilization window; reading it as "now" never ages, and since the member set is
+              # unchanged the reset branch above never fires either, so the marker stalls forever and the
+              # Epic silently keeps live membership. Rewriting is the only answer that both refuses the
+              # premature freeze and repairs the marker.
+              elif (($mk.at | try (fromdateiso8601 | true) catch false) | not) then "pending"
+              elif (($now | fromdateiso8601) - ($mk.at | fromdateiso8601)) >= $thr then "frozen"
               else "skip" end)
           else "pending" end' 2>/dev/null || echo skip)
 
