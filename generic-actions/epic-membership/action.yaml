@@ -133,7 +133,7 @@ runs:
             | select(all(.[]; type == "object"
                 and (.repo | type == "string") and (.repo | test("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$"))
                 and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
-            | unique_by(.repo, .number)
+            | unique_by((.repo | ascii_downcase), .number)
             | select(length > 0 and length <= 200)' 2>/dev/null || true)
         fi
         if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
@@ -144,7 +144,7 @@ runs:
           # correct fail-closed.
           alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
-              + "{pullRequest(number:\(.value.number)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
+              + "{pullRequest(number:\(.value.number|floor)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
             ) | join("\n")')
           rh='{}'
           for attempt in 1 2 3; do

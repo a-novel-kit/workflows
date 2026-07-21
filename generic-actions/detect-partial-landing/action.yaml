@@ -172,9 +172,13 @@ runs:
     # targets (a reenqueue target is a landable stray, i.e. an open Epic member). The enqueue token
     # below is scoped to exactly these, not org-wide, so a leak can't reach a repo that isn't mid-landing.
     # Reads the same open-PR + label view the run step's enumeration does (labels first:100), so it is a
-    # superset of the reenqueue targets (a stray is an open Epic member). Residual divergence is only a PR
-    # opening in the seconds between (self-heals — the reenqueue logs "next sweep retries") or an org with
-    # >1000 open PRs (not realistic here). A partial page failure abandons the token, never a partial scope.
+    # superset of the reenqueue targets (a stray is an open Epic member). It stays a superset only because
+    # the roll-forward skips strays the label search no longer returns — the frozen activation snapshot
+    # widens MEMBERSHIP past this query, so a snapshot-only member's repo can be absent here; see
+    # sweep_post_clear, which is what keeps that member out of reenqueue's reach. Residual divergence is
+    # only a PR opening in the seconds between (self-heals — the reenqueue logs "next sweep retries") or an
+    # org with >1000 open PRs (not realistic here). A partial page failure abandons the token, never a
+    # partial scope.
     - name: Discover active-Epic repos (scope for the enqueue token)
       id: scope
       if: ${{ steps.mode.outputs.mode == 'sweep' }}
@@ -466,27 +470,41 @@ runs:
           SNAP_MERGED='[]'
           SNAP_CLOSED='[]'
           SNAP_OPEN='[]'
-          local resp="" body="" ok=false marker frozen want alias_q rh out nodes
+          local resp="" err="" errf body="" ok=false marker frozen want alias_q rh out nodes
+          errf=$(mktemp)
           for attempt in 1 2 3; do
-            # Read the whole issue and take `.body` through jq rather than `--jq`: validating that the
-            # response parses as an issue object is what keeps a gh notice on stderr (folded in here so
-            # the 404 case is recognizable) from being parsed as body text.
-            if resp=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/$1" 2>&1) \
+            # Keep the streams apart: stdout is the payload, stderr is diagnosis. Folding them together
+            # would let a benign `gh` notice land inside the JSON and turn a healthy read into a parse
+            # failure — which now costs a whole pass, since an unreadable body no longer falls back.
+            # `.body` goes through jq rather than `--jq` so a non-issue response is rejected as a whole
+            # rather than silently yielding an empty body (which reads as "no snapshot").
+            if resp=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/$1" 2>"$errf") \
               && printf '%s' "$resp" | jq -e 'type == "object" and has("body")' >/dev/null 2>&1; then
               # GitHub stores bodies with CRLF; strip \r so the marker fences match.
               body=$(printf '%s' "$resp" | jq -r '.body // ""' | tr -d '\r')
               ok=true
               break
             fi
+            err=$(cat "$errf" 2>/dev/null || true)
             # The Epic issue simply is not in the planning repo — nothing to retry.
-            case "$resp" in *"HTTP 404"*) break ;; esac
+            case "$err" in *"HTTP 404"*) break ;; esac
             [ "$attempt" -lt 3 ] && sleep 2
           done
+          rm -f "$errf"
           if [ "$ok" != true ]; then
-            # No snapshot applied, so this pass sees exactly what it saw before the snapshot existed —
-            # bounded by the live floor, and re-derived by the next sweep. Warn so it stays visible.
-            echo "::warning::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 — no snapshot applied this pass, live label set only."
-            return 2
+            # A 404 is an ANSWER: the Epic issue is not there, so no snapshot can exist and the live
+            # floor is the whole truth. Any other failure leaves us not knowing whether a frozen set
+            # exists — and deciding on the live floor while ignorant is not neutral, because a `clear`
+            # POSTS success and would lift a freeze an earlier pass had correctly set. Treat ignorance
+            # the same way the re-read failure below does: decide nothing, re-derive next pass.
+            case "$err" in
+              *"HTTP 404"*)
+                echo "::warning::epic #$1: ${ORG}/${PLANNING_REPO}#$1 not found — no snapshot possible, live label set only."
+                return 2
+                ;;
+            esac
+            echo "::error::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 after 3 attempts, so it is unknown whether a snapshot exists — deciding nothing this pass: ${err}"
+            return 1
           fi
 
           # Take the whole fenced region and let jq parse it, so the marker is not silently required to
@@ -502,15 +520,16 @@ runs:
           # below and the Epic body is writable by anyone with write access to the planning repo:
           # `[^/]` would admit quotes and newlines (enough to inject fields), and `type == "number"`
           # alone would admit 1.5, which is a document-level validation error rather than a skippable
-          # one. `unique` keeps a repeated member from double-posting downstream; the cap bounds the
-          # single aliased query below.
+          # one. The dedup key is case-folded because GitHub resolves repository names case-insensitively,
+          # so `org/Repo` and `org/repo` are one member and would otherwise both be queried and both be
+          # counted. The cap bounds the single aliased query below.
           frozen=$(printf '%s' "$marker" | jq -c '
             select(type == "object" and .status == "frozen" and (.members | type == "array"))
             | .members
             | select(all(.[]; type == "object"
                 and (.repo | type == "string") and (.repo | test("^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$"))
                 and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
-            | unique_by(.repo, .number)
+            | unique_by((.repo | ascii_downcase), .number)
             | select(length > 0 and length <= 200)' 2>/dev/null || true)
           { [ -n "$frozen" ] && [ "$frozen" != "null" ]; } || return 2
           want=$(printf '%s' "$frozen" | jq 'length')
@@ -521,9 +540,13 @@ runs:
           # would in epic-membership, where the consumer then HOLDs), it erases the evidence of
           # abandonment and reads as "nothing wrong". Accepting a short answer here would silently
           # decide `clear` and post success on the very case this exists to catch.
+          # `|floor` renders the number as a canonical integer literal. The guard above already rejects
+          # a fractional value, but jq preserves the literal a body was written with, so 1.0 and 1e2
+          # would reach the query verbatim — and a non-Int literal is a document-level validation error
+          # that rejects the whole query rather than one alias, wedging the Epic on every retry.
           alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
-              + "{pullRequest(number:\(.value.number)){number headRefOid mergedAt baseRefName isDraft state repository{nameWithOwner}}}"
+              + "{pullRequest(number:\(.value.number|floor)){number headRefOid mergedAt baseRefName isDraft state repository{nameWithOwner}}}"
             ) | join("\n")')
           rh=""
           for attempt in 1 2 3; do
@@ -545,16 +568,21 @@ runs:
             return 1
           fi
 
-          # Keep only nodes that answer a member actually asked for, then require the count to still
-          # match: a response is trusted to describe the frozen set, and a node for some other pull
-          # request would otherwise flow into EV_OPEN and become a freeze target under an org-wide
-          # checks:write token.
+          # Reconcile each node against the member it was asked for, so a response cannot smuggle in a
+          # pull request nobody asked about — such a node would flow into EV_OPEN and become a freeze
+          # target under an org-wide checks:write token. Identity is the ALIAS INDEX plus the pull
+          # request number, deliberately not the repository name: GraphQL follows a rename silently and
+          # answers with the NEW nameWithOwner, and since a frozen marker is never rewritten, matching
+          # on the name would wedge a renamed member's Epic at `error` forever. The number is stable
+          # under a rename, and the alias index is ours, so together they still pin identity.
           nodes=$(printf '%s' "$rh" | jq -c --argjson want "$frozen" '
-            [ (.data // {}) | to_entries[] | .value.pullRequest | select(. != null)
-              | . as $n | select($want | any(.repo == $n.repository.nameWithOwner and .number == $n.number)) ]')
-          if [ "$(printf '%s' "$nodes" | jq 'length')" -ne "$want" ] \
+            [ (.data // {}) | to_entries[]
+              | (.key | ltrimstr("m") | tonumber) as $i
+              | .value.pullRequest | select(. != null)
+              | select($want[$i] != null and .number == ($want[$i].number | floor)) ]' 2>/dev/null || true)
+          if [ -z "$nodes" ] || [ "$(printf '%s' "$nodes" | jq 'length')" -ne "$want" ] \
             || ! printf '%s' "$nodes" | jq -e 'all(.[]; .state == "MERGED" or .state == "CLOSED" or .state == "OPEN")' >/dev/null 2>&1; then
-            printf 'snapshot_buckets: re-read of epic #%s did not answer its own member set (unknown or unmatched nodes)\n' "$1" >&2
+            printf 'snapshot_buckets: re-read of epic #%s did not answer its own member set (unmatched, duplicated, or unknown-state nodes)\n' "$1" >&2
             return 1
           fi
 
@@ -566,14 +594,33 @@ runs:
           return 0
         }
 
-        # Merge snapshot members into a live bucket, one entry per (repo, number). The live node wins a
-        # collision: both describe the same pull request, and the live one came from the search shape
-        # the rest of evaluate_epic was written against.
-        union_nodes() { # $1 = live array, $2 = snapshot array
-          jq -cn --argjson live "$1" --argjson snap "$2" '
-            $live + [ $snap[] | . as $n
-              | select($live | any(.repository.nameWithOwner == $n.repository.nameWithOwner
-                  and .number == $n.number) | not) ]'
+        # Combine the live label buckets with the frozen snapshot's into one membership view, printed as
+        # {merged, closed, open}. Prints nothing and returns non-zero if the merge fails.
+        #
+        # A pull request present in the snapshot is taken FROM the snapshot, bucket and all. Both
+        # sources describe the same pull request, but the snapshot node is a direct read issued this
+        # pass while the live node comes from GitHub's eventually-consistent search index, so the
+        # snapshot carries the fresher state and head SHA — and posting a check on a stale head is the
+        # "stranded on Expected" failure this action exists to avoid. It also keeps each pull request in
+        # exactly ONE bucket: two sources disagreeing about a member (the index still calling a merged
+        # pull request open) would otherwise count it twice and post success on a merged head.
+        # This cannot weaken detection: MERGED is terminal, so a fresher read never demotes a member the
+        # index already reports as merged, and `merged >= 1` is the precondition every decision needs.
+        #
+        # Every node is tagged `liveMember`, recording whether the live `epic:<N>` label search still
+        # returns it. Detection ignores the tag — a de-labeled member is a member. Mutations must not:
+        # see the roll-forward in sweep_post_clear.
+        union_buckets() { # $1..$3 = live merged/closed/open, $4..$6 = snapshot merged/closed/open
+          jq -cn --argjson lm "$1" --argjson lc "$2" --argjson lo "$3" \
+            --argjson sm "$4" --argjson sc "$5" --argjson so "$6" '
+            def key: "\(.repository.nameWithOwner | ascii_downcase)#\(.number)";
+            ([$lm[], $lc[], $lo[]] | map(key)) as $livekeys
+            | ([$sm[], $sc[], $so[]] | map(key)) as $snapkeys
+            | def live($b): [ $b[] | select((key | IN($snapkeys[])) | not) | . + {liveMember: true} ];
+              def snap($b): [ $b[] | . + {liveMember: (key | IN($livekeys[]))} ];
+            { merged: (snap($sm) + live($lm)),
+              closed: (snap($sc) + live($lc)),
+              open:   (snap($so) + live($lo)) }'
         }
 
         # ---- Post helpers (dry-run aware; the checks token posts) -------------------------
@@ -664,16 +711,23 @@ runs:
           case "$snap_rc" in
             0)
               membership=live+snapshot
-              merged=$(union_nodes "$merged" "$SNAP_MERGED")
-              closed_unmerged=$(union_nodes "$closed_unmerged" "$SNAP_CLOSED")
-              open=$(union_nodes "$open" "$SNAP_OPEN")
+              local buckets
+              if ! buckets=$(union_buckets "$merged" "$closed_unmerged" "$open" \
+                "$SNAP_MERGED" "$SNAP_CLOSED" "$SNAP_OPEN"); then
+                printf 'evaluate_epic: could not merge the live and snapshot member sets for epic #%s\n' "$EPIC" >&2
+                return 0
+              fi
+              merged=$(printf '%s' "$buckets" | jq -c '.merged')
+              closed_unmerged=$(printf '%s' "$buckets" | jq -c '.closed')
+              open=$(printf '%s' "$buckets" | jq -c '.open')
               ;;
             2) : ;; # pre-activation, or no usable marker — the live floor stands alone
             *)
-              # A frozen set exists but could not be resolved. Deciding on the live floor alone would
-              # mean answering "is a member missing?" with the one source that cannot see a missing
-              # member — and a `clear` is not passive here, it POSTS success. Leave EV_DECISION=error:
-              # the sweep posts nothing (any standing freeze survives) and re-derives next pass.
+              # A frozen set exists (or might) and could not be resolved. Deciding on the live floor
+              # alone would mean answering "is a member missing?" with the one source that cannot see a
+              # missing member — and a `clear` is not passive here, it POSTS success and would lift a
+              # freeze an earlier pass set. Leave EV_DECISION=error: the sweep posts nothing (a standing
+              # freeze survives) and re-derives next pass.
               return 0
               ;;
           esac
@@ -811,11 +865,23 @@ runs:
           local epic="$1"
           if [ "$EV_MERGED_COUNT" -ge 1 ] && [ "$EV_STRAY_COUNT" -ge 1 ]; then
             echo "epic #$epic: $EV_STRAY_COUNT stray sibling(s) within grace — rolling forward." | tee -a "$GITHUB_STEP_SUMMARY"
-            local s_repo s_num
+            # Roll forward only strays the live `epic:<N>` label search still returns. A snapshot-only
+            # member is one a human de-labeled, and re-arming auto-merge on it would do three wrong
+            # things at once: resume a landing a human stepped out of (the one thing epic-freeze must
+            # never do), arm a pull request that merge-gate and per-PR both now classify as standalone
+            # and therefore no longer gate, and reach for a repository outside the enqueue token's
+            # scope, which is derived from that same label search and would 403 on every sweep forever.
+            # Detection still counts it: it stays in EV_STRAYS and can still trip the freeze at grace.
+            local s_repo s_num skipped
             while read -r s_repo s_num <&5; do
               [ -n "$s_repo" ] || continue
               reenqueue "$s_repo" "$s_num"
-            done 5< <(printf '%s' "$EV_STRAYS" | jq -r '.[] | select(.isDraft | not) | "\(.repository.nameWithOwner) \(.number)"')
+            done 5< <(printf '%s' "$EV_STRAYS" | jq -r '.[] | select((.isDraft | not) and .liveMember) | "\(.repository.nameWithOwner) \(.number)"')
+            skipped=$(printf '%s' "$EV_STRAYS" | jq -r '[.[] | select((.isDraft | not) and (.liveMember | not))] | length')
+            if [ "$skipped" -gt 0 ]; then
+              echo "::warning::epic #$epic: $skipped stray sibling(s) are frozen-set members the \`epic:$epic\` label no longer returns — NOT rolled forward (a de-labeled member is not auto-merged back into a landing). They still count toward the freeze." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           if [ "$EV_OPEN_COUNT" -eq 0 ]; then
             echo "epic #$epic: no open siblings — nothing to post." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -923,9 +989,12 @@ runs:
           # and wins on a head both could touch — flipping a contested head to fail-closed. Two things
           # contest a head: a lagging label index, and a snapshot member whose label was removed while it
           # stayed open (the backstop reads labels, so it sees a non-member; the epic pass reads the frozen
-          # set, so it sees a member). The epic pass wins wherever it runs — but note it does not always
-          # run: a paused Epic returns before evaluate_epic, and an error decision posts nothing, so on
-          # those two branches the backstop's success stands as the last word on such a head.
+          # set, so it sees a member).
+          # This ordering only settles the contest WITHIN one sweep, and only on the branches that post: a
+          # paused Epic returns before evaluate_epic, and an error decision posts nothing, so on those the
+          # backstop's success stands. It settles nothing against per-PR mode, which classifies by label
+          # alone and will green a de-labeled member's head on its next event —
+          # https://github.com/a-novel-kit/workflows/issues/325. Treat the sweep as a floor, not a gate.
           # Always runs, even with no active Epics.
           standalone_sweep
 

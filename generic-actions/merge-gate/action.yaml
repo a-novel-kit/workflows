@@ -452,9 +452,14 @@ runs:
         body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' | tr -d '\r')
 
         cur=$(printf '%s' "$MEMBERS" | jq -c '[.[] | {repo, number}] | sort_by(.repo, .number)')
+        # Parse the whole fenced region as JSON rather than grepping one compact line. Grepping made the
+        # marker silently require single-line JSON at column 0, and here that is destructive rather than
+        # merely blind: an unreadable FROZEN marker falls to the `pending` branch below, which OVERWRITES
+        # it with the current live set — permanently erasing exactly the de-labeled member the snapshot
+        # was frozen to remember. The readers parse it the same way.
         marker=$(printf '%s\n' "$body" \
           | awk '/<!-- epic-membership:snapshot:start -->/{f=1;next} /<!-- epic-membership:snapshot:end -->/{f=0} f' \
-          | grep -m1 '^{' || true)
+          | jq -s -c '.[0] // empty' 2>/dev/null || true)
         # An unparseable marker (hand-edited garbage) is treated as absent → a fresh pending, which
         # self-heals it rather than crashing or freezing corruption.
         if [ -z "$marker" ] || ! printf '%s' "$marker" | jq empty 2>/dev/null; then marker=null; fi

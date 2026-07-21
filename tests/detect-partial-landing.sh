@@ -31,7 +31,7 @@ extract() { # $1 = function name — lift it out of the run: block and de-indent
   ' "$ACTION" | sed 's/^        //'
 }
 
-for fn in snapshot_buckets union_nodes evaluate_epic; do
+for fn in snapshot_buckets union_buckets evaluate_epic; do
   out=$(extract "$fn")
   if [ -z "$out" ]; then
     echo "::error::could not extract $fn from $ACTION — did its definition move or change indent?"
@@ -50,14 +50,16 @@ export ORG=a-novel-kit PLANNING_REPO=.github GRACE_MINUTES=30
 export GITHUB_STEP_SUMMARY="$WORK/summary.md"
 now_epoch=$(date -u +%s)
 grace_seconds=$((GRACE_MINUTES * 60)) # derived, so it cannot drift from the action's own arithmetic
-sleep() { :; }                        # retries are asserted by call count below, not by wall clock
+sleep() { :; }                        # retry COUNTS are asserted via the gh call log, not by wall clock
 
 # ---- stubbed leaves ---------------------------------------------------------------------
 # Every stub can fail on demand: the action's central promise is that it fails CLOSED, and stubs
 # that cannot fail leave that promise untested.
-GH_CALLS=0
 gh() {
-  GH_CALLS=$((GH_CALLS + 1))
+  # Record every call so the QUERY can be asserted, not just its answer: the document this action
+  # builds is the part no fixture would otherwise exercise, and a wrong field or alias in it is a
+  # total feature outage.
+  printf '%s\n' "$*" >> "$WORK/gh_calls"
   case "$*" in
     *graphql*)
       # The stub runs inside $( ), i.e. a subshell, so a shell-variable countdown would never reach
@@ -73,7 +75,7 @@ gh() {
       case "$FX_BODY" in
         FAIL404) echo "gh: Not Found (HTTP 404)" >&2; return 1 ;;
         FAIL500) echo "gh: HTTP 502" >&2; return 1 ;;
-        NOISE) printf 'gh: a deprecation notice\n%s' "$(jq -cn '{body:"irrelevant"}')" ;;
+        NOISE) echo "gh: a deprecation notice" >&2; jq -cn --arg b "$FX_MARKER_BODY" '{body: $b}' ;;
         *) jq -cn --arg b "$FX_BODY" '{body: $b}' ;;
       esac ;;
     *) echo "unexpected gh call: $*" >&2; return 1 ;;
@@ -129,15 +131,18 @@ A=$(node a-novel-kit/repo-a 1 MERGED "$AGO40")
 B=$(node a-novel-kit/repo-b 2 CLOSED) # the abandoned member: closed unmerged, label removed
 C=$(node a-novel-kit/repo-c 3 OPEN)
 BC='[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/repo-c","number":3}]'
-FX_REST='{"a-novel-kit/repo-a#1":"closed true","a-novel-kit/repo-b#2":"closed false","a-novel-kit/repo-c#3":"open false"}'
 
 reset_fixtures() {
+  # Every fixture the assertions read lives here: a section that edits one and forgets to restore it
+  # would silently redefine truth for every later assertion.
+  FX_REST='{"a-novel-kit/repo-a#1":"closed true","a-novel-kit/repo-b#2":"closed false","a-novel-kit/repo-c#3":"open false"}'
   FX_LIVE_MERGED="[$A]" # A merged and still labeled: visible to the live search
   FX_LIVE_CLOSED='[]'   # B is de-labeled, so live truth has forgotten it entirely
   FX_LIVE_OPEN="[$C]"
   FX_BODY=""
   FX_REHYDRATE=""
   printf 0 > "$WORK/rehydrate_fails"
+  : > "$WORK/gh_calls"
   FX_QUEUE='[{"number":3,"state":"QUEUED","headOid":"sha3"}]' # repo-c is queued → not a stray
   FX_SEARCH_FAIL=false
   FX_REST_FAIL=false
@@ -187,6 +192,55 @@ FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 MERGED "$AGO5")" "$C")
 check "a member merged after the freeze is not double-counted" clear live+snapshot 2/0/1
 
 echo
+echo "the frozen member reaches the payload the freeze is posted on"
+# A decision is worthless if the head it names is missing: EV_OPEN is what sweep_post_freeze targets.
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 OPEN)" "$C")
+FX_REST='{"a-novel-kit/repo-a#1":"closed true","a-novel-kit/repo-b#2":"open false","a-novel-kit/repo-c#3":"open false"}'
+evaluate_epic 900 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-b" and .number == 2)' >/dev/null \
+  && ok "a de-labeled open member is in EV_OPEN, so it gets a check" \
+  || ko "the de-labeled open member is missing from EV_OPEN"
+printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-b" and (.liveMember | not))' >/dev/null \
+  && ok "and is tagged as no longer live-labeled" || ko "liveMember tag missing or wrong"
+printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-c" and .liveMember)' >/dev/null \
+  && ok "while a still-labeled member is tagged live" || ko "a live member was mis-tagged"
+# The roll-forward reads exactly this filter; a de-labeled member must not be re-armed.
+printf '%s' "$EV_OPEN" | jq -e '[.[] | select((.isDraft | not) and .liveMember)] | length == 1' >/dev/null \
+  && ok "only the live-labeled member is a roll-forward target" || ko "roll-forward would touch a de-labeled member"
+reset_fixtures
+
+echo
+echo "the GraphQL document it builds"
+FX_BODY=$(marker frozen "$BC")
+FX_REHYDRATE=$(rehydrate "$B" "$C")
+evaluate_epic 900 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+q=$(cat "$WORK/gh_calls")
+for want in 'owner:"a-novel-kit", name:"repo-b"' 'number:2' 'owner:"a-novel-kit", name:"repo-c"' 'number:3' \
+            'm0:' 'm1:' 'state' 'headRefOid' 'mergedAt' 'baseRefName' 'isDraft' 'nameWithOwner'; do
+  case "$q" in
+    *"$want"*) ok "queries $want" ;;
+    *) ko "the re-read query is missing: $want" ;;
+  esac
+done
+# `2.0` is a valid integer to the guard (it equals its own floor) but jq preserves the literal a body
+# was written with, and `number:2.0` is an Int! violation that rejects the WHOLE document — no retry
+# clears it, so the Epic would wedge forever. It has to render canonically.
+reset_fixtures
+FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2.0}]')
+FX_REHYDRATE=$(rehydrate "$B")
+evaluate_epic 900 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+q=$(cat "$WORK/gh_calls")
+case "$q" in
+  *"number:2.0"*) ko "a float-valued member number reaches the query verbatim" ;;
+  *"number:2"*) ok "a float-valued member number renders as a canonical integer" ;;
+  *) ko "the re-read query never rendered the member number" ;;
+esac
+reset_fixtures
+
+echo
 echo "unchanged behaviour"
 reset_fixtures
 check "a healthy live set clears" clear live 1/0/1
@@ -207,7 +261,6 @@ check "a stray past grace freezes" frozen live+snapshot 1/0/2
 FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO5")]"
 check "the same stray within grace does not" clear live+snapshot 1/0/2
 reset_fixtures
-FX_REST='{"a-novel-kit/repo-a#1":"closed true","a-novel-kit/repo-b#2":"closed false","a-novel-kit/repo-c#3":"open false"}'
 
 echo
 echo "a degraded marker falls back to the live floor — never a crash, never a freeze on garbage"
@@ -231,14 +284,28 @@ FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/x\"){pullRequest(number:1){number
 check "a member repo carrying a GraphQL injection" clear live 1/0/1
 FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo\nEVIL: rateLimit{cost}","number":1}]')
 check "a member repo carrying a newline" clear live 1/0/1
+# One bad member must poison the whole set: validating with `any` instead of `all` would let the
+# injection through alongside a legitimate member.
+FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/x\"){evil","number":1}]')
+check "one evil member among valid ones" clear live 1/0/1
+# The repo pattern must be anchored at BOTH ends: a payload in the prefix still ends in a valid name.
+FX_BODY=$(marker frozen '[{"repo":"evil\"){x} a-novel-kit/repo-b","number":2}]')
+check "a member repo with an injected prefix" clear live 1/0/1
 FX_BODY=$(marker frozen '[]')
 check "an empty frozen set" clear live 1/0/1
 FX_BODY=FAIL404
 check "the Epic issue is absent" clear live 1/0/1
+# An unreadable body is IGNORANCE, not an answer: we cannot tell whether a snapshot exists, and a
+# `clear` would post success and lift a freeze an earlier pass set. Only a 404 is an answer.
 FX_BODY=FAIL500
-check "the body read fails outright" clear live 1/0/1
+check "the body read fails outright — decide nothing" error
+# A benign notice on stderr must not corrupt the payload — it costs a whole pass now that an
+# unreadable body no longer falls back to the live floor.
+FX_MARKER_BODY=$(marker frozen "$BC")
+FX_REHYDRATE=$(rehydrate "$B" "$C")
 FX_BODY=NOISE
-check "a gh notice prepended to the response is not parsed as body" clear live 1/0/1
+check "a gh notice on stderr does not corrupt the body" frozen live+snapshot 1/1/1
+FX_REHYDRATE=""
 
 echo
 echo "the marker is parsed as JSON, not as a single line of text"
@@ -248,6 +315,15 @@ FX_REHYDRATE=$(rehydrate "$B" "$C")
 check "a pretty-printed marker still freezes" frozen live+snapshot 1/1/1
 FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/repo-c","number":3}]')
 check "a duplicated member is de-duplicated, not double-counted" frozen live+snapshot 1/1/1
+FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-B","number":2},{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/repo-c","number":3}]')
+check "a case-variant duplicate is one member, not two" frozen live+snapshot 1/1/1
+# Two DISTINCT members in one repository: cross-repo Epics reuse numbers, so the dedup key has to be
+# the pair. Keyed on repo alone these would collapse and the set would silently lose a member.
+FX_REST=$(printf '%s' "$FX_REST" | jq -c '. + {"a-novel-kit/repo-b#4":"open false"}')
+FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/repo-b","number":4}]')
+FX_REHYDRATE=$(rehydrate "$B" "$(node a-novel-kit/repo-b 4 OPEN)")
+check "two members in one repository stay two" frozen live+snapshot 1/1/2
+reset_fixtures
 
 echo
 echo "a frozen set that cannot be resolved fails closed — it never decides on the live floor alone"
@@ -270,7 +346,6 @@ FX_REHYDRATE=$(rehydrate "$B" "$(node a-novel-kit/UNRELATED 4242 OPEN)")
 FX_REST=$(printf '%s' "$FX_REST" | jq -c '. + {"a-novel-kit/UNRELATED#4242":"open false"}')
 FX_QUEUE='[{"number":3,"state":"QUEUED","headOid":"sha3"},{"number":4242,"state":"QUEUED","headOid":"sha4242"}]'
 check "a node for a pull request nobody asked about" error
-FX_REST=$(printf '%s' "$FX_REST" | jq -c 'del(."a-novel-kit/UNRELATED#4242")')
 FX_QUEUE='[{"number":3,"state":"QUEUED","headOid":"sha3"}]'
 FX_REHYDRATE=$(rehydrate "$B" "$(jq -cn --argjson c "$C" '$c | del(.state)')")
 check "a member whose state is missing" error
