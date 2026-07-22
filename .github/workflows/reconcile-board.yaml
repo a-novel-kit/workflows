@@ -138,6 +138,7 @@ jobs:
           q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number headRefOid repository{ name }
+              labels(first:20){ nodes{ name } }
               closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } } }'
           # Page every open PR: a fail-safe cannot stop at the first 100.
           nodes='[]'
@@ -150,13 +151,22 @@ jobs:
             [ "$(echo "$page" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
             cursor=$(echo "$page" | jq -r '.data.search.pageInfo.endCursor')
           done
-          # tasks holds the open PRs that close an issue, whose Status is re-derived.
-          # epic_prs holds those whose closing issue has a parent Epic, which get merge-gate re-posted.
+          # tasks holds the open PRs that close an issue, whose Status is re-derived. Status derivation
+          # reads the closing reference, so the Closes walk is the right selector for this half.
           tasks=$(echo "$nodes" | jq -c '[.[]
             | select(.number and (.closingIssuesReferences.nodes | length > 0))
             | {repo: .repository.name, number, sha: .headRefOid}]')
+          # epic_prs holds the PRs merge-gate is re-posted on. Membership is the `epic:<N>` LABEL,
+          # which is what merge-gate holds against — a label needs >= triage to apply, while a Closes
+          # keyword is author-controlled. This selector used to be the Closes walk, so a member
+          # carrying the label but no Closes line (an infra or re-pin PR pulled into a wave) was never
+          # re-evaluated. It stayed held at `failure` until someone pushed to it, and since a held PR
+          # is released only by this sweep, the whole wave blocked on one permanently-red check.
+          #
+          # Dropping the Closes-derived set loses nothing: merge-gate classifies an unlabeled PR as
+          # standalone and always passes it, so re-posting on those never changed an outcome.
           epic_prs=$(echo "$nodes" | jq -c '[.[]
-            | select(.number and (([.closingIssuesReferences.nodes[].parent] | map(select(. != null)) | length) > 0))
+            | select(.number and ([.labels.nodes[].name | select(startswith("epic:"))] | length > 0))
             | {repo: .repository.name, number, sha: .headRefOid}]')
           {
             echo "tasks=$tasks"
