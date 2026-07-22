@@ -113,21 +113,15 @@ runs:
           exit 1
         fi
 
-        # Every closing issue is derived, not just one. This used to take the lowest-numbered ref
-        # and leave the rest in whatever status they already held, on the stated grounds that "the
-        # reconcile sweep covers the rest" — but the sweep re-derives an issue from ITS OWN pull
-        # request, and an issue closed by a sibling's PR has none. So the others were never picked
-        # up by anything: not a race that resolves on the next pass, but a state nothing reaches.
-        # A Task left reading `Triage` while its fix is in review is invisible, because the run
-        # that stranded it succeeds.
+        # Every issue the PR closes is derived. The reconcile sweep reaches an issue through its own
+        # pull request, so an issue closed by a sibling's PR is reachable only from here.
         refs=$(echo "$pr" | jq '.data.repository.pullRequest.closingIssuesReferences.nodes')
         ref_count=$(echo "$refs" | jq 'length')
-        # Newline-separated: board-write takes several ids and applies the same field and value to
-        # each, so the fan-out lives in the one privileged writer instead of here.
+        # Newline-separated for board-write, which takes several ids and writes the same field and
+        # value to each. The fan-out lives there because a composite action cannot loop a `uses:` step.
         issue_ids=$(echo "$refs" | jq -r 'sort_by(.number) | .[].id')
-        # Labels drive one branch below — a hotfix cleanup Task carries `hotfix-reconcile`, which
-        # makes Done its terminal MERGED status — so they are collected across every closing issue
-        # and checked for agreement rather than sampled from one.
+        # A hotfix cleanup Task carries `hotfix-reconcile`, which makes Done its terminal MERGED
+        # status. Collected across every closing issue, since one status covers all of them.
         labelled=$(echo "$refs" | jq -c '[.[] | (.labels.nodes // []) | map(.name) | index("hotfix-reconcile") != null]')
 
         # A pure function of the PR's current state: the reconcile sweep re-runs it and has
@@ -136,9 +130,8 @@ runs:
           MERGED)
             # A hotfix-reconcile cleanup Task is terminal on merge: the forward-port landed and a
             # hotfix cuts its own tag off the reconcile's baseline, so nothing else ships it.
-            # One status is written to every closing issue, so they have to agree on this. A PR
-            # closing both a hotfix cleanup Task and an ordinary one has no single right answer —
-            # it fails rather than silently picking one, which is the mistake this change is about.
+            # One status covers every closing issue. A PR closing both a hotfix cleanup Task and an
+            # ordinary one has two terminal statuses and no way to choose, so it stops here.
             hotfix_count=$(printf '%s' "$labelled" | jq '[.[] | select(.)] | length')
             if [ "$hotfix_count" = "0" ]; then
               status="Awaiting release"

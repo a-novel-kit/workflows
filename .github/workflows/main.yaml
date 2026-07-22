@@ -42,10 +42,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      # The detector lives in a script rather than inline so tests/lint-action-manifests.sh can run
-      # the shipped code against fixtures. The previous inline version anchored the context to the
-      # start of its expression and so missed every compound one — a gate nobody had proven caught
-      # anything, because it had no negative case.
+      # The detector lives in a script so tests/lint-action-manifests.sh runs the shipped code
+      # against fixtures, including the violations this gate exists to catch.
       - name: No composite-illegal expression contexts in action manifests
         shell: bash
         run: bash .github/scripts/lint-action-manifests.sh .

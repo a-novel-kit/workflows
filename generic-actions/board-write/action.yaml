@@ -26,13 +26,12 @@ inputs:
   content_id:
     required: true
     description: >
-      Node id of the issue or PR whose board item to write, or SEVERAL such ids separated
+      Node id of the issue or PR whose board item to write, or several such ids separated
       by newlines or spaces. The caller resolves what to write (e.g. a PR's linked
       issues); board-write finds each content's item in the project and applies the same
-      field and value to all of them. Several ids are handled here rather than by the
-      caller because a composite action cannot loop a `uses:` step, so a caller that
-      needed to write more than one item would have to reimplement this action — which is
-      how a PR closing two issues came to update only one of them.
+      field and value to all of them. Several ids belong here because a composite action
+      cannot loop a `uses:` step, which leaves this the only place the fan-out can happen
+      without a second implementation of the write.
   field:
     required: true
     description: Name of the field to set, e.g. "Status" or "Start date".
@@ -72,11 +71,11 @@ inputs:
 outputs:
   item_id:
     description: >
-      Node id of the board item that was resolved (or added). With several content ids,
-      the last one — the outputs describe the run, not any single item.
+      Node id of the board item that was resolved (or added). With several content ids, the
+      last one; the outputs describe the run rather than one item.
     value: ${{ steps.write.outputs.item_id }}
   changed:
-    description: '"true" if ANY item was mutated, "false" if every one already held the value.'
+    description: '"true" if any item was mutated, "false" if every one already held the value.'
     value: ${{ steps.write.outputs.changed }}
 
 runs:
@@ -184,10 +183,9 @@ runs:
             ;;
         esac
 
-        # content_id may name SEVERAL contents, newline- or space-separated. A pull request can
-        # close more than one issue, and a composite action cannot loop a `uses:` step — so the
-        # fan-out belongs inside the single privileged writer rather than around it, which is what
-        # keeps that claim true.
+        # content_id may name several contents, newline- or space-separated: a pull request can close
+        # more than one issue. The loop lives here because a composite action cannot loop a `uses:`
+        # step, leaving this the single path that mutates the board.
         read -r -a content_ids <<<"$(printf '%s' "$CONTENT_ID" | tr '\n' ' ')"
 
         any_changed=false

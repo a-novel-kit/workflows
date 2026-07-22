@@ -102,8 +102,9 @@ runs:
           return 1
         }
 
-        # Classify what the credential check found. A transport failure, a credential GitHub rejects,
-        # and a credential that carries no expiry are three outcomes, and only the last is benign.
+        # Classify the credential check. A transport failure, a credential GitHub rejects, and a
+        # credential that carries no expiry all leave the expiry header empty, and only the last is
+        # a healthy token.
         token_state() { # $1=curl exit status  $2=HTTP status  $3=expiry header value
           if [ "$1" -ne 0 ]; then printf 'unreachable'
           elif [ "$2" != "200" ]; then printf 'rejected'
@@ -115,8 +116,8 @@ runs:
         # A fine-grained PAT's expiry rides on the response header of any authenticated request. A
         # non-expiring credential, such as a classic PAT or an App token, sends no such header.
         #
-        # curl runs without -f so a rejected credential still returns its status line, which is what
-        # separates an expired token from a network fault and from a token that has no expiry.
+        # curl runs without -f so a rejected credential returns its status line, which is what tells
+        # the three cases apart.
         headers="$RUNNER_TEMP/tok_headers"
         curl_err="$RUNNER_TEMP/tok_curl_err"
         curl_status=0
@@ -131,8 +132,8 @@ runs:
             exit 1
             ;;
           rejected)
-            # The credential the automation depends on is already gone. This is the outcome the
-            # reminder exists for, so it alerts and fails.
+            # The credential the automation runs on is already gone, which is what the reminder
+            # exists to catch. It alerts on the webhook and fails the job.
             alert="## 🚨 [Token] ${TOKEN_NAME} - rejected by GitHub"$'\n'"-# HTTP ${http_code} — expired, revoked, or without the access it needs. Rotate it."
             if [ -n "${REGEN_MD:-}" ]; then
               alert="${alert}"$'\n\n'"${REGEN_MD}"

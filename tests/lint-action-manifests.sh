@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # Regression tests for the composite-manifest context lint.
 #
-# A gate with no negative case is a gate nobody has proven catches anything, which is exactly how the
-# previous version of this check stayed vacuous: it ran on every PR, printed a tick, and would have
-# missed the reference that took merge-gate offline org-wide had it been written as anything other
-# than the first token of its expression.
-#
-# So every case below is a manifest the linter is run against for real, and the two halves matter
-# equally: the violations must fail, and the deliberate plain-text prose must not.
+# A gate with no negative case is a gate nobody has proven catches anything. Every case below is a
+# manifest the linter runs against for real, and both halves carry weight: the violations have to
+# fail, and the plain-text prose the manifests document caller syntax with has to pass.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -58,7 +54,7 @@ check "context as the first token" fail \
 check "context after an operator" fail \
   "$(fixture after-operator 'echo "${{ inputs.kill_switch || vars.AGENT_KILL_SWITCH }}"')"
 
-# The case a widened ${{[^}]*}} pattern would still miss: [^}]* stops at the } inside '{0}'.
+# A widened ${{[^}]*}} pattern stops at the } inside '{0}' and lets this through.
 check "context inside a function call with braces" fail \
   "$(fixture inside-format "echo \"\${{ format('{0}', secrets.TOKEN) }}\"")"
 
@@ -73,15 +69,15 @@ check "strategy context" fail \
 
 echo "== what the linter must NOT flag =="
 
-# The deliberate convention: these names appear as prose in ten manifests, documenting the syntax a
-# CALLER uses. Flagging them would force the documentation out of the actions.
+# These names appear as prose in ten manifests, documenting the syntax a caller uses. The lint has to
+# leave them alone for that documentation to stay in the actions.
 check "plain-text prose outside an expression" pass \
   "$(fixture prose '# threaded from the caller as kill_switch: vars.AGENT_KILL_SWITCH')"
 
 check "a legal context in an expression" pass \
   "$(fixture legal-ctx 'echo "${{ inputs.client_id }} ${{ github.repository }} ${{ env.FOO }}"')"
 
-# The name is a substring of a longer identifier, not the context.
+# Here the name is a substring of a longer identifier.
 check "a longer identifier ending in a context name" pass \
   "$(fixture substring 'echo "${{ inputs.myvars.thing }}"')"
 
