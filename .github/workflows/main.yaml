@@ -42,21 +42,13 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      # The detector lives in a script rather than inline so tests/lint-action-manifests.sh can run
+      # the shipped code against fixtures. The previous inline version anchored the context to the
+      # start of its expression and so missed every compound one — a gate nobody had proven caught
+      # anything, because it had no negative case.
       - name: No composite-illegal expression contexts in action manifests
         shell: bash
-        run: |
-          set -euo pipefail
-          fail=0
-          while IFS= read -r f; do
-            # Only composite actions are affected; a reusable workflow is not one.
-            grep -qE 'using:[[:space:]]*"?composite' "$f" || continue
-            if grep -nE '\$\{\{[[:space:]]*(vars|secrets|needs|matrix|strategy)\.' "$f"; then
-              echo "::error file=$f::references a context unavailable to composite actions (vars/secrets/needs/matrix/strategy) — deliteralize it: write the context as plain text (e.g. \`vars.X\`), never inside a template expression. See the v1.12.1 load-failure incident."
-              fail=1
-            fi
-          done < <(find . -type f -name action.yaml -not -path './node_modules/*')
-          if [ "$fail" -ne 0 ]; then exit 1; fi
-          echo "✓ no composite-illegal expression contexts in any action manifest."
+        run: bash .github/scripts/lint-action-manifests.sh .
 
   # The landing-saga actions are bash, and their freeze, clear and hold decisions are too costly to
   # get wrong to leave unexercised. Each suite in tests/ extracts the functions it covers straight out
