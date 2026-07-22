@@ -194,7 +194,7 @@ jobs:
       # dry-run it bumps + reports without tagging/pushing.
       - name: Cut hotfix
         id: cut
-        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.20.1
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.20.2
         with:
           ref: ${{ steps.prepare.outputs.ephemeral }}
           client_id: ${{ inputs.client_id }}
@@ -237,7 +237,7 @@ jobs:
       - name: Reconcile fix to the default branch
         id: reconcile
         if: ${{ success() && steps.cut.outcome == 'success' }}
-        uses: a-novel-kit/workflows/generic-actions/hotfix-reconcile@v1.20.1
+        uses: a-novel-kit/workflows/generic-actions/hotfix-reconcile@v1.20.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
@@ -266,7 +266,7 @@ jobs:
       # Passes the dispatch severity; a wired ESCALATE_PUSH_WEBHOOK pages SEV1. dry-run just logs it.
       - name: Escalate on failure
         if: ${{ failure() }}
-        uses: a-novel-kit/workflows/generic-actions/escalate@v1.20.1
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.20.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
