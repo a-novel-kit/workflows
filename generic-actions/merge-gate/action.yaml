@@ -31,14 +31,13 @@ description: >
   group — if the set regressed since enqueue (a member went back to draft, or lost its
   approval). A standalone PR in the queue re-affirms `success` (it was gated at enqueue).
 
-  This action is the ONLY writer of the activation-snapshot marker in the Epic body, which both
-  epic-membership and detect-partial-landing read. It captures the set (pending, then frozen) when
-  the Epic first holds merge-ready, and RETIRES it — to a `retired` tombstone carrying the wave
-  boundary — once every member has merged, so the next set can freeze and a pull request labeled
-  after the freeze is held for one wave rather than forever. A wave with a member closed unmerged
-  did not land and is never retired; the gate names it after 72h instead. A PR waiting on the next
-  wave is what triggers the retirement, since a fully merged wave has no open member left to run
-  the gate.
+  This action is the only writer of the activation-snapshot marker in the Epic body, which both
+  epic-membership and detect-partial-landing read. It captures the set — pending, then frozen — when
+  the Epic first holds merge-ready, and retires it to a `retired` tombstone carrying the wave
+  boundary once every member has merged. Retirement frees the next set to freeze, so a PR labeled
+  after the freeze is held for one wave. A wave with a member closed unmerged did not land and stays
+  frozen; the gate names it after 72h. The PR waiting on the next wave is what triggers retirement,
+  since a fully merged wave has no open member left to run the gate.
 
 inputs:
   client_id:
@@ -385,11 +384,11 @@ runs:
         # wave's verdict says nothing about its own readiness. Pre-snapshot the live set is
         # the PR's own set, so this is a no-op, and a
         # merge_group event gates the whole group.
-        # This hold is also the only pass positioned to END the previous wave, so it enables the
+        # This hold is also the only pass positioned to end the previous wave, so it enables the
         # capture step in retire-only mode before returning. Retirement needs a frozen wave that has
-        # fully landed AND a pass that reaches the capture step; a wave with every member merged has
-        # no open member left to run the gate, so the pull request waiting on the next wave is the
-        # only trigger there is. Returning here without it is what held that PR forever.
+        # fully landed and a pass that reaches the capture step, and a wave with every member merged
+        # has no open member left to run the gate. The pull request waiting here is the only trigger
+        # there is.
         if [ -z "${IN_QUEUE:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
           if [ "$(printf '%s' "$MEMBERS" | jq --arg r "$REPO_FULL" --argjson n "${PR_NUMBER}" \
                 'any(.[]; .repo == $r and .number == $n)')" != "true" ]; then
@@ -451,14 +450,13 @@ runs:
         EPIC: ${{ steps.discover.outputs.epic_number }}
         MEMBERS: ${{ steps.membership.outputs.members }}
         STABILIZE_SECONDS: "120"
-        # Set when this pass arrived from the not-in-set hold rather than from an all-ready set. Such
-        # a pass is not a member of the set it just read, so it has no standing to capture one; it may
-        # only retire the wave that is holding it.
+        # Set when this pass arrived from the not-in-set hold. Such a pass is not a member of the set
+        # it just read, so it has no standing to capture one; it may only retire the wave holding it.
         RETIRE_ONLY: ${{ steps.evaluate.outputs.retire_only }}
-        # How long a frozen wave may sit unfinished before the gate names what it is waiting on. It
-        # only warns: expiring a snapshot on a clock would un-freeze membership mid-landing, the
-        # failure the snapshot exists to prevent, and would fire exactly when an Epic is already
-        # unhealthy. A human closes the stray, or labels the Epic `automation:paused`.
+        # How long a frozen wave may sit unfinished before the gate names what it is waiting on. The
+        # warning is the whole action: a snapshot that expired on a clock would un-freeze membership
+        # mid-landing, which is the failure it exists to prevent. Resolution stays with a human, who
+        # closes the stray or labels the Epic `automation:paused`.
         STUCK_WAVE_HOURS: "72"
       run: |
         set -euo pipefail
@@ -470,18 +468,17 @@ runs:
             | jq -s -c '.[0] // empty' 2>/dev/null || true
         }
 
-        # The wave boundary carried by a marker: the instant before which a terminal pull request
-        # belongs to a retired wave, which detect-partial-landing appends to its `merged:` and
-        # `closed:` searches so one wave's history is not read as the next one's.
+        # The wave boundary a marker carries: the instant before which a terminal pull request belongs
+        # to a retired wave. detect-partial-landing appends it to its `merged:` and `closed:` searches
+        # so one wave's history is not read as the next one's.
         #
-        # Extracted AND validated here, in one place, because this value is used both to BUILD a
-        # payload and to GUARD a write. Read it twice with two different notions of well-formed and
-        # the two disagree: a guard comparing a raw boundary against a validated one never matches,
-        # and the pass yields on every attempt forever. Accepting exactly the form this step emits —
-        # which is also the only form detect-partial-landing will put in a query — makes a
-        # hand-edited or corrupt boundary drop out here, so the next write repairs it instead of
-        # carrying it forward. Dropping it scopes the next wave to unbounded history, which
-        # over-freezes; a bogus one silently reads as "nothing landed" and clears.
+        # Extraction and validation live together here because callers both build payloads from this
+        # value and compare writes against it. A second reading with a looser notion of well-formed
+        # would never match this one, and the write would yield on every attempt. The accepted form is
+        # the one this step emits, which is also the only form detect-partial-landing puts in a query,
+        # so a hand-edited boundary drops out here and the next write replaces it. An absent boundary
+        # scopes the next wave to unbounded history, which over-freezes; a bogus one reads as "nothing
+        # landed" and clears.
         since_of() { # $1 = marker json -> the boundary, or empty
           printf '%s' "${1:-}" | jq -r '
             if type == "object" and (.since | type == "string")
@@ -501,14 +498,15 @@ runs:
         # passes reach here. GitHub stores bodies with CRLF; strip \r so the marker lines match.
         body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' | tr -d '\r')
 
-        # Has the frozen wave fully LANDED? Only MERGED counts, and "terminal" is deliberately not the
-        # test: a member that was de-labeled and closed unmerged is exactly what the snapshot exists to
-        # remember, so counting it as done would retire the only durable record of a wave that FAILED,
-        # and flip the partial-landing detector from `frozen` to `clear` — which posts success. Such a
-        # wave stays frozen until a human resolves it, which is what epic-rollback is for.
+        # Whether the frozen wave has fully landed. Only a merged member counts. A member de-labeled
+        # and closed unmerged is what the snapshot exists to remember, so treating it as done would
+        # retire the only record that the wave failed, and flip the partial-landing detector from
+        # `frozen` to `clear`, which posts success. Such a wave stays frozen until a human resolves it
+        # through epic-rollback.
+        #
         # Under a frozen marker epic-membership returns that set with each member's state re-read
-        # live, so this costs no extra call. Before activation every state is OPEN, and a version skew
-        # that omits `state` yields false, so neither retires prematurely.
+        # live, so this costs no extra call. Every state is OPEN before activation, and a version skew
+        # omitting `state` yields false. Neither retires early.
         all_landed=$(printf '%s' "$MEMBERS" | jq -c \
           '(length > 0) and all(.[]; .state == "MERGED")' 2>/dev/null || echo false)
 
@@ -541,10 +539,10 @@ runs:
         if [ -z "$marker" ] || ! printf '%s' "$marker" | jq empty 2>/dev/null; then marker=null; fi
         now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-        # The boundary this pass inherits. splice replaces the WHOLE fenced region, so a boundary
-        # survives only by being written again: without this the retirement tombstone is destroyed by
-        # the very next capture, the live `merged:` search hands the new wave the old one's merges
-        # back, and that wave freezes one pass after it captures — the bug #340 fixed, undone.
+        # The boundary this pass inherits. splice replaces the whole fenced region, so a boundary
+        # survives only by being written again: the first capture after a retirement carries the
+        # tombstone's instant forward, which keeps the retired wave's merges out of the new wave's
+        # history.
         inherited_since=$(since_of "$marker")
 
         # A frozen marker is retired once its wave has landed, and otherwise skipped. A valid pending
@@ -554,11 +552,10 @@ runs:
         do=$(jq -rn --argjson cur "$cur" --argjson mk "$marker" --arg now "$now" \
           --argjson landed "$all_landed" --argjson thr "${STABILIZE_SECONDS}" '
           if ($mk | type) != "object" then "pending"
-          # A frozen wave whose every member has merged has discharged its purpose: the set it was
-          # frozen to remember is landed, and until it is retired the gate holds every pull request
-          # labeled afterwards forever, with a message promising a next wave that can never begin.
-          # Retiring it draws the boundary and lets the next ready set capture its own, which is the
-          # "joins the next wave" behavior epic-membership already documents.
+          # A frozen wave whose members have all merged has discharged its purpose. Retiring it draws
+          # the wave boundary and frees the next ready set to capture its own, which is the "joins the
+          # next wave" behavior epic-membership documents. A marker left in place holds every pull
+          # request labeled after it.
           elif $mk.status == "frozen" then (if $landed then "retire" else "skip" end)
           elif ($mk.status == "pending" and ($mk.members | type == "array") and ($mk.at | type == "string"))
             then (
@@ -575,10 +572,9 @@ runs:
 
         if [ "$do" = "skip" ]; then
           # A frozen wave that cannot finish is otherwise invisible: it holds every pull request
-          # labeled after it, and retirement needs every member merged, so nothing ever says why. Name
-          # what it is waiting on once the wait is long enough to be a fault rather than a landing in
-          # progress. The two cases need different words: an open member is late, while a member
-          # closed unmerged means the wave did not land and CANNOT retire by design.
+          # labeled after it, retirement needs every member merged, and nothing says why. Name what it
+          # is waiting on once the wait is long enough to be a fault. An open member is late; a member
+          # closed unmerged means the wave did not land and never retires.
           if [ "$(printf '%s' "$marker" | jq -r 'if type == "object" then (.status // "") else "" end' 2>/dev/null || true)" = "frozen" ] \
             && printf '%s' "$marker" | jq -e --arg now "$now" --argjson hrs "${STUCK_WAVE_HOURS}" \
                  '(.at | try (fromdateiso8601 | true) catch false)
@@ -592,7 +588,7 @@ runs:
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
             if [ -n "$abandoned" ]; then
-              echo "::warning::Epic #${EPIC}: the frozen wave cannot retire — ${abandoned} closed without merging, so it did not land. It stays frozen deliberately, because the snapshot is the only record that those were members; resolve it with epic-rollback." \
+              echo "::warning::Epic #${EPIC}: the frozen wave cannot retire — ${abandoned} closed without merging, so it did not land. It stays frozen because the snapshot is the only record that those were members; resolve it with epic-rollback." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
           fi
@@ -601,8 +597,8 @@ runs:
           exit 0
         fi
 
-        # A retire-only pass reached here from the not-in-set hold: it read a set it is not part of,
-        # so capturing one would freeze a wave on the authority of a pull request the wave excludes.
+        # A retire-only pass reached here from the not-in-set hold, so it read a set it is not part
+        # of. Capturing one would freeze a wave on the authority of a pull request that wave excludes.
         # It may end the previous wave and nothing else.
         if [ "${RETIRE_ONLY:-}" = "true" ] && [ "$do" != "retire" ]; then
           echo "Epic #${EPIC}: held for a later wave, and the current snapshot is not retirable this pass (${do}) — leaving it." \
@@ -611,19 +607,18 @@ runs:
         fi
 
         if [ "$do" = "retire" ]; then
-          # A TOMBSTONE, not a deletion. The marker is the only record of where this wave ended, and
-          # the live `merged:` search keeps returning the wave's merges for the rest of the Epic's
-          # life, so removing the region hands the next wave the previous one's history back. `since`
-          # is `now` rather than inherited: retirement is what DRAWS the boundary, superseding the one
-          # before it. Nothing merged between the wave's last merge and this pass — the gate holds
-          # every non-member — so no history is hidden by it. The tombstone names no members, and
-          # both membership readers select on `status == "frozen"`, so they fall through to the live
-          # floor exactly as they would with no marker at all.
+          # A tombstone. The marker is the only record of where this wave ended, and the live
+          # `merged:` search keeps returning the wave's merges for the rest of the Epic's life, so an
+          # empty region would hand the next wave the previous one's history back. `since` is `now`:
+          # retirement draws the boundary, superseding whatever came before. Nothing merges between
+          # the wave's last merge and this pass, because the gate holds every non-member, so the
+          # boundary hides no history. The tombstone names no members, and both membership readers
+          # select on `status == "frozen"`, so it resolves there as an absent marker does.
           payload=$(jq -cn --arg since "$now" '{status: "retired", since: $since}')
           note="_Epic membership, RETIRED — the wave frozen here has fully landed. The instant below separates its history from the next wave's; the next ready set captures its own. Do not edit._"
         elif [ "$do" = "frozen" ]; then
-          # `at` records when the status last changed. A frozen marker never ages into anything, but
-          # a wave that cannot finish has to be measurable to be reported, which is what it is for.
+          # `at` records when the status last changed. A frozen marker never ages into another status;
+          # the timestamp is there so a wave that cannot finish can be measured and reported.
           payload=$(printf '%s' "$cur" | jq -c --arg at "$now" --arg since "$inherited_since" \
             '{status: "frozen", at: $at, members: .} + (if $since == "" then {} else {since: $since} end)')
           note="_Epic membership, FROZEN at activation by the merge-gate. The authoritative set for this landing — a later de-label, close, or relabel does not change it. Do not edit._"
@@ -684,17 +679,16 @@ runs:
         # it win. So each attempt re-checks the decision against what is actually there.
 
         # The marker says what we intend and can still make progress: same status, same member set,
-        # same wave boundary. `at` is per-writer and ignored: under byte equality two writers with an
-        # identical set never satisfy each other, ping-ponging until both give up on a failure that
-        # never happened. `since` is not per-writer — it is inherited content, and ignoring it would
-        # let a write that dropped the boundary read as equivalent to one that kept it. Both the entry
+        # same wave boundary. `at` is per-writer and ignored, since under byte equality two writers
+        # with an identical set never satisfy each other and both give up on a failure that never
+        # happened. `since` is inherited content, so it counts toward equality. Both the entry
         # short-circuit and the post-write verify call this, so a repair that was clobbered cannot
         # read as a repair that landed.
         marker_settled() { # $1 = live marker json, $2 = our payload json
           same_marker "$1" "$2" || return 1
-          # Only `pending` ages. `frozen` and `retired` are terminal marker states carrying no aging
-          # clock, so equality is the whole test for them — demanding a parseable `at` from a
-          # tombstone would leave it permanently unsettled and retry every retirement to exhaustion.
+          # Only `pending` ages. `frozen` and `retired` are terminal states carrying no aging clock,
+          # so equality is the whole test for them. A tombstone has no `at` to parse, and demanding
+          # one leaves it permanently unsettled while the retirement retries to exhaustion.
           case "$(printf '%s' "$1" | jq -r '.status // ""' 2>/dev/null || true)" in
             frozen | retired) return 0 ;;
           esac
@@ -734,12 +728,11 @@ runs:
             fi
 
             if [ "$do" = "retire" ]; then
-              # Re-derive the retirement: only the frozen set THIS pass judged landed may be ended.
-              # If the marker is no longer frozen, or its members moved, a peer has already opened the
-              # next wave and a tombstone written now would discard it and re-draw the boundary at the
+              # Re-derive the retirement: only the frozen set this pass judged landed may be ended. A
+              # marker that is no longer frozen, or whose members moved, means a peer has opened the
+              # next wave, and a tombstone written now would discard it and redraw the boundary at the
               # wrong instant. The member comparison is character-for-character the one the freeze
-              # guard below makes; two spellings of "this marker names the set this pass computed" is
-              # how one guard comes to accept what the other rejects.
+              # guard below makes, so neither guard can accept what the other rejects.
               if ! jq -e -n --argjson m "${marker:-null}" --argjson cur "$cur" \
                    '($m | type == "object") and $m.status == "frozen"
                     and (($m.members // []) | sort_by((.repo | ascii_downcase), .number)) == $cur' >/dev/null 2>&1; then
@@ -759,12 +752,11 @@ runs:
               break
             fi
 
-            # The boundary is carried, not derived: the payload took it from the marker this pass read
-            # at the start, so a peer that has since drawn a different one would be overwritten and the
-            # next wave's history un-scoped. Retirement is exempt — it draws the boundary rather than
-            # inheriting it, and the re-derive above already pins which set it may end. Both sides read
-            # through since_of, so a corrupt boundary compares equal to the empty one that replaces it
-            # and the repairing write goes through instead of yielding forever.
+            # The payload took its boundary from the marker this pass read at the start, so a peer
+            # that has since drawn a different one must survive. Retirement is exempt: it draws the
+            # boundary, and the re-derive above already pins which set it may end. Both sides read
+            # through since_of, so a corrupt boundary compares equal to the empty one replacing it and
+            # the repairing write goes through.
             if [ "$do" != "retire" ] && [ "$(since_of "$marker")" != "${inherited_since:-}" ]; then
               echo "Epic #${EPIC}: the wave boundary moved while this pass was deciding — not overwriting it; the next pass inherits what is actually there." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
