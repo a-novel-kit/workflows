@@ -60,9 +60,11 @@ export GITHUB_STEP_SUMMARY="$WORK/summary.md"
 START=$(sed -n "s/^ *START='\(.*\)'\$/\1/p" "$ACTION" | head -1)
 END=$(sed -n "s/^ *END='\(.*\)'\$/\1/p" "$ACTION" | head -1)
 [ -n "$START" ] && [ -n "$END" ] || die "could not read the fence literals from $ACTION"
+# Indentation-agnostic: the block moves when it is wrapped in a conditional, and an anchor tied to a
+# fixed indent would silently stop matching — the failure this whole derivation exists to prevent.
 REGION_BLOCK=$(awk '
-  /^        \{$/ { buf=""; inb=1; next }
-  inb && /^        \} > "\$regionf"$/ { printf "%s", buf; exit }
+  /^[[:space:]]*\{$/ { buf=""; inb=1; next }
+  inb && /^[[:space:]]*\} > "\$regionf"$/ { printf "%s", buf; exit }
   inb { buf = buf $0 "\n" }
 ' "$ACTION")
 [ -n "$REGION_BLOCK" ] || die "could not read the region block from $ACTION"
@@ -123,7 +125,7 @@ M2B='[{"repo":"a-novel-kit/repo-a","number":5},{"repo":"a-novel-kit/repo-c","num
 M2S='[{"repo":"a-novel-kit/repo-a","number":2},{"repo":"a-novel-kit/repo-a","number":9}]'
 
 pending_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --argjson m "$1" '{status:"pending", at:$at, members:$m}'; }
-frozen_json() { jq -cn --argjson m "$1" '{status:"frozen", members:$m}'; }
+frozen_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --argjson m "$1" '{status:"frozen", at:$at, members:$m}'; }
 
 # The note the action actually writes, read OUT OF THE MANIFEST. Restating it here is how a fixture
 # comes to encode a belief instead of the format: a note that ever began with `[` or `{` would make
@@ -139,6 +141,8 @@ region_file() { # $1 = payload json, $2 = frozen|pending -> the region the actio
   [ -n "$note" ] || die "could not read the note text from $ACTION"
   payload="$1"
   f=$(mktemp -p "$WORK"); regionf="$f"
+  # Retiring uses an empty region file — splice then drops the fences with it.
+  if [ -z "$payload" ]; then : > "$f"; printf '%s' "$f"; return; fi
   # Run the manifest's own assembly rather than a copy of it.
   # `$( )` strips the trailing newline, so the closing brace needs its own separator or bash
   # reads it as an argument to the last command.
@@ -155,6 +159,40 @@ server_body() { # $1 = marker json, or empty for a body with no marker
 }
 marker_now() { current_marker "$(cat "$WORK/body")"; }
 writes() { wc -c < "$WORK/writes" | tr -d ' '; }
+
+# The DECISION program, lifted from the manifest. Until now the suite set `do` and `payload` as
+# inputs, so nothing could see the step COMPUTE them — and #328's whole subject is a new decision.
+DECIDE_JQ=$(awk "
+  /do=\\\$\\(jq -rn/ { f=1 }
+  f && !st && /'\$/ { st=1; next }
+  st && /' 2>\\/dev\\/null \\|\\| echo skip\\)\$/ { sub(/'.*\$/, \"\"); print; exit }
+  st { print }
+" "$ACTION")
+[ -n "$DECIDE_JQ" ] || die "could not read the decision program from $ACTION"
+
+# The terminality test, also lifted — it is what decides a wave is over, and it lives in bash rather
+# than inside the decision program, so extracting only the latter would leave it unseen.
+TERMINAL_JQ=$(awk '/all_terminal=/{f=1;next} f{ sub(/^[[:space:]]*'"'"'/, ""); sub(/'"'"'.*$/, ""); print; exit }' "$ACTION")
+[ -n "$TERMINAL_JQ" ] || die "could not read the terminality test from $ACTION"
+terminal_of() { printf '%s' "$1" | jq -c "$TERMINAL_JQ" 2>/dev/null || echo false; }
+
+# The payload/note assembly, lifted whole. It is the last piece the suite used to supply as an input
+# rather than observe — so a frozen marker silently losing its timestamp, or a retirement writing
+# fences instead of nothing, were both invisible.
+PAYLOAD_BLOCK=$(awk '/if \[ "\$do" = "retire" \]; then/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
+[ -n "$PAYLOAD_BLOCK" ] || die "could not read the payload assembly from $ACTION"
+payload_for() { # $1 = do, $2 = cur -> echoes "<payload>" and sets NOTE_OUT
+  local do cur payload note
+  do="$1"; cur="$2"
+  eval "$PAYLOAD_BLOCK"
+  NOTE_OUT="$note"
+  printf '%s' "$payload"
+}
+
+decide() { # $1 = marker json (or null), $2 = all_terminal, $3 = cur members
+  jq -rn --argjson cur "${3:-$M2}" --argjson mk "$1" --arg now "$now" \
+    --argjson terminal "$2" --argjson thr "$STABILIZE_SECONDS" "$DECIDE_JQ" 2>/dev/null || echo skip
+}
 
 # shellcheck disable=SC1091
 . "$WORK/lib.sh"
@@ -314,6 +352,83 @@ do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
 eq "a reordered member array still freezes" "$(run)" 0
 eq "and the marker is frozen" "$(marker_now | jq -r .status)" frozen
 
+echo "a completed wave is retired so the next one can freeze"
+# The wave boundary. A frozen set whose members are all terminal has nothing left to remember, and
+# until it is retired a pull request labelled afterwards is held by the gate forever.
+reset
+server_body "$(frozen_json "$M2")"
+do=retire; cur="$M2"; payload=""
+eq "the frozen region is removed" "$(run)" 0
+eq "leaving no marker at all" "$(marker_now)" ""
+grep -q 'Some prose' "$WORK/body" && ok "and the human prose is untouched" || ko "prose was dropped retiring"
+grep -qF -- "$START" "$WORK/body" && ko "a fence was left behind" || ok "with both fences gone"
+
+echo
+echo "retirement re-derives like every other write"
+# Only the set this pass judged complete may be removed. If a peer already opened the next wave,
+# deleting the region would discard their work.
+reset
+server_body "$(pending_json "$M2" 2026-07-22T09:59:00Z)"     # a peer already started the next wave
+do=retire; cur="$M2"; payload=""
+eq "a marker that is no longer frozen is left alone" "$(run)" 2
+eq "and it still stands" "$(marker_now | jq -r .status)" pending
+eq "with nothing written" "$(writes)" 0
+reset
+server_body "$(frozen_json "$M2B")"                          # frozen, but not the set we judged
+do=retire; cur="$M2"; payload=""
+eq "a frozen set we did not judge is left alone" "$(run)" 2
+eq "and nothing is written" "$(writes)" 0
+
+echo
+echo "a retirement that is undone is retried"
+reset
+server_body "$(frozen_json "$M2")"
+printf 'Some prose.\n\n%s\n%s\n%s\n%s\n\nMore prose.\n' "$START" "$(note_of frozen)" "$(frozen_json "$M2")" "$END" > "$WORK/steal"
+do=retire; cur="$M2"; payload=""
+eq "the retirement is retried until it sticks" "$(run)" 0
+eq "which takes two writes" "$(writes)" 2
+eq "and the marker is finally gone" "$(marker_now)" ""
+
+echo "the frozen marker records when it froze"
+# Not for aging it — frozen is terminal — but so a wave that cannot finish can be measured and named.
+reset
+do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
+server_body "$(pending_json "$M2" 2026-07-22T09:00:00Z)"
+eq "a freeze is written" "$(run)" 0
+marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null \
+  && ok "carrying a parseable freeze time" || ko "the frozen marker has no usable timestamp"
+eq "and the members it froze" "$(marker_now | jq -c '.members')" "$M2"
+
+echo "the payload the step builds"
+eq "a frozen payload records the freeze time" \
+  "$(payload_for frozen "$M2" | jq -r 'has("at")')" true
+eq "and carries the members it froze" \
+  "$(payload_for frozen "$M2" | jq -c '.members')" "$M2"
+eq "a pending payload records its clock" \
+  "$(payload_for pending "$M2" | jq -r 'has("at")')" true
+eq "retiring builds no payload at all" "$(payload_for retire "$M2")" ""
+payload_for retire "$M2" >/dev/null; eq "and no note" "$NOTE_OUT" ""
+
+echo "what counts as a finished wave"
+st() { jq -cn --argjson s "$1" '[$s[] | {repo:"o/r", number:1, state:.}]'; }
+eq "every member merged is finished"     "$(terminal_of "$(st '["MERGED","MERGED"]')")" true
+eq "merged and closed is finished"       "$(terminal_of "$(st '["MERGED","CLOSED"]')")" true
+eq "one still open is not"               "$(terminal_of "$(st '["MERGED","OPEN"]')")" false
+eq "all still open is not"               "$(terminal_of "$(st '["OPEN"]')")" false
+eq "an empty set is not a finished wave" "$(terminal_of '[]')" false
+
+echo
+echo "the decision the step actually computes"
+# Driven through the manifest's own jq, so the retire rule is pinned where it is written rather than
+# assumed by fixtures that set `do` by hand.
+eq "no marker at all -> pending"            "$(decide null false)" pending
+eq "pending, aged -> frozen"                "$(decide "$(pending_json "$M2" 2026-07-22T09:00:00Z)" false)" frozen
+eq "pending, fresh -> skip"                 "$(decide "$(pending_json "$M2" 2026-07-22T09:59:30Z)" false)" skip
+eq "pending, members moved -> pending"      "$(decide "$(pending_json "$M2B" 2026-07-22T09:00:00Z)" false)" pending
+eq "frozen, members still open -> skip"     "$(decide "$(frozen_json "$M2")" false)" skip
+eq "frozen, every member terminal -> retire" "$(decide "$(frozen_json "$M2")" true)" retire
+eq "garbage marker -> pending"              "$(decide '"nonsense"' false)" pending
+
 echo
 echo "splice, on its own"
 # Driven directly, because the retry loop hides it: a broken splice writes a body with no fences, the
@@ -466,7 +581,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -ne 72 ]; then
-  echo "::error::$ran assertion(s) ran, expected exactly 72 — the suite did not execute fully (or an assertion was added without raising this)"
+if [ "$ran" -ne 104 ]; then
+  echo "::error::$ran assertion(s) ran, expected exactly 104 — the suite did not execute fully (or an assertion was added without raising this)"
   exit 1
 fi

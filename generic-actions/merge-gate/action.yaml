@@ -441,6 +441,11 @@ runs:
         EPIC: ${{ steps.discover.outputs.epic_number }}
         MEMBERS: ${{ steps.membership.outputs.members }}
         STABILIZE_SECONDS: "120"
+        # How long a frozen wave may sit with a member that has neither merged nor closed before the
+        # gate says so. It only warns: expiring a snapshot on a clock would un-freeze membership
+        # mid-landing, which is the failure the snapshot exists to prevent, and it would fire exactly
+        # when an Epic is already unhealthy. A human closes the stray, or pauses the Epic.
+        STUCK_WAVE_HOURS: "72"
       run: |
         set -euo pipefail
         # The marker currently in the body, as JSON — empty when there is none or it is unusable.
@@ -467,6 +472,12 @@ runs:
         # a frozen marker is never rewritten, so one they refuse is a permanently dead snapshot that
         # silently degrades every Epic to live membership. Dedup is case-folded (GitHub resolves repo
         # names case-insensitively) and the 50-member cap matches theirs.
+        # Is every member of the CURRENT set terminal? When a frozen marker is in force, epic-membership
+        # returns that frozen set with each member's state re-read live, so this needs no extra call.
+        # Before activation every state is OPEN, so this is false and nothing retires prematurely.
+        all_terminal=$(printf '%s' "$MEMBERS" | jq -c \
+          '(length > 0) and all(.[]; .state == "MERGED" or .state == "CLOSED")' 2>/dev/null || echo false)
+
         cur=$(printf '%s' "$MEMBERS" | jq -c '
           [.[] | {repo, number}] | unique_by((.repo | ascii_downcase), .number) | sort_by(.repo, .number)')
         if ! printf '%s' "$cur" | jq -e '
@@ -491,9 +502,13 @@ runs:
         # frozen → skip; a valid pending → reset (members changed) / promote (unchanged + aged) / wait;
         # anything else (missing, malformed, other status) → write a fresh pending.
         do=$(jq -rn --argjson cur "$cur" --argjson mk "$marker" --arg now "$now" \
-          --argjson thr "${STABILIZE_SECONDS}" '
+          --argjson terminal "$all_terminal" --argjson thr "${STABILIZE_SECONDS}" '
           if ($mk | type) != "object" then "pending"
-          elif $mk.status == "frozen" then "skip"
+          # A frozen wave whose every member is terminal has done its job: the set it was frozen to
+          # remember is fully landed or fully abandoned, and there is nothing left to remember. Retire
+          # it so the next ready set captures its own — which is the "joins the next wave" behaviour
+          # epic-membership promises and nothing previously implemented.
+          elif $mk.status == "frozen" then (if $terminal then "retire" else "skip" end)
           elif ($mk.status == "pending" and ($mk.members | type == "array") and ($mk.at | type == "string"))
             then (
               if (($mk.members | sort_by(.repo, .number)) != $cur) then "pending"
@@ -509,13 +524,28 @@ runs:
           else "pending" end' 2>/dev/null || echo skip)
 
         if [ "$do" = "skip" ]; then
+          # A frozen wave that cannot finish is invisible otherwise: it holds every later-labelled pull
+          # request, and nothing retires it because retirement needs every member terminal. Name the
+          # members it is waiting on so a human can close a stray or pause the Epic.
+          stuck=$(printf '%s' "$MEMBERS" | jq -r '[.[] | select(.state != "MERGED" and .state != "CLOSED")
+            | "\(.repo)#\(.number)"] | join(", ")' 2>/dev/null || true)
+          if [ -n "$stuck" ] && printf '%s' "$marker" | jq -e '.status == "frozen"' >/dev/null 2>&1 \
+            && printf '%s' "$marker" | jq -e --arg now "$now" --argjson hrs "${STUCK_WAVE_HOURS}" \
+                 '(.at | try (fromdateiso8601 | true) catch false)
+                  and (($now | fromdateiso8601) - (.at | fromdateiso8601)) >= ($hrs * 3600)' >/dev/null 2>&1; then
+            echo "::warning::Epic #${EPIC}: the frozen wave has been open more than ${STUCK_WAVE_HOURS}h waiting on ${stuck}. Nothing else can freeze until it finishes — close the stray or label the Epic \`automation:paused\`." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           echo "Epic #${EPIC}: snapshot already frozen, or stable but not yet aged — leaving it." \
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
 
-        if [ "$do" = "frozen" ]; then
-          payload=$(printf '%s' "$cur" | jq -c '{status: "frozen", members: .}')
+        if [ "$do" = "retire" ]; then
+          payload=""
+          note=""
+        elif [ "$do" = "frozen" ]; then
+          payload=$(printf '%s' "$cur" | jq -c --arg at "$now" '{status: "frozen", at: $at, members: .}')
           note="_Epic membership, FROZEN at activation by the merge-gate. The authoritative set for this landing — a later de-label, close, or relabel does not change it. Do not edit._"
         else
           payload=$(printf '%s' "$cur" | jq -c --arg at "$now" '{status: "pending", at: $at, members: .}')
@@ -556,12 +586,19 @@ runs:
         # available guarantee is: splice into a body read moments ago, then confirm the write survived.
         # A losing writer retries against whatever landed instead of overwriting it.
         regionf=$(mktemp)
-        {
-          echo "$START"
-          echo "$note"
-          printf '%s\n' "$payload"
-          echo "$END"
-        } > "$regionf"
+        if [ "$do" = "retire" ]; then
+          # An EMPTY region, not an empty marker: splice emits the region file in place of everything
+          # between the fences AND drops the fence lines themselves, so an empty file removes the
+          # region outright. Writing empty strings between the fences would leave them standing.
+          : > "$regionf"
+        else
+          {
+            echo "$START"
+            echo "$note"
+            printf '%s\n' "$payload"
+            echo "$END"
+          } > "$regionf"
+        fi
 
         # Read-modify-VERIFY, as a function so the test harness can extract and drive it against a
         # stubbed gh. The sweep runs this gate as a matrix over every open member pull request with no
@@ -581,7 +618,9 @@ runs:
         # "The marker already says what we intend, AND it is a marker that can still make progress."
         # Used for BOTH the entry short-circuit and the post-write verify: if these two ever answer
         # differently, a repair that was clobbered reads as a repair that landed.
-        marker_settled() { # $1 = live marker json, $2 = our payload json
+        marker_settled() { # $1 = live marker json, $2 = our payload json ("" when retiring)
+          # Retiring wants ABSENCE: the region gone, not replaced.
+          if [ -z "$2" ]; then [ -z "$1" ]; return; fi
           same_marker "$1" "$2" || return 1
           # A frozen marker carries no `at` and needs none — it is terminal.
           [ "$(printf '%s' "$1" | jq -r '.status // ""')" = "frozen" ] && return 0
@@ -623,7 +662,19 @@ runs:
             # rewriting it mid-landing is the one thing "frozen" forbids. Yield, whatever we intended.
             # This narrows the window rather than closing it — a freeze landing between this check and
             # the write below is still clobbered, and no conditional-update API exists to prevent that.
-            if [ -n "$marker" ] && [ "$(printf '%s' "$marker" | jq -r '.status // ""')" = "frozen" ]; then
+            if [ "$do" = "retire" ]; then
+              # Re-derive the retirement too: only remove the frozen marker this pass judged complete.
+              # If it is no longer frozen, or its members moved, a peer has already opened the next
+              # wave and deleting the region would discard their work.
+              if ! jq -e -n --argjson m "${marker:-null}" --argjson cur "$cur" \
+                   '($m | type == "object") and $m.status == "frozen"
+                    and (($m.members // []) | sort_by(.repo, .number)) == $cur' >/dev/null 2>&1; then
+                echo "Epic #${EPIC}: the snapshot moved on before this pass could retire it — leaving it." \
+                  | tee -a "$GITHUB_STEP_SUMMARY"
+                rc=2
+                break
+              fi
+            elif [ -n "$marker" ] && [ "$(printf '%s' "$marker" | jq -r '.status // ""')" = "frozen" ]; then
               echo "Epic #${EPIC}: the snapshot is already frozen (a peer got there first) — leaving it." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
               rc=2
@@ -670,7 +721,10 @@ runs:
         }
 
         write_marker "$regionf" && wm=0 || wm=$?
-        if [ "$wm" = 0 ]; then
+        if [ "$wm" = 0 ] && [ "$do" = "retire" ]; then
+          echo "Epic #${EPIC}: wave complete — activation snapshot retired; the next ready set will capture its own." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+        elif [ "$wm" = 0 ]; then
           n=$(printf '%s' "$cur" | jq 'length')
           echo "Epic #${EPIC}: ${do} activation snapshot in place — ${n} member(s)." | tee -a "$GITHUB_STEP_SUMMARY"
         elif [ "$wm" = 2 ]; then
