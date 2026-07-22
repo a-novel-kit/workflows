@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.20.2
+      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.20.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -90,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.20.2
+      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.20.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -102,7 +102,7 @@ jobs:
       # Archive every board item whose issue is closed, org-wide. A done leaf planning issue in the
       # non-publishing .github repo is never archived by a publish, so this keeps closed and archived
       # equivalent on the board. Idempotent alongside the Applied pass above.
-      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.20.2
+      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.20.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -186,7 +186,7 @@ jobs:
           permission-contents: read
           permission-issues: read
           permission-pull-requests: read
-      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.20.2
+      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.20.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -210,7 +210,7 @@ jobs:
       matrix:
         pr: ${{ fromJSON(needs.enumerate.outputs.epic_prs) }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.20.2
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.20.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -231,7 +231,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.20.2
+      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.20.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -250,7 +250,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.20.2
+      - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.20.3
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
