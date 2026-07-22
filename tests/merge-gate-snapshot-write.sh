@@ -202,6 +202,31 @@ do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
 eq "a write that never landed is not masked by the orphan" "$(run)" 1
 eq "and the region still says what it did" "$(marker_now | jq -r .status)" pending
 
+echo "a marker that cannot age must be repaired, not accepted"
+# The decision step routes a corrupt or missing `at` here on purpose: a timestamp that cannot be read
+# can never age, so the marker would sit pending forever and the Epic would keep live membership —
+# with a success line every sweep. An equivalence test that ignores `at` must not swallow that.
+for bad in '"not-a-date"' 'null'; do
+  reset
+  server_body "$(jq -cn --argjson m "$M2" --argjson at "$bad" '{status:"pending", at:$at, members:$m}')"
+  do=pending; cur="$M2"; payload=$(pending_json "$M2")
+  eq "an unreadable at ($bad) is rewritten" "$(run)" 0
+  eq "which takes exactly one write" "$(writes)" 1
+  marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null \
+    && ok "and the marker can age again" || ko "the marker still cannot age"
+done
+
+echo
+echo "member order is not a reason to abandon"
+# The decision step compares members sorted; the re-derive guard must too, or a marker the decision
+# calls stable is judged moved and the freeze is refused on every sweep forever.
+reset
+server_body "$(jq -cn --argjson m "$M2" '{status:"pending", at:"2026-07-22T09:00:00Z", members:($m | reverse)}')"
+do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
+eq "a reordered member array still freezes" "$(run)" 0
+eq "and the marker is frozen" "$(marker_now | jq -r .status)" frozen
+
+echo
 echo "splice, on its own"
 # Driven directly, because the retry loop hides it: a broken splice writes a body with no fences, the
 # next attempt takes the fallback branch, appends a correct region, and the verify passes. Every
@@ -256,7 +281,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 31 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 31) — the suite did not execute fully"
+if [ "$ran" -lt 39 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 39) — the suite did not execute fully"
   exit 1
 fi

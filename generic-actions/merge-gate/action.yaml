@@ -589,6 +589,7 @@ runs:
           local regionf="$1" bodyf outf attempt body marker err rc=1
           bodyf=$(mktemp); outf=$(mktemp)
           for attempt in 1 2 3; do
+            err=""   # or a later give-up reports an earlier attempt's error
             # Re-read every attempt, the first included.
             if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
               [ "$attempt" -lt 3 ] && sleep 2
@@ -596,14 +597,22 @@ runs:
             fi
             marker=$(current_marker "$body")
 
-            # Already says what we were going to say — nothing to write, by us or anyone.
-            if same_marker "$marker" "$payload"; then
+            # Already says what we were going to say — nothing to write, by us or anyone. A `pending`
+            # marker whose `at` does not parse is NOT equivalent, however close its members look: the
+            # decision step routes exactly that case here to REPAIR it, because a timestamp that cannot
+            # be read can never age, so the marker would sit pending forever and the Epic would keep
+            # live membership with a success line in the log every sweep.
+            if same_marker "$marker" "$payload" \
+              && { [ "$(printf '%s' "$marker" | jq -r '.status // ""')" = "frozen" ] \
+                || printf '%s' "$marker" | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null 2>&1; }; then
               rc=0
               break
             fi
 
             # A frozen marker is terminal: it is the authority every reader has been using, and
             # rewriting it mid-landing is the one thing "frozen" forbids. Yield, whatever we intended.
+            # This narrows the window rather than closing it — a freeze landing between this check and
+            # the write below is still clobbered, and no conditional-update API exists to prevent that.
             if [ -n "$marker" ] && [ "$(printf '%s' "$marker" | jq -r '.status // ""')" = "frozen" ]; then
               echo "Epic #${EPIC}: the snapshot is already frozen (a peer got there first) — leaving it." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
@@ -617,8 +626,10 @@ runs:
             # make a wrong set permanent. Abandon; the next pass decides on current truth.
             if [ "$do" = "frozen" ] \
               && ! jq -e -n --argjson m "${marker:-null}" --argjson cur "$cur" \
-                   '($m | type == "object") and $m.status == "pending" and ($m.members == $cur)' >/dev/null 2>&1; then
-              echo "::warning::Epic #${EPIC}: the member set moved while this pass was deciding — not freezing a stale set; the next pass re-derives."
+                   '($m | type == "object") and $m.status == "pending"
+                    and (($m.members // []) | sort_by(.repo, .number)) == $cur' >/dev/null 2>&1; then
+              echo "::warning::Epic #${EPIC}: the member set moved while this pass was deciding — not freezing a stale set; the next pass re-derives." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
               rc=2
               break
             fi
