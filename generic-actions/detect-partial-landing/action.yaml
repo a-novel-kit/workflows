@@ -342,6 +342,12 @@ runs:
         now_epoch=$(date -u +%s)
         grace_seconds=$(( GRACE_MINUTES * 60 ))
 
+        # Where epic_issue keeps one Epic-issue response per pass. It lives on disk rather than in a
+        # shell variable because the readers run inside `$( )`, and a subshell's assignment never
+        # reaches the parent — the same reason the retry counters in the test harness are file-backed.
+        EPIC_CACHE=$(mktemp -d)
+        trap 'rm -rf "$EPIC_CACHE"' EXIT
+
         # ---- Shared GraphQL documents ----------------------------------------------------
 
         # PR search node — one shape reused by enumeration and the three per-Epic resolve passes.
@@ -448,14 +454,63 @@ runs:
           return 1
         }
 
+        # One read of an Epic issue per pass, shared by the pause check and the snapshot reader. Both
+        # want a different part of the same response — `.labels` and `.body` — and reading it twice
+        # costs a request per Epic per sweep and leaves a window in which the Epic is paused between
+        # them, so one pass acts on two views of one issue.
+        #
+        # It caches the RESPONSE, not a verdict. The two callers hold opposite failure policies: a
+        # pause that cannot be read fails open, so a real partial landing is still caught, while a
+        # snapshot that cannot be read fails closed and decides nothing, because a false `clear` posts
+        # success and lifts a standing freeze. A shared verdict would put one of them on the other's
+        # policy. Each reads the same bytes and applies its own.
+        #
+        # Prints the response. 0 = read it, 2 = the Epic issue is not there, 1 = the read failed and
+        # which is unknown. The error text of the last attempt is left in EPIC_ISSUE_ERR.
+        epic_issue() { # $1 = epic number
+          local f="${EPIC_CACHE}/$1.json" rcf="${EPIC_CACHE}/$1.rc" ef="${EPIC_CACHE}/$1.err"
+          local resp errf attempt rc=1
+          if [ -f "$rcf" ]; then
+            EPIC_ISSUE_ERR=$(cat "$ef" 2>/dev/null || true)
+            cat "$f" 2>/dev/null || true
+            return "$(cat "$rcf")"
+          fi
+          EPIC_ISSUE_ERR=''
+          errf=$(mktemp)
+          for attempt in 1 2 3; do
+            # Keep the streams apart: stdout is the payload, stderr is diagnosis, so a benign `gh`
+            # notice cannot land inside the JSON and fail the parse. `.body` is parsed with jq, which
+            # rejects a non-issue response whole.
+            if resp=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/$1" 2>"$errf") \
+              && printf '%s' "$resp" | jq -e 'type == "object" and has("body")' >/dev/null 2>&1; then
+              rc=0
+              break
+            fi
+            EPIC_ISSUE_ERR=$(cat "$errf" 2>/dev/null || true)
+            # The Epic issue is not in the planning repo — nothing to retry.
+            case "$EPIC_ISSUE_ERR" in *"HTTP 404"*) rc=2; break ;; esac
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          rm -f "$errf"
+          [ "$rc" = 0 ] && printf '%s' "$resp" > "$f"
+          printf '%s' "$EPIC_ISSUE_ERR" > "$ef"
+          printf '%s' "$rc" > "$rcf"
+          [ "$rc" = 0 ] && printf '%s' "$resp"
+          return "$rc"
+        }
+
         # Is Epic N paused? Reads the `automation:paused` marker on the Epic issue in the planning repo,
         # a label needing at least triage, so the pause is permission-gated and per-Epic. Returns
         # 0 = paused, 1 = not paused, 2 = read error, where the caller proceeds with normal detection so
         # a real partial landing is still caught.
         epic_paused() { # $1 = epic number
-          local out
-          out=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/$1" --jq '.labels[].name' 2>/dev/null) || return 2
-          printf '%s\n' "$out" | grep -qx 'automation:paused'
+          local resp rc=0
+          resp=$(epic_issue "$1") || rc=$?
+          # A missing Epic issue is an answer: it carries no pause marker, so this is "not paused"
+          # rather than the unknown that 2 reports.
+          [ "$rc" = 2 ] && return 1
+          [ "$rc" = 0 ] || return 2
+          printf '%s' "$resp" | jq -e 'any(.labels[]?.name; . == "automation:paused")' >/dev/null 2>&1
         }
 
         # Read an Epic's frozen activation-snapshot members and bucket them by their live state. Once
@@ -489,41 +544,24 @@ runs:
           SNAP_CLOSED='[]'
           SNAP_OPEN='[]'
           SNAP_SINCE=''
-          local resp="" err="" errf body="" ok=false marker frozen want alias_q rh out nodes
+          local resp="" body="" rc=0 marker frozen want alias_q rh out nodes
           local since="" since_epoch="" shown=""
-          errf=$(mktemp)
-          for attempt in 1 2 3; do
-            # Keep the streams apart: stdout is the payload, stderr is diagnosis, so a benign `gh` notice
-            # cannot land inside the JSON and fail the parse. That costs a whole pass, because an
-            # unreadable body does not fall back. `.body` is parsed with jq, which rejects a non-issue
-            # response whole; an empty body reads as "no snapshot".
-            if resp=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/$1" 2>"$errf") \
-              && printf '%s' "$resp" | jq -e 'type == "object" and has("body")' >/dev/null 2>&1; then
-              # GitHub stores bodies with CRLF; strip \r so the marker fences match.
-              body=$(printf '%s' "$resp" | jq -r '.body // ""' | tr -d '\r')
-              ok=true
-              break
-            fi
-            err=$(cat "$errf" 2>/dev/null || true)
-            # The Epic issue is not in the planning repo — nothing to retry.
-            case "$err" in *"HTTP 404"*) break ;; esac
-            [ "$attempt" -lt 3 ] && sleep 2
-          done
-          rm -f "$errf"
-          if [ "$ok" != true ]; then
-            # A 404 is an answer: the Epic issue is not there, so no snapshot can exist and the live
-            # floor is the whole truth. Any other failure leaves it unknown whether a frozen set exists.
-            # A `clear` posts success and lifts a standing freeze, so an unknown decides nothing and
-            # re-derives next pass, exactly as the re-read failure below does.
-            case "$err" in
-              *"HTTP 404"*)
-                echo "::warning::epic #$1: ${ORG}/${PLANNING_REPO}#$1 not found — no snapshot possible, live label set only."
-                return 2
-                ;;
-            esac
-            echo "::error::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 after 3 attempts, so it is unknown whether a snapshot exists — deciding nothing this pass: ${err}"
+          resp=$(epic_issue "$1") || rc=$?
+          # A 404 is an answer: the Epic issue is not there, so no snapshot can exist and the live
+          # floor is the whole truth. Any other failure leaves it unknown whether a frozen set exists.
+          # A `clear` posts success and lifts a standing freeze, so an unknown decides nothing and
+          # re-derives next pass, exactly as the re-read failure below does.
+          if [ "$rc" = 2 ]; then
+            echo "::warning::epic #$1: ${ORG}/${PLANNING_REPO}#$1 not found — no snapshot possible, live label set only."
+            return 2
+          fi
+          if [ "$rc" != 0 ]; then
+            echo "::error::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 after 3 attempts, so it is unknown whether a snapshot exists — deciding nothing this pass: ${EPIC_ISSUE_ERR:-}"
             return 1
           fi
+          # GitHub stores bodies with CRLF; strip \r so the marker fences match. An empty body reads
+          # as "no snapshot".
+          body=$(printf '%s' "$resp" | jq -r '.body // ""' | tr -d '\r')
 
           # The fenced region holds a human-readable note and then the JSON, so skip to the first line
           # that opens a value before parsing: the note is not JSON, and the JSON may be pretty-printed

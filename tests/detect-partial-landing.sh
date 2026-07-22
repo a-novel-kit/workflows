@@ -30,7 +30,7 @@ extract() { # $1 = function name — lift it out of the run: block and de-indent
   ' "$ACTION" | sed 's/^        //'
 }
 
-for fn in snapshot_buckets union_buckets evaluate_epic; do
+for fn in epic_issue epic_paused snapshot_buckets union_buckets evaluate_epic; do
   out=$(extract "$fn")
   if [ -z "$out" ]; then
     echo "::error::could not extract $fn from $ACTION — did its definition move or change indent?"
@@ -75,8 +75,8 @@ gh() {
       case "$FX_BODY" in
         FAIL404) echo "gh: Not Found (HTTP 404)" >&2; return 1 ;;
         FAIL500) echo "gh: HTTP 502" >&2; return 1 ;;
-        NOISE) echo "gh: a deprecation notice" >&2; jq -cn --arg b "$FX_MARKER_BODY" '{body: $b}' ;;
-        *) jq -cn --arg b "$FX_BODY" '{body: $b}' ;;
+        NOISE) echo "gh: a deprecation notice" >&2; jq -cn --arg b "$FX_MARKER_BODY" --argjson l "$FX_LABELS" '{body: $b, labels: $l}' ;;
+        *) jq -cn --arg b "$FX_BODY" --argjson l "$FX_LABELS" '{body: $b, labels: $l}' ;;
       esac ;;
     *) echo "unexpected gh call: $*" >&2; return 1 ;;
   esac
@@ -129,6 +129,18 @@ rest_pr_state() {
 
 # shellcheck disable=SC1091
 . "$WORK/lib.sh"
+
+# Where epic_issue keeps one Epic-issue response per pass.
+EPIC_CACHE="$WORK/epic-cache"
+mkdir -p "$EPIC_CACHE"
+epic_cache_clear() { rm -f "$EPIC_CACHE"/*; }
+
+# A pass reads an Epic issue once and both readers share it, so the cache survives for the life of
+# the step. Each case below is its own pass with its own fixture body, so it is cleared per call —
+# otherwise the first case's response would answer every later one. The read-once behavior is
+# asserted directly further down, against an uncleared cache.
+eval "uncached_evaluate_epic() $(declare -f evaluate_epic | tail -n +2)"
+evaluate_epic() { epic_cache_clear; uncached_evaluate_epic "$@"; }
 
 # ---- fixtures ---------------------------------------------------------------------------
 # A member node as the re-read returns it. `prov` is how the node proves it belongs to the Epic:
@@ -193,6 +205,8 @@ reset_fixtures() {
   FX_LIVE_CLOSED='[]'   # B is de-labeled, so live truth has forgotten it entirely
   FX_LIVE_OPEN="[$C]"
   FX_BODY=""
+  # One response carries both the pause marker and the snapshot, so the fixture carries both.
+  FX_LABELS='[]'
   FX_REHYDRATE=""
   printf 0 > "$WORK/rehydrate_fails"
   : > "$WORK/gh_calls"
@@ -212,6 +226,7 @@ fail=0
 note() { printf '  %s %s\n' "$1" "$2"; }
 ok() { note ✓ "$1"; pass=$((pass + 1)); }
 ko() { note ✗ "$1"; fail=$((fail + 1)); }
+eq() { [ "$2" = "$3" ] && ok "$1" || ko "$1 (got '$2', want '$3')"; }
 
 check() { # name expected-decision [expected-membership] [expected merged/closed/open counts]
   local name="$1" want="$2" wantsrc="${3:-}" wantcounts="${4:-}" src counts detail=""
@@ -774,6 +789,55 @@ FX_BODY="" # the next Epic has no snapshot at all
 check "an Epic with no snapshot sees none of the previous one's" clear live 1/0/1
 
 echo
+echo
+echo "one read of the Epic issue per pass"
+# The pause check wants .labels and the snapshot reader wants .body, and one response carries both.
+# Two reads cost a request per Epic per sweep and leave a window in which the Epic is paused between
+# them, so a pass would act on two views of one issue. Driven against an uncleared cache, which is
+# how a real pass runs.
+reset_fixtures
+FX_BODY=$(marker frozen "$BC")
+epic_cache_clear; : > "$WORK/gh_calls"
+epic_paused 900 && true
+uncached_evaluate_epic 900 >/dev/null 2>&1
+reads=$(grep -c 'issues/900' "$WORK/gh_calls" || true)
+eq "the pause check and the snapshot share one read" "$reads" 1
+
+echo
+echo "the two readers keep their own failure policies"
+# They disagree on purpose. A pause that cannot be read must fail OPEN, or a blip on the label read
+# stops the sweep and a real partial landing goes uncaught. A snapshot that cannot be read must fail
+# CLOSED, because a false clear posts success and lifts a standing freeze. Caching a shared verdict
+# would put one of them on the other's policy.
+reset_fixtures
+FX_BODY=FAIL500
+epic_cache_clear
+epic_paused 900 && rc=0 || rc=$?
+eq "an unreadable issue leaves the pause unknown" "$rc" 2
+snapshot_buckets 900 >/dev/null 2>&1 && rc=0 || rc=$?
+eq "and the same response decides no snapshot" "$rc" 1
+
+reset_fixtures
+FX_BODY=FAIL404
+epic_cache_clear
+epic_paused 900 && rc=0 || rc=$?
+eq "a missing Epic issue is not paused, rather than unknown" "$rc" 1
+snapshot_buckets 900 >/dev/null 2>&1 && rc=0 || rc=$?
+eq "and carries no snapshot" "$rc" 2
+
+echo
+echo "the pause marker is read from the shared response"
+reset_fixtures
+FX_LABELS='[{"name":"automation:paused"}]'
+epic_cache_clear
+epic_paused 900 && rc=0 || rc=$?
+eq "automation:paused is seen" "$rc" 0
+reset_fixtures
+FX_LABELS='[{"name":"automation:paused-not-really"},{"name":"bug"}]'
+epic_cache_clear
+epic_paused 900 && rc=0 || rc=$?
+eq "a label merely containing it is not a pause" "$rc" 1
+
 printf '%d passed, %d failed\n' "$pass" "$fail"
 # A floor on the count as well as on failures: a suite that runs no assertions exits 0 and reads as
 # green. Raise this when assertions are added; never lower it to make a run pass.
@@ -785,7 +849,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 132 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 132) — the suite did not execute fully"
+if [ "$ran" -lt 139 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 139) — the suite did not execute fully"
   exit 1
 fi
