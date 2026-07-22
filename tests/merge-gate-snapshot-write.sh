@@ -216,6 +216,17 @@ bails() { # $1 = RETIRE_ONLY, $2 = do -> "bailed" (the step returned) or "went-o
   [ -n "$out" ] && echo went-on || echo bailed
 }
 
+# The rehearsal branch, lifted the same way. It stands between the assembled payload and the write,
+# so what it reports is what would have been written rather than a second rendering of it.
+DRY_BLOCK=$(awk '/SNAPSHOT_DRY_RUN:-/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
+[ -n "$DRY_BLOCK" ] || die "could not read the rehearsal branch from $ACTION"
+rehearses() { # $1 = SNAPSHOT_DRY_RUN, $2 = do, $3 = cur, $4 = payload -> the log, or "went-on"
+  local out
+  out=$( SNAPSHOT_DRY_RUN="$1"; do="$2"; cur="$3"; payload="$4"
+         eval "$DRY_BLOCK" 2>/dev/null; printf 'went-on' )
+  printf '%s' "$out"
+}
+
 payload_for() { # $1 = do, $2 = cur, $3 = inherited since -> echoes the payload, sets NOTE_OUT
   local do cur inherited_since payload note
   do="$1"; cur="$2"; inherited_since="${3:-}"
@@ -538,6 +549,34 @@ for step in "Mint snapshot-write token" "Capture activation snapshot"; do
 done
 
 echo
+echo "the capture can be rehearsed"
+# The one write in the saga that cannot be taken back is the only one that had no rehearsal, so a
+# capture bug was found by discovering a wrong marker on a real Epic.
+P=$(payload_for frozen "$M2")
+out=$(rehearses true frozen "$M2" "$P")
+grep -q 'went-on' <<< "$out" && ko "a rehearsal fell through to the write" || ok "a rehearsal stops before the write"
+grep -q 'dry run' <<< "$out" && ok "and says so" || ko "the rehearsal is silent about being one"
+grep -q 'frozen' <<< "$out" && ok "naming the transition it would make" || ko "the transition is not reported"
+grep -qF -- "$P" <<< "$out" && ok "and the exact payload it would splice" || ko "the payload is not reported"
+for m in 'a-novel-kit/repo-a#5' 'a-novel-kit/repo-b#2'; do
+  grep -qF -- "$m" <<< "$out" && ok "listing member $m" || ko "member $m is not named, so the set cannot be eyeballed"
+done
+eq "an off switch writes as before" "$(rehearses false frozen "$M2" "$P")" went-on
+eq "and so does an unset one" "$(rehearses "" frozen "$M2" "$P")" went-on
+grep -q 'retired' <<< "$(rehearses TRUE retire "$M2" "$(payload_for retire "$M2")")" \
+  && ok "a retirement rehearses too, whatever the casing" || ko "retirement cannot be rehearsed"
+
+echo
+echo "a rehearsal cannot write even if the branch fails"
+# The token is minted read-only for a dry run, so the capability is withheld rather than the write
+# merely skipped. GitHub compares strings case-insensitively, so any casing of "true" reaches it.
+perm=$(awk '/name: Mint snapshot-write token/{f=1} f&&/permission-issues:/{print; exit}' "$ACTION")
+grep -q 'snapshot_dry_run' <<< "$perm" \
+  && ok "the snapshot-write token is scoped by the rehearsal flag" \
+  || ko "a rehearsal still mints an issues:write token"
+grep -qE "'read'" <<< "$perm" && ok "down to read" || ko "the dry branch does not drop to read"
+
+echo
 echo "the payload the step builds"
 eq "a frozen payload records when it froze" "$(payload_for frozen "$M2" | jq -r 'has("at")')" true
 eq "and the members it froze"               "$(payload_for frozen "$M2" | jq -c .members)" "$M2"
@@ -698,7 +737,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -ne 138 ]; then
-  echo "::error::$ran assertion(s) ran, expected exactly 138 — the suite did not execute fully (or an assertion was added without raising this)"
+if [ "$ran" -ne 149 ]; then
+  echo "::error::$ran assertion(s) ran, expected exactly 149 — the suite did not execute fully (or an assertion was added without raising this)"
   exit 1
 fi

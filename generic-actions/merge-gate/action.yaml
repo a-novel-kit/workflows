@@ -89,6 +89,17 @@ inputs:
       (fail-open on a label-read blip). Engaging the switch does NOT retroactively disarm native
       auto-merge already armed on an idle ready PR: merge-gate holds it (the required check goes red),
       but there is a brief latency window before the next event / reconcile sweep re-posts the hold.
+  snapshot_dry_run:
+    required: false
+    default: "false"
+    description: >
+      When "true", log the capture decision and the payload that would be spliced into the Epic body,
+      without editing the issue. Scoped to the snapshot write, which is the action's only mutation of
+      state it does not own, and the only one that cannot be taken back — a frozen marker is the
+      authority every reader acts on and is never rewritten. The `merge-gate` check-run is posted
+      either way, because the gate is required and a pass that posted nothing would block every PR in
+      the repo. Defaults to writing, since a rehearsing gate captures no snapshot and every Epic falls
+      back to live label membership, losing the guarantee the snapshot exists to give.
 
 runs:
   using: composite
@@ -435,7 +446,11 @@ runs:
         # trust boundary the readers act on, so org-wide issues:write would let a bug here reach
         # every issue in the org.
         repositories: ${{ inputs.planning_repo }}
-        permission-issues: write
+        # A rehearsal reads the Epic body and writes nothing, so it mints a read-only token. The
+        # branch in the capture step already skips the write; withholding the capability makes a dry
+        # run structurally unable to edit the issue rather than trusting that branch. GitHub compares
+        # strings case-insensitively, so any casing of "true" reaches this.
+        permission-issues: ${{ inputs.snapshot_dry_run == 'true' && 'read' || 'write' }}
 
     - name: Capture activation snapshot
       if: ${{ steps.evaluate.outputs.capture == 'true' || steps.evaluate.outputs.retire_only == 'true' }}
@@ -453,6 +468,7 @@ runs:
         # Set when this pass arrived from the not-in-set hold. Such a pass is not a member of the set
         # it just read, so it has no standing to capture one; it may only retire the wave holding it.
         RETIRE_ONLY: ${{ steps.evaluate.outputs.retire_only }}
+        SNAPSHOT_DRY_RUN: ${{ inputs.snapshot_dry_run }}
         # How long a frozen wave may sit unfinished before the gate names what it is waiting on. The
         # warning is the whole action: a snapshot that expired on a clock would un-freeze membership
         # mid-landing, which is the failure it exists to prevent. Resolution stays with a human, who
@@ -802,6 +818,20 @@ runs:
           rm -f "$bodyf" "$outf"
           return "$rc"
         }
+
+        # A rehearsal stops here. Everything above is reads and pure computation, so the decision, the
+        # set it rests on and the byte-exact payload are all known, and the next call is the write.
+        # Naming the members is the point: a capture is judged by whether the right set is in it, and
+        # a frozen marker is the authority every reader acts on from then on.
+        if [ "$(printf '%s' "${SNAPSHOT_DRY_RUN:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+          {
+            echo "Epic #${EPIC}: dry run — would write a \"${do}\" activation snapshot. The Epic body is untouched, so a repeated pass reports this same transition."
+            echo "  set judged ($(printf '%s' "$cur" | jq 'length') member(s)):"
+            printf '%s' "$cur" | jq -r '.[] | "    \(.repo)#\(.number)"'
+            echo "  payload: ${payload}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
 
         write_marker "$regionf" && wm=0 || wm=$?
         if [ "$wm" = 0 ] && [ "$do" = "retire" ]; then
