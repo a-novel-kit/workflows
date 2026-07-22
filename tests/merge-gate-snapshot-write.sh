@@ -13,7 +13,7 @@
 # read before the loop; a writer that re-reads but does not re-derive will freeze a member set the
 # world has already moved past, and a retry loop makes it win. Several cases below exist only to pin
 # that: a writer must abandon rather than make a stale freeze permanent.
-set -uo pipefail
+set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ACTION="${1:-$ROOT/generic-actions/merge-gate/action.yaml}"
@@ -48,7 +48,10 @@ sleep() { :; }
 
 # ---- the stubbed body store ---------------------------------------------------------------
 # $WORK/body is the issue body on the server. $WORK/steal, when non-empty, is a peer write that lands
-# immediately AFTER ours, once — the case an exit-code check calls a win.
+# immediately AFTER ours, once — the case an exit-code check calls a win. It models what the real peer
+# (render-epic-status) does: keep what it found and add its own section OUTSIDE our region. A stub
+# that replaced the whole body would delete that prose, and then no assertion could observe a lost
+# update at all — which is the one thing this suite exists to see.
 gh() {
   case "$*" in
     *"issues/${EPIC}"*)
@@ -57,9 +60,12 @@ gh() {
         printf '%s' "$(($(< "$WORK/read_fails") - 1))" > "$WORK/read_fails"
         return 1
       fi
-      cat "$WORK/body"
+      # GitHub stores bodies with CRLF. Serving LF would leave every `tr -d '\r'` in the action
+      # untested while its comments assert the strip is load-bearing.
+      sed 's/$/\r/' "$WORK/body"
       ;;
     *"issue edit"*)
+      [ -s "$WORK/edit_fails" ] && { printf 'x' >> "$WORK/writes"; echo "gh: HTTP 422" >&2; return 1; }
       # NOTE: ${*##pattern} strips per-positional-parameter and rejoins — join first, then strip.
       local all="$*" f
       f="${all##*--body-file }"; f="${f%% *}"
@@ -107,6 +113,7 @@ eq() { [ "$2" = "$3" ] && ok "$1" || ko "$1 (got '$2', want '$3')"; }
 
 reset() {
   printf 0 > "$WORK/read_fails"; : > "$WORK/writes"; : > "$WORK/steal"; : > "$WORK/noop"
+  : > "$WORK/edit_fails"
   : > "$GITHUB_STEP_SUMMARY"; server_body ""
 }
 # Capture the function's own output so it cannot be mistaken for the exit code, and so both tee'd
@@ -127,10 +134,13 @@ reset
 do=pending; cur="$M2"; payload=$(pending_json "$M2")
 # The peer reverts the body, discarding our write. Nothing about that invalidates a pending decision,
 # so we should notice and retry rather than trust the edit's exit code.
-printf 'Some prose.\n\nMore prose.\n' > "$WORK/steal"
+{ cat "$WORK/body"; printf '\n<!-- rendered by the peer -->\n'; } > "$WORK/steal"
 eq "we retry until our write survives" "$(run)" 0
 eq "and our marker is what finally stands" "$(marker_now | jq -r '.members | length')" 2
 eq "which took two writes, not one" "$(writes)" 2
+grep -q 'rendered by the peer' "$WORK/body" \
+  && ok "and the peer's own edit outside our region survives" \
+  || ko "LOST UPDATE: we overwrote the peer's edit"
 
 echo
 echo "a wiped marker invalidates a freeze in flight"
@@ -139,7 +149,7 @@ echo "a wiped marker invalidates a freeze in flight"
 reset
 server_body "$(pending_json "$M2" 2026-07-22T09:00:00Z)"
 do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
-printf 'Some prose.\n\nMore prose.\n' > "$WORK/steal"
+printf 'Some prose.\n\nMore prose.\n' > "$WORK/steal"   # a peer that removes the marker outright
 eq "the freeze is abandoned once its pending basis disappears" "$(run)" 2
 
 echo
@@ -192,6 +202,42 @@ do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
 eq "a write that never landed is not masked by the orphan" "$(run)" 1
 eq "and the region still says what it did" "$(marker_now | jq -r .status)" pending
 
+echo "splice, on its own"
+# Driven directly, because the retry loop hides it: a broken splice writes a body with no fences, the
+# next attempt takes the fallback branch, appends a correct region, and the verify passes. Every
+# splice defect therefore reads as a green suite unless it is exercised on its own.
+sp() { # $1 = body text, $2 = payload -> the spliced result
+  local b r
+  b=$(mktemp -p "$WORK"); r=$(region_file "$2")
+  printf '%s\n' "$1" > "$b"
+  splice "$b" "$r"
+}
+one_region() { [ "$(grep -cxF -- "$START" <<< "$1")" = 1 ] && [ "$(grep -cxF -- "$END" <<< "$1")" = 1 ]; }
+inner() { awk -v s="$START" -v e="$END" '$0==s{f=1;next} $0==e{f=0} f' <<< "$1" | sed -n '/^[[:space:]]*[{[]/,$p'; }
+
+P=$(frozen_json "$M2")
+out=$(sp "$(printf 'top\n\n%s\n_note_\n%s\n%s\n\nbottom\n' "$START" "$(pending_json "$M1")" "$END")" "$P")
+eq "an existing region is replaced in place" "$(inner "$out" | jq -r .status)" frozen
+one_region "$out" && ok "leaving exactly one region" || ko "region count wrong"
+grep -q '^top$' <<< "$out" && grep -q '^bottom$' <<< "$out" \
+  && ok "with the prose either side intact" || ko "prose was dropped by the in-place branch"
+# The replaced payload must be GONE, not merely out of the region: a stale copy left loose in the
+# body is what lets a whole-body match report a marker that is not there.
+grep -qF -- "$(pending_json "$M1")" <<< "$out" \
+  && ko "the replaced payload is still in the body" \
+  || ok "and the payload it replaced is gone entirely"
+
+out=$(sp "$(printf 'only prose\n')" "$P")
+eq "a body with no region gains one" "$(inner "$out" | jq -r .status)" frozen
+grep -q '^only prose$' <<< "$out" && ok "and keeps the prose" || ko "prose lost on append"
+
+out=$(sp "$(printf '%s\nA\n%s\ntext\n%s\nB\n%s\n' "$START" "$END" "$START" "$END")" "$P")
+one_region "$out" && ok "duplicate fences are healed to one region" || ko "duplicate fences survived"
+
+out=$(sp "$(printf '%s\nstray end first\n%s\n' "$END" "$START")" "$P")
+one_region "$out" && ok "inverted fences are healed to one region" || ko "inverted fences survived"
+
+echo
 echo
 echo "read failures"
 reset
@@ -210,7 +256,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 20 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 20) — the suite did not execute fully"
+if [ "$ran" -lt 31 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 31) — the suite did not execute fully"
   exit 1
 fi
