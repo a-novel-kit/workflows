@@ -38,6 +38,9 @@ description: >
   — a freeze is not a latch a human must clear. It never reverts a merged PR. `dry_run`
   defaults on: it logs every intended freeze, unfreeze, and re-enqueue without calling GitHub.
 
+  `automation:paused` on the Epic issue is the latch: it holds whatever the predicate reads. A freeze
+  only describes the Epic's current shape, so it lifts as soon as that shape is healthy.
+
 inputs:
   client_id:
     required: true
@@ -920,7 +923,7 @@ runs:
         sweep_post_clear() { # $1 = epic
           local epic="$1"
           if [ "$EV_MERGED_COUNT" -ge 1 ] && [ "$EV_STRAY_COUNT" -ge 1 ]; then
-            echo "epic #$epic: $EV_STRAY_COUNT stray sibling(s) within grace — rolling forward." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "epic #$epic: $EV_STRAY_COUNT stray sibling(s) within grace — rolling forward (re-arms auto-merge; \`automation:paused\` stops it)." | tee -a "$GITHUB_STEP_SUMMARY"
             # Roll forward only strays the live `epic:<N>` label search still returns. A snapshot-only
             # member is one a human de-labeled, and re-arming auto-merge on it would do three wrong
             # things at once: resume a landing a human stepped out of (the one thing epic-freeze must
