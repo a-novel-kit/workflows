@@ -5,9 +5,9 @@
 # the shipped classifier.
 #
 # The action reminds a maintainer before a fine-grained PAT expires. An expired or revoked token
-# returns no expiry header, so collapsing the check onto "is the header empty" reported the one
-# outcome the job exists to catch as the benign one, and exited 0. A daily run then printed a
-# reassuring line forever.
+# returns no expiry header, and neither does a healthy classic PAT, so the header alone cannot tell
+# the outcome the job exists to catch from the one it should ignore. token_state reads the HTTP
+# status alongside it.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

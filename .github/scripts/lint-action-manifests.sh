@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
 # Reject expression contexts that do not exist for a composite action.
 #
-# GitHub expression-evaluates a composite action's WHOLE manifest when it loads it — input
-# descriptions, run: strings, bash comments inside them. vars, secrets, needs, matrix and strategy
-# are not available there, so one such reference anywhere in the file makes the action fail to LOAD
-# for every consumer. That took merge-gate offline across both orgs until v1.12.1.
+# GitHub expression-evaluates a composite action's entire manifest when it loads it, including input
+# descriptions, run: strings and the bash comments inside them. vars, secrets, needs, matrix and
+# strategy are unavailable there, so one reference anywhere in the file makes the action fail to load
+# for every consumer.
 #
-# The manifests document caller syntax by writing those names as PLAIN TEXT (`vars.AGENT_KILL_SWITCH`
-# with no ${{ }} around it), which is legal and deliberate. So the check cannot simply grep for the
-# names: it has to know whether an occurrence sits inside an expression.
+# The manifests document caller syntax by writing those names as plain text —
+# `vars.AGENT_KILL_SWITCH` with no ${{ }} around it — which is legal. So the check has to know
+# whether an occurrence sits inside an expression; a grep for the names alone cannot.
 #
-# That distinction is the whole difficulty, and why two simpler versions of this check were wrong:
+# Two shapes a simpler pattern lets through, both of them what a reader reaches for first:
 #
-#   ${{ vars.X }}                        caught by anchoring to the start of the expression
-#   ${{ inputs.a || vars.X }}            NOT caught — the context is not the first token
-#   ${{ format('{0}', secrets.X) }}      NOT caught by ${{[^}]*}} either — [^}]* stops at the } in '{0}'
+#   ${{ inputs.a || vars.X }}            anchoring to the start of the expression skips it
+#   ${{ format('{0}', secrets.X) }}      ${{[^}]*}} stops at the } inside '{0}'
 #
-# So the scan walks each line tracking whether it is inside a ${{ … }} region, and reports only the
-# occurrences that are. Expressions are treated as line-local, which is what they are in these
-# manifests; a context split across a block scalar would be missed.
+# The scan walks each line tracking whether it is inside a ${{ … }} region and reports the
+# occurrences that are. Expressions are line-local here; a context split across a block scalar sits
+# outside its reach.
 set -euo pipefail
 
 ROOT="${1:-.}"

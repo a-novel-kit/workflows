@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Regression tests for the reconcile sweep's membership selectors.
 #
-# Same discipline as the other suites: the jq programs are EXTRACTED verbatim from the workflow and
-# run against fixture nodes, so what is asserted here is what ships. There is nothing to stub — the
-# selectors are pure functions of the GraphQL result.
+# Same discipline as the other suites: the jq programs are extracted verbatim from the workflow and
+# run against fixture nodes, so what is asserted here is what ships. There is nothing to stub, since
+# the selectors are pure functions of the GraphQL result.
 #
-# The case that matters: a PR carrying the `epic:<N>` label but no `Closes` line. merge-gate holds
-# every member of an unready set at `failure`, and a held PR is released only by this sweep — so a
-# member the sweep cannot see stays red until someone pushes to it, and the whole wave blocks behind
-# one permanently-red required check. That is the shape of a cross-repo re-pin or infra PR pulled
-# into a wave, which is ordinary rather than exotic.
+# The central case is a PR carrying the `epic:<N>` label with no `Closes` line — the shape of a
+# cross-repo re-pin or an infra PR pulled into a wave. merge-gate holds every member of an unready
+# set at `failure`, and this sweep is the only thing that releases one, so a member it cannot see
+# keeps the whole wave behind a permanently-red required check.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

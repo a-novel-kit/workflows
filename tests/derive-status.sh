@@ -5,11 +5,10 @@
 # assertions are on the shipped selectors. There is nothing to stub — they are pure functions of the
 # GraphQL result.
 #
-# The defect: a PR closing several issues derived exactly one of them, on the stated grounds that
-# "the reconcile sweep covers the rest". The sweep re-derives an issue from ITS OWN pull request, and
-# an issue closed by a sibling's PR has none — so the others were reached by nothing. Not a race that
-# resolves next pass, a state nothing arrives at. It read as handled because the run that stranded
-# them succeeded.
+# The central case is a PR that closes several issues. The reconcile sweep reaches an issue through
+# its own pull request, so an issue closed by a sibling's PR is reachable only from the deriver here.
+# A Task left behind sits at whatever status it held while its fix is in review, and the run that
+# left it there succeeds.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -65,8 +64,8 @@ check "a PR closing two issues yields both, lowest first" "I_kw1111 I_kw1112" "$
 check "a PR closing one issue is unchanged" "I_kw1111" "$(ids "$ONE")"
 check "a PR closing none yields nothing" "" "$(ids "$NONE")"
 
-# The previous behaviour, kept here so the defect stays on the record rather than living only in a
-# commit message: it took the lowest-numbered ref and left the other untouched.
+# The lowest-numbered-ref selector, kept as a contrast: it resolves one issue where the shipped
+# filter resolves every closing issue.
 OLD_FILTER='sort_by(.number) | .[0].id // empty'
 check "the previous filter returned only the lowest-numbered" "I_kw1111" \
   "$(printf '%s' "$TWO" | jq -r "$OLD_FILTER")"
@@ -76,9 +75,9 @@ echo "== the hotfix-reconcile branch is decided across all of them =="
 check "no closing issue is a hotfix cleanup" "0" "$(hotfix_count "$TWO")"
 check "every closing issue is a hotfix cleanup" "1" "$(hotfix_count "$ALL_HOTFIX")"
 
-# Mixed is the case with no single right answer: one status is written to every closing issue, and
-# these two want different terminal ones. The action errors rather than picking, which is the whole
-# point — sampling one issue's labels is what the old code did.
+# A mixed set has no single right answer: one status covers every closing issue, and these two carry
+# different terminal ones. The action stops there, which is why the classifier reports the count
+# instead of sampling one issue's labels.
 mixed=$(hotfix_count "$MIXED")
 total=$(printf '%s' "$MIXED" | jq 'length')
 if [ "$mixed" != "0" ] && [ "$mixed" != "$total" ]; then

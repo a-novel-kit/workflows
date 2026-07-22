@@ -151,20 +151,18 @@ jobs:
             [ "$(echo "$page" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
             cursor=$(echo "$page" | jq -r '.data.search.pageInfo.endCursor')
           done
-          # tasks holds the open PRs that close an issue, whose Status is re-derived. Status derivation
-          # reads the closing reference, so the Closes walk is the right selector for this half.
+          # tasks holds the open PRs that close an issue, whose Status is re-derived. Status
+          # derivation reads the closing reference, which is what this selector follows.
           tasks=$(echo "$nodes" | jq -c '[.[]
             | select(.number and (.closingIssuesReferences.nodes | length > 0))
             | {repo: .repository.name, number, sha: .headRefOid}]')
-          # epic_prs holds the PRs merge-gate is re-posted on. Membership is the `epic:<N>` LABEL,
-          # which is what merge-gate holds against — a label needs >= triage to apply, while a Closes
-          # keyword is author-controlled. This selector used to be the Closes walk, so a member
-          # carrying the label but no Closes line (an infra or re-pin PR pulled into a wave) was never
-          # re-evaluated. It stayed held at `failure` until someone pushed to it, and since a held PR
-          # is released only by this sweep, the whole wave blocked on one permanently-red check.
+          # epic_prs holds the PRs merge-gate is re-posted on, selected by the `epic:<N>` label.
+          # That label is what merge-gate holds a set against, and it needs triage permission to
+          # apply. A member carries it whether or not it closes an issue, which covers the infra and
+          # re-pin PRs pulled into a wave.
           #
-          # Dropping the Closes-derived set loses nothing: merge-gate classifies an unlabeled PR as
-          # standalone and always passes it, so re-posting on those never changed an outcome.
+          # This sweep is the only thing that releases a held member, so a member missing from here
+          # stays at `failure` until someone pushes to it, and the whole wave waits behind it.
           epic_prs=$(echo "$nodes" | jq -c '[.[]
             | select(.number and ([.labels.nodes[].name | select(startswith("epic:"))] | length > 0))
             | {repo: .repository.name, number, sha: .headRefOid}]')
