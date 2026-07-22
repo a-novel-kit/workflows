@@ -96,12 +96,25 @@ search_prs() {
     closed) case "$1" in *is:unmerged*) return 1 ;; esac ;;
     open) case "$1" in *is:open*) return 1 ;; esac ;;
   esac
+  local bucket floor
   case "$1" in
-    *is:merged*) printf '%s' "$FX_LIVE_MERGED" ;;
-    *is:unmerged*) printf '%s' "$FX_LIVE_CLOSED" ;;
-    *is:open*) printf '%s' "$FX_LIVE_OPEN" ;;
+    *is:merged*) bucket="$FX_LIVE_MERGED" ;;
+    *is:unmerged*) bucket="$FX_LIVE_CLOSED" ;;
+    *is:open*) bucket="$FX_LIVE_OPEN" ;;
     *) echo "unexpected search: $1" >&2; return 1 ;;
   esac
+  # Apply the time qualifier the way GITHUB does, not the way the action hopes it does. Asserting the
+  # substring `merged:>=…` appears in the query would pass just as well if the qualifier were inert —
+  # and it is not: a bad one silently returns zero rows. Filtering here is what lets the wave-boundary
+  # assertions below run the real predicate against real truth.
+  # ISO-8601 UTC sorts chronologically, so a string compare IS the date compare (the action's own grace
+  # clock leans on the same property). A node with no terminal timestamp is KEPT: GitHub always has one,
+  # so an undated fixture means "not what this assertion is about", and dropping it would quietly
+  # rewrite the meaning of every fixture written before the boundary existed.
+  floor=$(printf '%s' "$1" | sed -n 's/.*\(merged\|closed\):>=\([^ ]*\).*/\2/p')
+  [ -n "$floor" ] && bucket=$(printf '%s' "$bucket" | jq -c --arg f "$floor" \
+    '[.[] | select((.mergedAt // .closedAt // "9999") >= $f)]')
+  printf '%s' "$bucket"
 }
 merge_queue_entries() { # $1=owner $2=repo $3=base
   [ "$FX_QUEUE_FAIL" = true ] && return 1
@@ -128,9 +141,15 @@ rest_pr_state() {
 #   timeline = de-labeled now, but its timeline records having been labeled (the regression case)
 #   label    = still carries the label
 #   none     = neither — a pull request named by the marker that was never a member
-node() { # repo number state [mergedAt] [prov: timeline|label|none]
+node() { # repo number state [terminalAt] [prov: timeline|label|none]
+  # `terminalAt` is when the pull request reached its terminal state — it fills `mergedAt` for a MERGED
+  # one and `closedAt` otherwise, which is how GitHub reports them (a merged PR carries both, equal).
+  # `closedAt` is not in the action's search-node shape and it never reads it; it exists so the stub
+  # above can apply a `closed:>=` floor, which the real search applies server-side.
   jq -cn --arg r "$1" --argjson n "$2" --arg s "$3" --arg m "${4:-}" --arg p "${5:-timeline}" --arg e "epic:900" \
-    '{number:$n, headRefOid:("sha"+($n|tostring)), mergedAt:(if $m=="" then null else $m end),
+    '{number:$n, headRefOid:("sha"+($n|tostring)),
+      mergedAt:(if $m=="" or $s!="MERGED" then null else $m end),
+      closedAt:(if $m=="" or $s=="OPEN" then null else $m end),
       baseRefName:"master", isDraft:false, state:$s, repository:{nameWithOwner:$r},
       labels:{nodes:(if $p=="label" then [{name:$e}] else [] end)},
       timelineItems:{nodes:(if $p=="timeline" then [{label:{name:$e}}] else [] end)}}'
@@ -144,20 +163,30 @@ rehydrate() { # the aliased re-read response, one alias per member
 # parses the whole region as JSON chokes on it. A fixture that omits the note agrees with whatever the
 # reader happens to do and can never catch that, which is how a parser change once made the feature
 # silently inert end to end. Frozen payloads carry no `at`; only pending does.
-marker() { # status members-json
+marker() { # status members-json [since]
+  # `since` is the wave boundary. It is OPTIONAL on every status, because that is the shape the reader
+  # has to survive: it is absent on a first wave, present on a tombstone, and carried forward onto the
+  # pending / frozen markers that replace one.
   local payload note
-  if [ "$1" = frozen ]; then
-    payload=$(jq -cn --argjson m "$2" '{status:"frozen", members:$m}')
+  if [ "$1" = retired ]; then
+    payload=$(jq -cn --arg since "${3:-}" '{status:"retired"} + (if $since=="" then {} else {since:$since} end)')
+    note='_Epic membership, RETIRED — this wave has landed; the next ready set freezes its own. Do not edit._'
+  elif [ "$1" = frozen ]; then
+    payload=$(jq -cn --argjson m "$2" --arg since "${3:-}" \
+      '{status:"frozen", members:$m} + (if $since=="" then {} else {since:$since} end)')
     note='_Epic membership, FROZEN at activation by the merge-gate. The authoritative set for this landing — a later de-label, close, or relabel does not change it. Do not edit._'
   else
-    payload=$(jq -cn --arg s "$1" --argjson m "$2" '{status:$s, at:"2026-07-20T10:00:00Z", members:$m}')
+    payload=$(jq -cn --arg s "$1" --argjson m "$2" --arg since "${3:-}" \
+      '{status:$s, at:"2026-07-20T10:00:00Z", members:$m} + (if $since=="" then {} else {since:$since} end)')
     note='_Epic membership, PENDING — stabilizing before it freezes (the label index is eventually consistent). Do not edit._'
   fi
   printf '<!-- epic-membership:snapshot:start -->\n%s\n%s\n<!-- epic-membership:snapshot:end -->\n' "$note" "$payload"
 }
 
 AGO40=$(date -u -d '-40 minutes' +%Y-%m-%dT%H:%M:%SZ)
+AGO20=$(date -u -d '-20 minutes' +%Y-%m-%dT%H:%M:%SZ) # a wave boundary: after AGO40, before AGO5
 AGO5=$(date -u -d '-5 minutes' +%Y-%m-%dT%H:%M:%SZ)
+AHEAD=$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
 A=$(node a-novel-kit/repo-a 1 MERGED "$AGO40")
 B=$(node a-novel-kit/repo-b 2 CLOSED) # the abandoned member: closed unmerged, label removed
 C=$(node a-novel-kit/repo-c 3 OPEN)
@@ -431,9 +460,172 @@ check "an unparseable merge time never elapses grace" clear live 1/0/1
 reset_fixtures
 
 echo
+echo "the wave boundary: history is scoped to the wave, membership is not"
+# The regression that makes a second wave impossible. A merged pull request keeps its epic:<N> label, so
+# an unbounded is:merged search reports the PREVIOUS wave forever: merged>=1 stays true, grace runs from
+# the first merge EVER, and the first sibling of the next wave is a stray past grace on the very pass it
+# appears — frozen by a required check, re-frozen every sweep, with nothing the author can do about it.
+FX_QUEUE='[]'                                                   # the new sibling is labelled, not queued
+FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO40")]" # the previous wave: landed, past grace
+check "without a boundary, a new sibling is frozen on the last wave" frozen live 1/0/1
+FX_BODY=$(marker retired '[]' "$AGO20")
+check "the tombstone ends that history, and it is gated normally" clear live 0/0/1
+reset_fixtures
+
+echo
+echo "a partial landing INSIDE the wave still freezes"
+FX_BODY=$(marker retired '[]' "$AGO20")
+FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO5")]"
+FX_LIVE_CLOSED="[$(node a-novel-kit/repo-b 2 CLOSED "$AGO5")]"
+check "a member closed after the boundary is this wave's abandonment" frozen live 1/1/1
+[ "$EV_REASON" = "a member was closed without merging" ] \
+  && ok "and for the right reason" || ko "wrong reason: $EV_REASON"
+# The closed bucket carries the identical disease and is scoped identically: an abandonment a human has
+# already dealt with must not re-freeze every wave that follows it.
+FX_LIVE_CLOSED="[$(node a-novel-kit/repo-b 2 CLOSED "$AGO40")]"
+check "the same member closed before it belongs to the retired wave" clear live 1/0/1
+reset_fixtures
+
+echo
+echo "grace runs from THIS wave's first merge"
+FX_QUEUE='[]'
+FX_REST=$(printf '%s' "$FX_REST" | jq -c '. + {"a-novel-kit/repo-d#4":"closed true"}')
+FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO40"),$(node a-novel-kit/repo-d 4 MERGED "$AGO5")]"
+check "unbounded, the oldest merge of all elapses grace" frozen live 2/0/1
+FX_BODY=$(marker retired '[]' "$AGO20")
+check "bounded, the clock starts at the merge inside the wave" clear live 1/0/1
+reset_fixtures
+
+echo
+echo "the boundary is read from every marker status, not only the tombstone"
+# merge-gate splices the whole region, so the tombstone is destroyed the moment the next wave captures a
+# marker of its own. A boundary that is not carried forward onto that marker dies with it, and the
+# permanent freeze returns one pass later — which is why the reader takes it from any status.
+FX_BODY=$(marker frozen "$BC")
+FX_REHYDRATE=$(rehydrate "$B" "$C")
+check "a frozen marker with no boundary reads the whole history" frozen live+snapshot 1/1/1
+FX_BODY=$(marker frozen "$BC" "$AGO20")
+check "the same marker carrying one drops the retired wave" clear live+snapshot 0/1/1
+reset_fixtures
+FX_BODY=$(marker pending "$BC" "$AGO20")
+check "a pending marker carries it too, membership still live" clear live 0/0/1
+reset_fixtures
+
+echo
+echo "the boundary bounds HISTORY, never the frozen set"
+# The frozen set IS the current wave: retirement is what writes a boundary, and it removes the set it
+# retires. Time-filtering it here would let the boundary shrink MEMBERSHIP — the one thing the union
+# exists to prevent — and would drop exactly the abandoned member the snapshot is kept for.
+FX_LIVE_MERGED='[]'
+FX_BODY=$(marker frozen "$BC" "$AGO20")
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 MERGED "$AGO40")" "$C")
+check "a frozen member that merged before the boundary still counts" clear live+snapshot 1/0/1
+reset_fixtures
+
+echo
+echo "which searches the boundary reaches"
+FX_BODY=$(marker retired '[]' "$AGO20")
+: > "$WORK/searches"
+evaluate_epic 900 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+[ "$(grep -cF "merged:>=$AGO20" "$WORK/searches")" = 1 ] \
+  && ok "the merged search is bounded" || ko "the merged search is not bounded by the boundary"
+[ "$(grep -cF "closed:>=$AGO20" "$WORK/searches")" = 1 ] \
+  && ok "the closed-unmerged search is bounded" || ko "the closed-unmerged search is not bounded"
+grep 'is:open' "$WORK/searches" | grep -q ':>=' \
+  && ko "the open search is bounded — but an open pull request is not history" \
+  || ok "and the open search is left unbounded"
+reset_fixtures
+
+echo
+echo "an unusable boundary is ignored, and never reaches a query"
+# The dangerous input is not an obviously broken one. GitHub answers a malformed time qualifier — and a
+# well-shaped impossible date — with ZERO rows and NO errors array, indistinguishable from a genuinely
+# empty bucket. That bucket gates every decision, and an empty one reads as "nothing has landed" →
+# `clear` → which POSTS success and lifts a standing freeze. Falling back to unbounded history is the
+# safe direction: it errs toward freezing. fd 6 keeps this loop's input clear of evaluate_epic's own.
+FX_QUEUE='[]'
+FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO40")]"
+while IFS='|' read -r why bad <&6; do
+  [ -n "$why" ] || continue
+  FX_BODY=$(marker retired '[]' "$bad")
+  : > "$WORK/searches"
+  check "$why" frozen live 1/0/1
+  grep -q ':>=' "$WORK/searches" \
+    && ko "  …but it reached a query anyway" || ok "  …with no floor in any query"
+done 6<<EOF
+not a timestamp at all|garbage
+a relative date the calendar happily accepts|yesterday
+a well-formed shape that is not a real date|2026-13-45T99:00:00Z
+a date with no time (one canonical form only)|2026-07-01
+an instant in the future|$AHEAD
+a trailing search qualifier|2026-07-01T00:00:00Z org:attacker
+a quote that would close the qualifier|2026-07-01T00:00:00Z"
+EOF
+# Not merely "no floor": the injected text must be nowhere in the grammar. `org:` is the scope that
+# bounds membership to this org, so a second one would widen the member set to a repository the marker's
+# author controls.
+FX_BODY=$(marker retired '[]' '2026-07-01T00:00:00Z org:attacker')
+: > "$WORK/searches"
+evaluate_epic 900 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+grep -q 'attacker' "$WORK/searches" \
+  && ko "an injected qualifier reached the search grammar" \
+  || ok "an injected qualifier never reaches the search grammar"
+# Rejecting a value is not enough if REPORTING it is itself the vector. The marker lives in an issue
+# body, jq -r turns an embedded \n into a real newline, and GitHub reads workflow commands line by line
+# — so an unsanitized warning would let the boundary forge a command on the path that rejects it.
+# Captured in `$( )`, so EV_* never reach this shell: only the log is under test here.
+FX_BODY=$(marker retired '[]' "$(printf '2026-07-01T00:00:00Z\n::error::forged')")
+check "a boundary carrying a newline is rejected" frozen live 1/0/1
+out=$(evaluate_epic 900 2>&1)
+: > "$GITHUB_STEP_SUMMARY"
+printf '%s\n' "$out" | grep -q '^::error::forged' \
+  && ko "a newline in the boundary forged a workflow command" \
+  || ok "and reporting it cannot forge a workflow command"
+reset_fixtures
+
+echo
+echo "the boundary is compared against a clock that is already minutes old"
+# now_epoch is read when the STEP starts; a sweep is often minutes into it by the time it reaches an
+# Epic. Without a skew allowance a tombstone merge-gate wrote moments ago reads as "the future" and is
+# thrown away — costing a pass of unbounded history, which re-freezes the next wave until the sweep
+# after. The guard exists for a boundary far enough ahead to hide real history, not for that race.
+FX_QUEUE='[]'
+FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO40")]"
+FX_BODY=$(marker retired '[]' "$(date -u -d '+2 minutes' +%Y-%m-%dT%H:%M:%SZ)")
+check "a boundary inside the skew allowance is honoured" clear live 0/0/1
+FX_BODY=$(marker retired '[]' "$AHEAD")
+check "one an hour ahead is still refused" frozen live 1/0/1
+reset_fixtures
+
+echo
+echo "the boundary does not leak between Epics in one sweep process"
+FX_BODY=$(marker retired '[]' "$AGO20")
+evaluate_epic 900 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+FX_BODY="" # the next Epic in the same sweep has no marker at all
+: > "$WORK/searches"
+evaluate_epic 901 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+[ -z "$SNAP_SINCE" ] && ok "the next Epic starts with no boundary" || ko "SNAP_SINCE leaked: $SNAP_SINCE"
+grep -q ':>=' "$WORK/searches" \
+  && ko "the previous Epic's boundary bounded this one's searches" \
+  || ok "and its searches are unbounded"
+reset_fixtures
+
+echo
 echo "a degraded marker falls back to the live floor — never a crash, never a freeze on garbage"
 FX_BODY=$(marker pending "$BC")
 check "a pending marker (the set has not settled)" clear live 1/0/1
+# A tombstone is the one marker whose whole purpose is the boundary; carrying none it says nothing, and
+# saying nothing must mean the Epic's whole history, not an empty one.
+FX_BODY=$(marker retired '[]')
+check "a tombstone carrying no boundary" clear live 1/0/1
+FX_BODY='<!-- epic-membership:snapshot:start -->
+[{"since":"2026-07-01T00:00:00Z"}]
+<!-- epic-membership:snapshot:end -->'
+check "a boundary on a marker that is an array, not an object" clear live 1/0/1
 FX_BODY='<!-- epic-membership:snapshot:start -->
 {"status":"frozen","members":"nope"}
 <!-- epic-membership:snapshot:end -->'
@@ -605,7 +797,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 95 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 95) — the suite did not execute fully"
+if [ "$ran" -lt 132 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 132) — the suite did not execute fully"
   exit 1
 fi

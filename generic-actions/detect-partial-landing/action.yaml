@@ -26,6 +26,17 @@ description: >
   REACHES an Epic through live labels, so an Epic whose last labeled open pull request is de-labeled
   drops out of enumeration altogether — the snapshot rescues a forgotten member, not a forgotten Epic.
 
+  HISTORY is scoped to the WAVE, membership is not. A merged pull request keeps its `epic:<N>` label
+  for good, so an unbounded `is:merged` search reports every wave the Epic has ever landed: `merged >= 1`
+  would be permanently true and the grace clock would run from the first merge EVER, making the first
+  sibling of a second wave a stray past grace on the pass it appears — frozen by a required check, every
+  sweep, forever. The marker therefore carries a WAVE BOUNDARY (`since`), the instant a previous wave
+  retired; terminal pull requests before it are not this wave's history. It scopes the two history
+  searches and nothing else: the open search is unscoped (an open pull request is not history), and the
+  frozen set is never time-filtered — it IS the current wave, so the union above widens membership
+  without widening history. No boundary (before the first retirement, or a marker carrying none) means
+  the Epic's whole history is one wave, which is exactly right for the first one.
+
   The freeze is a check-run, not a status: an `epic-freeze` check-run (checks:write) posted with
   `conclusion: failure` — never `neutral`, which GitHub counts as a passing required check — on a
   different context from `merge-gate` so the two required checks never clobber. Posted on a live
@@ -467,13 +478,17 @@ runs:
         # commonly omits them. Substituting it would empty the `merged` bucket that gates all detection.
         #
         # Prints nothing; fills SNAP_MERGED / SNAP_CLOSED / SNAP_OPEN with the node shape search_prs
-        # returns (repository.nameWithOwner, number, headRefOid, mergedAt, baseRefName, isDraft).
+        # returns (repository.nameWithOwner, number, headRefOid, mergedAt, baseRefName, isDraft), plus
+        # SNAP_SINCE with the wave boundary. The boundary is read on EVERY rc, including the ones that
+        # report no usable frozen set: a `retired` tombstone names no members and exists only to carry it.
         # Returns 0 = frozen set resolved, 2 = no usable snapshot (the live floor stands on its own),
         # 1 = a frozen set exists but could NOT be resolved. On 1 the caller leaves EV_DECISION=error,
         # which the sweep treats as "post nothing this pass" (a standing freeze survives) and per-PR as
         # fail-open on the head — so 1 costs a pass, never a false clear in the sweep.
-        # The marker contract (fence names, `status`, `members`) is shared with epic-membership and
-        # merge-gate — a change to its shape has to land in all three.
+        # The marker contract (fence names, `status`, `members`, `since`) is shared with epic-membership
+        # and merge-gate — a change to its shape has to land in all three. `since` is additive and both
+        # membership readers ignore it: they select on `status` and `members` alone, so a marker carrying
+        # it resolves there exactly as one without.
         snapshot_buckets() { # $1 = epic number
           # The fence strings, matched as WHOLE LINES. An unanchored match would let a pseudo-fence
           # planted inside an HTML comment shadow the real region on every read while staying
@@ -483,7 +498,9 @@ runs:
           SNAP_MERGED='[]'
           SNAP_CLOSED='[]'
           SNAP_OPEN='[]'
+          SNAP_SINCE=''
           local resp="" err="" errf body="" ok=false marker frozen want alias_q rh out nodes
+          local since="" since_epoch="" shown=""
           errf=$(mktemp)
           for attempt in 1 2 3; do
             # Keep the streams apart: stdout is the payload, stderr is diagnosis. Folding them together
@@ -529,6 +546,45 @@ runs:
             | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
             | sed -n '/^[[:space:]]*[{[]/,$p' \
             | jq -s -c '.[0] // empty' 2>/dev/null || true)
+
+          # The WAVE BOUNDARY, read from ANY well-formed marker whatever its `status`, and read HERE —
+          # ahead of the frozen-only returns below — because the paths that report no frozen set need it
+          # most. A `retired` tombstone names no members and exists ONLY to carry this instant; a
+          # pending/frozen marker carries it forward from the tombstone it replaced, since merge-gate
+          # splices the whole region and a boundary not carried forward dies with the next capture.
+          # Canonicalized once, right here: the caller appends it to a search query and never re-parses it.
+          since=$(printf '%s' "$marker" | jq -r 'if type == "object" then (.since // empty) else empty end' 2>/dev/null || true)
+          if [ -n "$since" ]; then
+            # A malformed time qualifier is the dangerous input, not an obviously broken one: GitHub
+            # answers `merged:>=garbage` — and `merged:>=2026-13-45T99:00:00Z`, which passes any
+            # shape-only check — with ZERO results and NO `errors` array, so nothing in search_prs can
+            # tell it from a genuinely empty bucket. That bucket is what every decision hangs on, and an
+            # empty one reads as "nothing has landed" → `clear`, which POSTS success and lifts a standing
+            # freeze. A future instant does the same while looking well-formed. So only a value in the
+            # exact form merge-gate emits, that a calendar accepts, and that is not ahead of this run
+            # reaches a query; anything else is dropped for unbounded history, which errs toward freezing.
+            # Everything shown below is attacker-controlled — the marker lives in an issue body. jq -r
+            # renders an embedded \n as a REAL newline and GitHub reads workflow commands line by line,
+            # so echoing the raw value would let a crafted boundary forge its own `::error::` or
+            # `::stop-commands::` line on the very path that REJECTS it. Show one bounded line instead.
+            shown=$(printf '%s' "$since" | tr -d '\r\n' | cut -c1-64)
+            if ! [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is not an ISO-8601 UTC instant (YYYY-MM-DDTHH:MM:SSZ) — ignoring it and scoping to the Epic's whole history."
+            elif ! since_epoch=$(date -u -d "$since" +%s 2>/dev/null); then
+              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is not a real date — ignoring it and scoping to the Epic's whole history."
+            # Compared against the clock this STEP started on, plus a skew allowance: a sweep can be
+            # minutes into the step by the time it reaches an Epic, so a tombstone merge-gate wrote
+            # moments ago would otherwise read as "the future" and be discarded for no reason — costing
+            # a pass of unbounded history, which re-freezes the next wave until the following sweep.
+            # What this check is actually for is a boundary far enough ahead to hide REAL history, and
+            # a few minutes hides a few minutes of merges, well inside the grace window either way.
+            elif [ "$since_epoch" -gt "$(( now_epoch + 300 ))" ]; then
+              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is in the FUTURE — ignoring it (it would hide every merge this Epic has) and scoping to the Epic's whole history."
+            else
+              SNAP_SINCE="$since"
+            fi
+          fi
+
           [ -n "$marker" ] || return 2
           # Only a well-formed FROZEN marker counts. A pending marker (the set has not settled yet), a
           # hand-edited one, or the wrong shape falls back to the live floor rather than crashing.
@@ -747,22 +803,16 @@ runs:
           local EPIC="$1"
           local base_q="label:\"epic:${EPIC}\" org:${ORG}"
 
-          # The live label set is the FLOOR. Widened resolve, three passes: is:closed is:unmerged
-          # catches the closed-without-merge blind spot; is:merged and is:open complete the picture.
-          # Any failure → EV_DECISION stays error.
+          # The snapshot is resolved FIRST because it carries the wave boundary the searches below are
+          # scoped by. It is otherwise added ON TOP of the live floor, never swapped for it: it
+          # contributes the members live truth has forgotten — a de-labeled one stays a member — and
+          # nothing else. The union is what makes MEMBERSHIP monotone: no snapshot, however degraded or
+          # incomplete, can shrink the member set the detector already saw, so the worst case is the
+          # behaviour that predates it. A straight substitution would not be safe, because a frozen set
+          # is not a superset of the live one: merge-gate captures it from OPEN pull requests after the
+          # set holds still, while auto-merge is armed earlier, so already-merged members are commonly
+          # absent from it — and `merged >= 1` is the precondition every decision below hangs on.
           local merged closed_unmerged open membership=live snap_rc=0
-          if ! merged=$(search_prs "is:pr is:merged $base_q"); then return 0; fi
-          if ! closed_unmerged=$(search_prs "is:pr is:closed is:unmerged $base_q"); then return 0; fi
-          if ! open=$(search_prs "is:pr is:open $base_q"); then return 0; fi
-
-          # The frozen snapshot is added ON TOP of that floor, never swapped for it. It contributes the
-          # members live truth has forgotten — a de-labeled one stays a member — and nothing else. The
-          # union is what makes this monotone: no snapshot, however degraded or incomplete, can shrink
-          # what the detector already saw, so the worst case is the behaviour that predates it. A
-          # straight substitution would not be safe, because a frozen set is not a superset of the live
-          # one: merge-gate captures it from OPEN pull requests after the set holds still, while
-          # auto-merge is armed earlier, so already-merged members are commonly absent from it — and
-          # `merged >= 1` is the precondition every decision below hangs on.
           snapshot_buckets "$EPIC" || snap_rc=$?
           case "$snap_rc" in
             0) membership=live+snapshot ;;
@@ -771,6 +821,9 @@ runs:
             # `liveMember` is present on every node no matter which path produced it. Tagging only on the
             # snapshot path once left these nodes untagged, and since jq reads a missing key as null, the
             # roll-forward silently selected nothing while its skip-warning selected everything.
+            # SNAP_SINCE is deliberately NOT reset alongside these: rc 2 is exactly the tombstone case —
+            # a `retired` marker has no members to bucket and exists only to carry the boundary — so
+            # clearing it here for symmetry would discard the one thing that path is there to deliver.
             2) SNAP_MERGED='[]'; SNAP_CLOSED='[]'; SNAP_OPEN='[]' ;;
             *)
               # A frozen set exists (or might) and could not be resolved. Deciding on the live floor
@@ -781,6 +834,29 @@ runs:
               return 0
               ;;
           esac
+
+          # The live label set is the FLOOR. Widened resolve, three passes: is:closed is:unmerged
+          # catches the closed-without-merge blind spot; is:merged and is:open complete the picture.
+          # Any failure → EV_DECISION stays error.
+          # The two TERMINAL passes are bounded by the wave boundary, so a previous wave's merges and
+          # abandonments are not read as this wave's. Everything else follows from that one scope:
+          # `first_merged_at` is already a `min` over the merged bucket, so grace starts at THIS wave's
+          # first merge, and strays are already gated on `merged >= 1`, so a sibling of a wave that has
+          # not started landing is not a stray at all. The open pass is deliberately unbounded — an open
+          # pull request is not history, and a member can have been opened long before its wave began.
+          local merged_floor="" closed_floor=""
+          if [ -n "${SNAP_SINCE:-}" ]; then
+            merged_floor=" merged:>=${SNAP_SINCE}"
+            closed_floor=" closed:>=${SNAP_SINCE}"
+          fi
+          if ! merged=$(search_prs "is:pr is:merged $base_q$merged_floor"); then return 0; fi
+          if ! closed_unmerged=$(search_prs "is:pr is:closed is:unmerged $base_q$closed_floor"); then return 0; fi
+          if ! open=$(search_prs "is:pr is:open $base_q"); then return 0; fi
+          # The snapshot's own buckets enter UNFILTERED by the boundary, and must: a frozen set is the
+          # current wave by construction (retirement is what writes a boundary, and it removes the set it
+          # retires), so every member it names belongs here whenever it merged. Filtering them would let
+          # the boundary shrink MEMBERSHIP — the one thing the union exists to prevent — and would drop
+          # exactly the abandoned member the snapshot is kept for.
           local buckets
           if ! buckets=$(union_buckets "$merged" "$closed_unmerged" "$open" \
             "$SNAP_MERGED" "$SNAP_CLOSED" "$SNAP_OPEN"); then
@@ -856,7 +932,11 @@ runs:
             fi
           fi
 
-          echo "epic #$EPIC: membership=$membership merged=$EV_MERGED_COUNT closed_unmerged=$EV_CLOSED_COUNT open=$EV_OPEN_COUNT stray=$EV_STRAY_COUNT grace_elapsed=$grace_elapsed" \
+          # wave_since is logged separately from `membership`, not folded into it: a tombstone yields a
+          # boundary and NO frozen set, so `membership=live` alongside a boundary is the normal shape
+          # between waves, and a pass that read the marker would otherwise be indistinguishable from one
+          # that found nothing.
+          echo "epic #$EPIC: membership=$membership wave_since=${SNAP_SINCE:-none} merged=$EV_MERGED_COUNT closed_unmerged=$EV_CLOSED_COUNT open=$EV_OPEN_COUNT stray=$EV_STRAY_COUNT grace_elapsed=$grace_elapsed" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
           # Predicate: needs >=1 merged sibling (nothing has landed otherwise); then a closed-unmerged
