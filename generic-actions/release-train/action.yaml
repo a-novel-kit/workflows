@@ -272,17 +272,43 @@ runs:
         # commits). Highest-wins: `!`/BREAKING footer → major; any feat → minor; else patch. Empty range
         # → "none" (skip). Subject-line scan for feat/`!` (a body line starting `feat:` is not a type);
         # full-body scan for the BREAKING-CHANGE footer. Uses the compare API (no checkout).
+        commit_messages() { # $1=api path  $2=jq filter  $3=paginate(true|false)
+          local out attempt
+          for attempt in 1 2 3; do
+            if [ "$3" = "true" ]; then
+              out=$(gh api "$1" --paginate --jq "$2" 2>/dev/null) && { printf '%s' "$out"; return 0; }
+            else
+              out=$(gh api "$1" --jq "$2" 2>/dev/null) && { printf '%s' "$out"; return 0; }
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          return 1
+        }
+
         derive_bump() { # $1=owner/repo $2=last_tag ("" = first release) $3=default_branch
-          local repo="$1" last="$2" head="$3" subjects bodies
+          local repo="$1" last="$2" head="$3" subjects bodies path paginate jq_bodies jq_subjects
           if [ -z "$last" ]; then
-            # First release: scan the recent default-branch history; default minor if quiet.
-            bodies=$(gh api "repos/$repo/commits" --jq '.[].commit.message' 2>/dev/null || echo "")
-            subjects=$(gh api "repos/$repo/commits" --jq '.[].commit.message | split("\n")[0]' 2>/dev/null || echo "")
-            [ -z "$(printf '%s' "$subjects" | tr -d '[:space:]')" ] && { printf 'minor'; return 0; }
+            # First release: scan the recent default-branch history; default minor if quiet. Not
+            # paginated — answering "is there anything here" does not need the whole history.
+            path="repos/$repo/commits"; paginate=false
+            jq_bodies='.[].commit.message'; jq_subjects='.[].commit.message | split("\n")[0]'
           else
-            bodies=$(gh api "repos/$repo/compare/${last}...${head}" --jq '.commits[].commit.message' 2>/dev/null || echo "")
-            subjects=$(gh api "repos/$repo/compare/${last}...${head}" --jq '.commits[].commit.message | split("\n")[0]' 2>/dev/null || echo "")
-            [ -z "$(printf '%s' "$subjects" | tr -d '[:space:]')" ] && { printf 'none'; return 0; }
+            # Paginated: the compare API pages its commit list, and a feat past the first page would
+            # otherwise be invisible — shipping a minor as a patch.
+            path="repos/$repo/compare/${last}...${head}"; paginate=true
+            jq_bodies='.commits[].commit.message'; jq_subjects='.commits[].commit.message | split("\n")[0]'
+          fi
+          # Fail-closed, like latest_tag and tag_contains. A read that failed is not an empty range;
+          # collapsing the two onto one value let a transient API error read as "nothing to release",
+          # so the repo was skipped, recorded as nochange, and the run stayed green — and because
+          # nothing recorded a failure, a re-dispatch recomputed the same skip forever.
+          if ! bodies=$(commit_messages "$path" "$jq_bodies" "$paginate") \
+            || ! subjects=$(commit_messages "$path" "$jq_subjects" "$paginate"); then
+            printf '__ERR__'; return 0
+          fi
+          if [ -z "$(printf '%s' "$subjects" | tr -d '[:space:]')" ]; then
+            [ -z "$last" ] && { printf 'minor'; return 0; }
+            printf 'none'; return 0
           fi
           if printf '%s\n' "$subjects" | grep -qE '^[[:alpha:]]+(\([^)]*\))?!:' \
             || printf '%s\n' "$bodies" | grep -qE '^BREAKING[ -]CHANGE:'; then printf 'major'
@@ -452,6 +478,11 @@ runs:
 
           # -- Not shipped: derive the bump ---------------------------------------------------------
           bump=$(derive_bump "$repo" "$last" "$default_branch")
+          if [ "$bump" = "__ERR__" ]; then
+            had_failure=true
+            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:bumpread"}]')
+            echo "- ❌ **${repo}** — commit-range read failed after retries; skipping (fail-closed, never assume nothing-to-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+          fi
           if [ "$bump" = "none" ]; then
             echo "- ⏭️  **${repo}** has nothing new since \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"nochange"}]')
@@ -538,11 +569,25 @@ runs:
         if [ "$dry" = "false" ]; then
           block=$(printf '<!-- release-train:receipts:start -->\n### 🚂 Release train — epic:#%s (%s)\n%s\n<!-- release-train:receipts:end -->' \
             "$EPIC" "$(date -u +%Y-%m-%dT%H:%MZ)" "$table")
-          cur=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null || echo "")
-          newbody=$(splice_body "$cur" "$block")
-          printf '%s' "$newbody" | GH_TOKEN="$ISSUE_TOKEN" gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" \
-            --method PATCH --field body=@- >/dev/null 2>&1 \
-            || echo "::warning::could not update the receipt block on epic:#${EPIC} (issues:write?) — the table is still in the run summary."
+          # Abort the write when the read that feeds it failed, as merge-gate and render-epic-status
+          # already do. `|| echo ""` here mapped a failed read onto an empty body, splice_body turned
+          # that into a body holding only the receipt block, and the PATCH then SUCCEEDED — so the
+          # error path never fired while the Epic's prose and its frozen activation snapshot were
+          # overwritten. That snapshot is what epic-membership, merge-gate and detect-partial-landing
+          # read, so losing it degrades the whole landing saga back to live-label membership.
+          #
+          # An empty body read successfully is a different thing and still splices normally; only the
+          # exit status distinguishes them, which is why the guard is on the status and not on "$cur".
+          # The receipts are a best-effort audit — the same table is already in the run summary — so
+          # declining to write is strictly safer than writing one derived from a failure.
+          if ! cur=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null); then
+            echo "::warning::could not read epic:#${EPIC} — leaving its body untouched; the receipt table is in the run summary."
+          else
+            newbody=$(splice_body "$cur" "$block")
+            printf '%s' "$newbody" | GH_TOKEN="$ISSUE_TOKEN" gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" \
+              --method PATCH --field body=@- >/dev/null 2>&1 \
+              || echo "::warning::could not update the receipt block on epic:#${EPIC} (issues:write?) — the table is still in the run summary."
+          fi
         fi
 
         # ================= 4. Final status =========================================================
