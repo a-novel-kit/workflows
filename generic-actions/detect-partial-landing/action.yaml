@@ -38,6 +38,13 @@ description: >
   — a freeze is not a latch a human must clear. It never reverts a merged PR. `dry_run`
   defaults on: it logs every intended freeze, unfreeze, and re-enqueue without calling GitHub.
 
+  To stop a landing rather than let it resume, label the Epic issue `automation:paused`. That is the
+  latch: a permission-gated marker that holds the Epic whatever the predicate reads, where a freeze is
+  only ever a statement about the Epic's current shape and lifts the moment that shape is healthy
+  again. Re-arming is safe on its own terms — auto-merge parks against a red required check, and
+  merge-gate holds the whole set until every member is ready — so a resumed landing still cannot merge
+  an unready set. The pause is for the case where a human wants the landing stopped regardless.
+
 inputs:
   client_id:
     required: true
@@ -920,7 +927,10 @@ runs:
         sweep_post_clear() { # $1 = epic
           local epic="$1"
           if [ "$EV_MERGED_COUNT" -ge 1 ] && [ "$EV_STRAY_COUNT" -ge 1 ]; then
-            echo "epic #$epic: $EV_STRAY_COUNT stray sibling(s) within grace — rolling forward." | tee -a "$GITHUB_STEP_SUMMARY"
+            # Name the escape hatch here, not just in the manifest: this line is what an operator sees
+            # when a landing they thought was stopped starts moving again, and the pause is the only
+            # thing that would have held it.
+            echo "epic #$epic: $EV_STRAY_COUNT stray sibling(s) within grace — rolling forward (re-arms auto-merge; label the Epic \`automation:paused\` to stop the landing instead)." | tee -a "$GITHUB_STEP_SUMMARY"
             # Roll forward only strays the live `epic:<N>` label search still returns. A snapshot-only
             # member is one a human de-labeled, and re-arming auto-merge on it would do three wrong
             # things at once: resume a landing a human stepped out of (the one thing epic-freeze must
