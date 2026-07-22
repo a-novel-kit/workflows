@@ -437,6 +437,21 @@ runs:
             return 0
           fi
 
+          # Splice into a FRESHLY read body, not the one fetched at the top of this pass. Everything
+          # between those two points — the member searches, the tag walks, the compares — takes seconds
+          # to tens of seconds, and merge-gate writes the activation snapshot into this same body from
+          # a matrix of concurrent jobs. Rewriting the stale copy would carry the whole body back,
+          # erasing a frozen member set with a cosmetic table. A re-read costs one API call and leaves
+          # only same-region collisions, which for this display-only writer are self-correcting.
+          local fresh
+          if fresh=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${epic}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+            body="$fresh"
+          else
+            echo "::warning::could not re-read Epic ${ORG}/${PLANNING_REPO}#${epic} before writing — skipping this pass rather than writing a stale body." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+
           local region_file body_file spliced_file
           region_file=$(mktemp); body_file=$(mktemp); spliced_file=$(mktemp)
           {

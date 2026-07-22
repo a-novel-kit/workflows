@@ -544,19 +544,63 @@ runs:
           fi
         }
 
-        bodyf=$(mktemp); regionf=$(mktemp); outf=$(mktemp)
-        printf '%s' "$body" > "$bodyf"
+        # Write under a read-modify-verify loop. The reconcile sweep runs this gate as a matrix over
+        # every open member pull request with no concurrency bound, and the read-model renderer edits
+        # the same body from another job, so several writers overlap by design. GitHub's issues API has
+        # no conditional update — a GET returns an ETag but PATCH accepts no If-Match — so the closest
+        # available guarantee is: splice into a body read moments ago, then confirm the write survived.
+        # A losing writer retries against whatever landed instead of overwriting it.
+        regionf=$(mktemp)
         {
           echo "$START"
           echo "$note"
           printf '%s\n' "$payload"
           echo "$END"
         } > "$regionf"
-        splice "$bodyf" "$regionf" > "$outf"
 
-        if gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" >/dev/null; then
+        # Read-modify-VERIFY, as a function so the test harness can extract and drive it against a
+        # stubbed gh. The sweep runs this gate as a matrix over every open member pull request with no
+        # concurrency bound, and the read-model renderer edits the same body from another job, so
+        # writers overlap by design. GitHub's issues API offers no conditional update — a GET returns an
+        # ETag, PATCH accepts no If-Match — so the closest available guarantee is to splice into a body
+        # read moments ago and then confirm the write survived, retrying against whatever landed.
+        write_marker() { # $1 = region file. 0 = the marker is in place, 1 = give up (caller warns)
+          local regionf="$1" bodyf outf attempt body rc=1
+          bodyf=$(mktemp); outf=$(mktemp)
+          for attempt in 1 2 3; do
+            # Re-read every attempt, the first included: `body` was fetched before the decision was
+            # computed, and a sibling job may have written since.
+            if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+              [ "$attempt" -lt 3 ] && sleep 2
+              continue
+            fi
+            # A marker that turned FROZEN under us is another writer's promotion, not a conflict to
+            # win: frozen is terminal, so leave it rather than reset it to pending.
+            if [ "$do" != "frozen" ] && printf '%s\n' "$body" \
+              | awk -v s="$START" -v e="$END" '$0 == s {f=1;next} $0 == e {f=0} f' \
+              | sed -n '/^[[:space:]]*[{[]/,$p' | jq -e 'select(.status == "frozen")' >/dev/null 2>&1; then
+              echo "Epic #${EPIC}: another writer froze the snapshot first — leaving it." | tee -a "$GITHUB_STEP_SUMMARY"
+              rc=0
+              break
+            fi
+            printf '%s' "$body" > "$bodyf"
+            splice "$bodyf" "$regionf" > "$outf"
+            gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" >/dev/null 2>&1 || true
+            # Verify rather than trust the exit code: a concurrent write can land after ours and undo it.
+            if gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r' \
+              | grep -qxF -- "$payload"; then
+              rc=0
+              break
+            fi
+            [ "$attempt" -lt 3 ] && sleep 2
+          done
+          rm -f "$bodyf" "$outf"
+          return "$rc"
+        }
+
+        if write_marker "$regionf"; then
           n=$(printf '%s' "$cur" | jq 'length')
           echo "Epic #${EPIC}: wrote ${do} activation snapshot — ${n} member(s)." | tee -a "$GITHUB_STEP_SUMMARY"
         else
-          echo "::warning::Epic #${EPIC}: could not write the ${do} activation snapshot; membership stays live-derived."
+          echo "::warning::Epic #${EPIC}: could not write the ${do} activation snapshot after 3 attempts; membership stays live-derived."
         fi
