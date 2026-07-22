@@ -26,9 +26,13 @@ inputs:
   content_id:
     required: true
     description: >
-      Node id of the issue or PR whose board item to write. The caller resolves what to
-      write (e.g. a PR's linked issue); board-write finds that content's item in the
-      project.
+      Node id of the issue or PR whose board item to write, or SEVERAL such ids separated
+      by newlines or spaces. The caller resolves what to write (e.g. a PR's linked
+      issues); board-write finds each content's item in the project and applies the same
+      field and value to all of them. Several ids are handled here rather than by the
+      caller because a composite action cannot loop a `uses:` step, so a caller that
+      needed to write more than one item would have to reimplement this action — which is
+      how a PR closing two issues came to update only one of them.
   field:
     required: true
     description: Name of the field to set, e.g. "Status" or "Start date".
@@ -67,10 +71,12 @@ inputs:
 
 outputs:
   item_id:
-    description: Node id of the board item that was resolved (or added).
+    description: >
+      Node id of the board item that was resolved (or added). With several content ids,
+      the last one — the outputs describe the run, not any single item.
     value: ${{ steps.write.outputs.item_id }}
   changed:
-    description: '"true" if the field was mutated, "false" if it already held the value.'
+    description: '"true" if ANY item was mutated, "false" if every one already held the value.'
     value: ${{ steps.write.outputs.changed }}
 
 runs:
@@ -178,83 +184,88 @@ runs:
             ;;
         esac
 
-        # 2. Resolve the content's item in this project, adding it if missing so a derived
-        #    write on an un-boarded Task boards it. Page through projectItems so a content
-        #    sitting on many projects still matches when the target board is not on the
-        #    first page.
-        item_q='query($c:ID!,$cursor:String){ node(id:$c){
-          ... on Issue{ projectItems(first:100, after:$cursor){
-            pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } }
-          ... on PullRequest{ projectItems(first:100, after:$cursor){
-            pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } } } }'
-        item_id=""
-        cursor=""
-        while :; do
-          args=(-F c="$CONTENT_ID")
-          [ -n "$cursor" ] && args+=(-F cursor="$cursor")
-          iresp=$(gh api graphql -f query="$item_q" "${args[@]}")
-          item_id=$(echo "$iresp" | jq -r --arg p "$PROJECT_ID" \
-            '[.data.node.projectItems.nodes[] | select(.project.id==$p) | .id][0] // empty')
-          [ -n "$item_id" ] && break
-          [ "$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.hasNextPage')" = "true" ] || break
-          cursor=$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.endCursor')
+        # content_id may name SEVERAL contents, newline- or space-separated. A pull request can
+        # close more than one issue, and a composite action cannot loop a `uses:` step — so the
+        # fan-out belongs inside the single privileged writer rather than around it, which is what
+        # keeps that claim true.
+        read -r -a content_ids <<<"$(printf '%s' "$CONTENT_ID" | tr '\n' ' ')"
+
+        any_changed=false
+        last_item=""
+
+        for content_id in "${content_ids[@]}"; do
+          [ -n "$content_id" ] || continue
+
+          # 2. Resolve the content's item in this project, adding it if missing so a derived
+          #    write on an un-boarded Task boards it. Page through projectItems so a content
+          #    sitting on many projects still matches when the target board is not on the
+          #    first page.
+          item_q='query($c:ID!,$cursor:String){ node(id:$c){
+            ... on Issue{ projectItems(first:100, after:$cursor){
+              pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } }
+            ... on PullRequest{ projectItems(first:100, after:$cursor){
+              pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } } } }'
+          item_id=""
+          cursor=""
+          while :; do
+            args=(-F c="$content_id")
+            [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+            iresp=$(gh api graphql -f query="$item_q" "${args[@]}")
+            item_id=$(echo "$iresp" | jq -r --arg p "$PROJECT_ID" \
+              '[.data.node.projectItems.nodes[] | select(.project.id==$p) | .id][0] // empty')
+            [ -n "$item_id" ] && break
+            [ "$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.hasNextPage')" = "true" ] || break
+            cursor=$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.endCursor')
+          done
+
+          if [ -z "$item_id" ]; then
+            if [ "$ADD_IF_MISSING" != "true" ]; then
+              echo "::error::content $content_id is not on the board and add_if_missing=false"
+              exit 1
+            fi
+            add_m='mutation($proj:ID!,$c:ID!){
+              addProjectV2ItemById(input:{projectId:$proj,contentId:$c}){ item{ id } } }'
+            item_id=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$content_id" \
+              | jq -r '.data.addProjectV2ItemById.item.id')
+            echo "Added content to the board (item $item_id)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+          last_item="$item_id"
+
+          # 3. Compare-before-write: read the item's current value for this field. An equal
+          #    value means a re-run or an overlapping trigger, so nothing is mutated.
+          cur_q="query(\$item:ID!,\$field:String!){ node(id:\$item){ ... on ProjectV2Item{
+            fieldValueByName(name:\$field){ $cur_frag } } } }"
+          cur=$(gh api graphql -f query="$cur_q" -F item="$item_id" -F field="$FIELD" \
+            | jq -r '.data.node.fieldValueByName.current // empty')
+
+          # A set-once field such as Start date keeps whatever it already holds, so a re-run
+          # or the sweep cannot overwrite the original stamp.
+          if [ "$ONLY_IF_EMPTY" = "true" ] && [ -n "$cur" ]; then
+            echo "No change — \"$FIELD\" already set (\"$cur\") on item $item_id and only_if_empty." | tee -a "$GITHUB_STEP_SUMMARY"
+            continue
+          fi
+
+          if [ "$cur" = "$VALUE" ]; then
+            echo "No change — \"$FIELD\" already \"$VALUE\" on item $item_id." | tee -a "$GITHUB_STEP_SUMMARY"
+            continue
+          fi
+
+          # 4. Write it (or, under dry-run, just report).
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "- [dry-run] would set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            continue
+          fi
+
+          write_m="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{
+            projectId:\$proj, itemId:\$item, fieldId:\$field, value: $value_frag }){ projectV2Item{ id } } }"
+          gh api graphql -f query="$write_m" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$field_id" >/dev/null
+          echo "Set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." | tee -a "$GITHUB_STEP_SUMMARY"
+          any_changed=true
         done
 
-        if [ -z "$item_id" ]; then
-          if [ "$ADD_IF_MISSING" != "true" ]; then
-            echo "::error::content is not on the board and add_if_missing=false"
-            exit 1
-          fi
-          add_m='mutation($proj:ID!,$c:ID!){
-            addProjectV2ItemById(input:{projectId:$proj,contentId:$c}){ item{ id } } }'
-          item_id=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$CONTENT_ID" \
-            | jq -r '.data.addProjectV2ItemById.item.id')
-          echo "Added content to the board (item $item_id)." | tee -a "$GITHUB_STEP_SUMMARY"
-        fi
-
-        # 3. Compare-before-write: read the item's current value for this field. An equal
-        #    value means a re-run or an overlapping trigger, so nothing is mutated.
-        cur_q="query(\$item:ID!,\$field:String!){ node(id:\$item){ ... on ProjectV2Item{
-          fieldValueByName(name:\$field){ $cur_frag } } } }"
-        cur=$(gh api graphql -f query="$cur_q" -F item="$item_id" -F field="$FIELD" \
-          | jq -r '.data.node.fieldValueByName.current // empty')
-
-        # A set-once field such as Start date keeps whatever it already holds, so a re-run
-        # or the sweep cannot overwrite the original stamp.
-        if [ "$ONLY_IF_EMPTY" = "true" ] && [ -n "$cur" ]; then
-          echo "No change — \"$FIELD\" already set (\"$cur\") and only_if_empty." | tee -a "$GITHUB_STEP_SUMMARY"
-          {
-            echo "item_id=$item_id"
-            echo "changed=false"
-          } >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        if [ "$cur" = "$VALUE" ]; then
-          echo "No change — \"$FIELD\" already \"$VALUE\" on item $item_id." | tee -a "$GITHUB_STEP_SUMMARY"
-          {
-            echo "item_id=$item_id"
-            echo "changed=false"
-          } >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        # 4. Write it (or, under dry-run, just report).
-        if [ "$DRY_RUN" = "true" ]; then
-          echo "- [dry-run] would set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          {
-            echo "item_id=$item_id"
-            echo "changed=false"
-          } >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        write_m="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{
-          projectId:\$proj, itemId:\$item, fieldId:\$field, value: $value_frag }){ projectV2Item{ id } } }"
-        gh api graphql -f query="$write_m" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$field_id" >/dev/null
-        echo "Set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." | tee -a "$GITHUB_STEP_SUMMARY"
         {
-          echo "item_id=$item_id"
-          echo "changed=true"
+          echo "item_id=$last_item"
+          echo "changed=$any_changed"
         } >> "$GITHUB_OUTPUT"
