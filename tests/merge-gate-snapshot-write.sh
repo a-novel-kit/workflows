@@ -13,9 +13,9 @@
 # before the loop, so a writer that re-reads without re-deriving freezes a member set the world has
 # already moved past, and a retry loop makes it win. Several cases below exist to pin that.
 #
-# Scope: this drives `write_marker` and its helpers. The decision step that produces `$do`/`$payload`
-# (the `do=` jq, and the member normalization above it) is not extracted; the fixtures set those as
-# inputs.
+# Scope: this drives `write_marker` and its helpers, plus the decision the step makes before calling
+# it and the payload it assembles. Both are lifted out of the manifest rather than restated, so a
+# fixture cannot encode a belief about the format in place of observing it.
 set -euo pipefail
 
 TOP_PID=$$
@@ -33,7 +33,7 @@ extract() { # $1 = function name — lift it out of the run: block and de-indent
     f && /^        \}$/ {exit}
   ' "$ACTION" | sed 's/^        //'
 }
-for fn in splice current_marker same_marker marker_settled write_marker; do
+for fn in splice current_marker since_of same_marker marker_settled write_marker; do
   out=$(extract "$fn")
   if [ -z "$out" ]; then
     echo "::error::could not extract $fn from $ACTION — did its definition move or change indent?"
@@ -58,9 +58,11 @@ export GITHUB_STEP_SUMMARY="$WORK/summary.md"
 START=$(sed -n "s/^ *START='\(.*\)'\$/\1/p" "$ACTION" | head -1)
 END=$(sed -n "s/^ *END='\(.*\)'\$/\1/p" "$ACTION" | head -1)
 [ -n "$START" ] && [ -n "$END" ] || die "could not read the fence literals from $ACTION"
+# Matched without regard to indentation, so wrapping the block in a conditional does not silently
+# stop the anchor from matching.
 REGION_BLOCK=$(awk '
-  /^        \{$/ { buf=""; inb=1; next }
-  inb && /^        \} > "\$regionf"$/ { printf "%s", buf; exit }
+  /^[[:space:]]*\{$/ { buf=""; inb=1; next }
+  inb && /^[[:space:]]*\} > "\$regionf"$/ { printf "%s", buf; exit }
   inb { buf = buf $0 "\n" }
 ' "$ACTION")
 [ -n "$REGION_BLOCK" ] || die "could not read the region block from $ACTION"
@@ -118,14 +120,18 @@ M2B='[{"repo":"a-novel-kit/repo-a","number":5},{"repo":"a-novel-kit/repo-c","num
 # them as given, so the canonical order needs the composite (repo, number) key.
 M2S='[{"repo":"a-novel-kit/repo-a","number":2},{"repo":"a-novel-kit/repo-a","number":9}]'
 
-pending_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --argjson m "$1" '{status:"pending", at:$at, members:$m}'; }
-frozen_json() { jq -cn --argjson m "$1" '{status:"frozen", members:$m}'; }
+# $3, where present, is the wave boundary the marker carries forward.
+pending_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --arg s "${3:-}" --argjson m "$1" \
+  '{status:"pending", at:$at, members:$m} + (if $s == "" then {} else {since:$s} end)'; }
+frozen_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --arg s "${3:-}" --argjson m "$1" \
+  '{status:"frozen", at:$at, members:$m} + (if $s == "" then {} else {since:$s} end)'; }
+retired_json() { jq -cn --arg s "$1" '{status:"retired", since:$s}'; }
 
 # The note the action writes, read out of the manifest: a note beginning with `[` or `{` makes
 # current_marker latch onto it and read every marker as absent, which a restated copy cannot show.
-note_of() { # frozen|pending
-  local key=FROZEN
-  [ "$1" = frozen ] || key=PENDING
+note_of() { # frozen|pending|retire
+  local key
+  case "$1" in frozen) key=FROZEN ;; retire) key=RETIRED ;; *) key=PENDING ;; esac
   sed -n "s/^ *note=\"\(_Epic membership, $key.*\)\"$/\1/p" "$ACTION" | head -1
 }
 region_file() { # $1 = payload json, $2 = frozen|pending -> the region the action itself would build
@@ -175,6 +181,48 @@ NORMALIZE_JQ=$(awk '/^ *cur=\$\(printf/{f=1;next} f{print} f&&/\)$/{exit}' "$ACT
   | sed "s/^[[:space:]]*'//; s/')$//")
 [ -n "$NORMALIZE_JQ" ] || die "could not read the member normalization from $ACTION"
 normalize() { printf '%s' "$1" | jq -c "$NORMALIZE_JQ" 2>/dev/null || echo '[]'; }
+
+# The decision program, lifted whole, so the suite watches the step decide instead of being handed
+# `do` as an input.
+DECIDE_JQ=$(awk "
+  /do=\\\$\\(jq -rn/ { f=1 }
+  f && !st && /'\$/ { st=1; next }
+  st && /' 2>\\/dev\\/null \\|\\| echo skip\\)\$/ { sub(/'.*\$/, \"\"); print; exit }
+  st { print }
+" "$ACTION")
+[ -n "$DECIDE_JQ" ] || die "could not read the decision program from $ACTION"
+decide() { # $1 = marker json (or null), $2 = all_landed, $3 = cur members
+  jq -rn --argjson cur "${3:-$M2}" --argjson mk "$1" --arg now "$now" \
+    --argjson landed "$2" --argjson thr "$STABILIZE_SECONDS" "$DECIDE_JQ" 2>/dev/null || echo skip
+}
+
+# The landed test, also lifted. It decides a wave is over, and it sits in bash beside the decision
+# program rather than inside it, so it needs its own anchor.
+LANDED_JQ=$(awk '/all_landed=/{f=1;next} f{ sub(/^[[:space:]]*'"'"'/, ""); sub(/'"'"'.*$/, ""); print; exit }' "$ACTION")
+[ -n "$LANDED_JQ" ] || die "could not read the landed test from $ACTION"
+landed_of() { printf '%s' "$1" | jq -c "$LANDED_JQ" 2>/dev/null || echo false; }
+
+# The payload and note assembly, lifted whole, so a payload losing its timestamp or its boundary is
+# observable here.
+PAYLOAD_BLOCK=$(awk '/if \[ "\$do" = "retire" \]; then/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
+[ -n "$PAYLOAD_BLOCK" ] || die "could not read the payload assembly from $ACTION"
+# The retire-only bail, lifted the same way. It is inline step logic rather than a function, and it
+# bounds what a held pull request may do once it reaches the capture step.
+BAIL_BLOCK=$(awk '/RETIRE_ONLY:-/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
+[ -n "$BAIL_BLOCK" ] || die "could not read the retire-only bail from $ACTION"
+bails() { # $1 = RETIRE_ONLY, $2 = do -> "bailed" (the step returned) or "went-on"
+  local out
+  out=$( RETIRE_ONLY="$1"; do="$2"; eval "$BAIL_BLOCK" >/dev/null 2>&1; printf 'went-on' )
+  [ -n "$out" ] && echo went-on || echo bailed
+}
+
+payload_for() { # $1 = do, $2 = cur, $3 = inherited since -> echoes the payload, sets NOTE_OUT
+  local do cur inherited_since payload note
+  do="$1"; cur="$2"; inherited_since="${3:-}"
+  eval "$PAYLOAD_BLOCK"
+  NOTE_OUT="$note"
+  printf '%s' "$payload"
+}
 
 echo "the member set is canonical, whatever casing GitHub answers with"
 # GitHub resolves repository names case-insensitively and may answer with either spelling. If the
@@ -327,6 +375,180 @@ do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
 eq "a reordered member array still freezes" "$(run)" 0
 eq "and the marker is frozen" "$(marker_now | jq -r .status)" frozen
 
+# ---- the wave boundary ---------------------------------------------------------------------
+# A frozen set stays the set until something retires it, so a pull request labeled after the freeze
+# is held by the gate until the wave it is waiting on ends.
+
+W=2026-07-20T08:00:00Z
+
+echo
+echo "a landed wave is retired so the next one can freeze"
+reset
+server_body "$(frozen_json "$M2")"
+do=retire; cur="$M2"; inherited_since=""; payload=$(retired_json "$now")
+eq "the tombstone is written" "$(run)" 0
+eq "leaving a retired marker" "$(marker_now | jq -r .status)" retired
+eq "carrying the boundary it drew" "$(marker_now | jq -r .since)" "$now"
+eq "and naming no members" "$(marker_now | jq -r '.members // "none"')" none
+grep -q 'Some prose' "$WORK/body" && ok "with the human prose untouched" || ko "prose was dropped retiring"
+grep -qF -- "$START" "$WORK/body" && ok "and the region still standing" \
+  || ko "the fences went with it, so the boundary has nowhere to live"
+
+echo
+echo "retirement re-derives like every other write"
+# Only the frozen set this pass judged landed may be ended. A peer that has opened the next wave
+# loses it to a tombstone written now, which also redraws the boundary at the wrong instant.
+reset
+server_body "$(pending_json "$M2" 2026-07-22T09:59:00Z)"
+do=retire; cur="$M2"; inherited_since=""; payload=$(retired_json "$now")
+eq "a marker that is no longer frozen is left alone" "$(run)" 2
+eq "and it still stands" "$(marker_now | jq -r .status)" pending
+eq "with nothing written" "$(writes)" 0
+reset
+server_body "$(frozen_json "$M2B")"
+do=retire; cur="$M2"; inherited_since=""; payload=$(retired_json "$now")
+eq "a frozen set this pass did not judge is left alone" "$(run)" 2
+eq "and nothing is written" "$(writes)" 0
+
+echo
+echo "a retirement a peer undoes is retried"
+reset
+server_body "$(frozen_json "$M2")"
+printf 'Some prose.\n\n%s\n%s\n%s\n%s\n\nMore prose.\n' "$START" "$(note_of frozen)" \
+  "$(frozen_json "$M2")" "$END" > "$WORK/steal"
+do=retire; cur="$M2"; inherited_since=""; payload=$(retired_json "$now")
+eq "the retirement is retried until it sticks" "$(run)" 0
+eq "which takes two writes" "$(writes)" 2
+eq "and the tombstone is what stands" "$(marker_now | jq -r .status)" retired
+
+echo
+echo "the boundary is carried forward, not written once"
+# splice replaces the whole region, so a boundary survives only by being written again. The capture
+# after a retirement carries the tombstone's instant forward, which keeps the retired wave's merges
+# out of the new wave's history.
+reset
+server_body "$(retired_json "$W")"
+inherited_since=$(since_of "$(retired_json "$W")")
+do=pending; cur="$M1"; payload=$(payload_for pending "$M1" "$inherited_since")
+eq "it is inherited from the tombstone being replaced" "$inherited_since" "$W"
+eq "a fresh pending is written over it" "$(run)" 0
+eq "and keeps the boundary" "$(marker_now | jq -r .since)" "$W"
+reset
+server_body "$(pending_json "$M1" 2026-07-22T09:00:00Z "$W")"
+inherited_since=$(since_of "$(pending_json "$M1" 2026-07-22T09:00:00Z "$W")")
+do=frozen; cur="$M1"; payload=$(payload_for frozen "$M1" "$inherited_since")
+eq "the promotion to frozen goes through" "$(run)" 0
+eq "and keeps it too" "$(marker_now | jq -r .since)" "$W"
+
+echo
+echo "only an instant is a boundary"
+# detect-partial-landing appends this to a search qualifier, and GitHub answers a malformed one with
+# zero rows and no error — indistinguishable from "nothing landed", which clears a standing freeze.
+for bad in '"garbage"' '"2026-07-20"' '"2026-07-20T08:00:00+02:00"' '1234' 'null'; do
+  eq "since=$bad is not one" \
+    "$(since_of "$(jq -cn --argjson s "$bad" '{status:"retired", since:$s}')")" ""
+done
+eq "the form this step emits is" "$(since_of "$(retired_json "$W")")" "$W"
+
+echo
+echo "a boundary a peer redrew is not overwritten"
+reset
+server_body "$(pending_json "$M2" 2026-07-22T09:00:00Z 2026-07-21T00:00:00Z)"
+do=pending; cur="$M2"; inherited_since="$W"
+payload=$(payload_for pending "$M2" "$inherited_since")
+eq "the pass yields rather than un-scoping the next wave" "$(run)" 2
+eq "and the peer's boundary stands" "$(marker_now | jq -r .since)" 2026-07-21T00:00:00Z
+eq "with nothing written" "$(writes)" 0
+
+echo
+echo "a corrupt boundary is repaired, not deadlocked on"
+# The guard reads both sides through since_of. A second reading that skipped validation would never
+# match, and the pass would yield on every attempt while the log called it a deliberate yield.
+reset
+server_body "$(jq -cn --argjson m "$M2" \
+  '{status:"pending", at:"2026-07-22T09:00:00Z", since:"garbage", members:$m}')"
+do=frozen; cur="$M2"; inherited_since=""
+payload=$(payload_for frozen "$M2" "$inherited_since")
+eq "the write goes through" "$(run)" 0
+eq "and the unusable boundary is dropped" "$(marker_now | jq -r '.since // "none"')" none
+
+echo
+echo "a terminal marker is settled by equality alone"
+# frozen and retired carry no aging clock, so equality settles them. A tombstone asked for a
+# parseable `at` is never settled, and the retirement retries to exhaustion.
+marker_settled "$(retired_json "$W")" "$(retired_json "$W")" \
+  && ok "a tombstone matching our payload counts as settled" \
+  || ko "a tombstone can never settle, so retirement never converges"
+marker_settled "$(frozen_json "$M2")" "$(frozen_json "$M2")" \
+  && ok "and so does a frozen marker" || ko "a frozen marker cannot settle"
+marker_settled "$(retired_json "$W")" "$(retired_json 2026-07-01T00:00:00Z)" \
+  && ko "two different boundaries read as one marker" || ok "but two boundaries apart do not"
+
+echo
+echo "what counts as a landed wave"
+# Only a merged member counts. A member de-labeled and closed unmerged is what the snapshot exists
+# to remember, so retiring on it destroys the only record that the wave failed and flips the
+# partial-landing detector from `frozen` to `clear`, which posts success.
+st() { jq -cn --argjson s "$1" '[$s[] | {repo:"o/r", number:1, state:.}]'; }
+eq "every member merged is landed"     "$(landed_of "$(st '["MERGED","MERGED"]')")" true
+eq "one closed unmerged is NOT"        "$(landed_of "$(st '["MERGED","CLOSED"]')")" false
+eq "one still open is not"             "$(landed_of "$(st '["MERGED","OPEN"]')")" false
+eq "an empty set is not a wave at all" "$(landed_of '[]')" false
+eq "and a set carrying no state is not" "$(landed_of '[{"repo":"o/r","number":1}]')" false
+
+echo
+echo "the decision the step actually computes"
+# Driven through the manifest's own jq, so the retire rule is pinned where it is written.
+eq "no marker at all -> pending"       "$(decide null false)" pending
+eq "pending, aged -> frozen"           "$(decide "$(pending_json "$M2" 2026-07-22T09:00:00Z)" false)" frozen
+eq "pending, fresh -> skip"            "$(decide "$(pending_json "$M2" 2026-07-22T09:59:30Z)" false)" skip
+eq "pending, members moved -> pending" "$(decide "$(pending_json "$M2B" 2026-07-22T09:00:00Z)" false)" pending
+eq "frozen, wave not landed -> skip"   "$(decide "$(frozen_json "$M2")" false)" skip
+eq "frozen, wave landed -> retire"     "$(decide "$(frozen_json "$M2")" true)" retire
+eq "a tombstone -> pending"            "$(decide "$(retired_json "$W")" false)" pending
+eq "garbage marker -> pending"         "$(decide '"nonsense"' false)" pending
+
+echo
+echo "a held pull request may end the previous wave and nothing else"
+# Retirement is reachable only because the not-in-set hold enables this step: a wave with every
+# member merged has no open member left to run the gate, so the pull request waiting on the next wave
+# is the only trigger there is. That pass read a set it is not part of, and letting it capture would
+# freeze a wave on the authority of a pull request that wave excludes.
+eq "a held pass may retire"                 "$(bails true retire)" went-on
+eq "but may not capture a fresh pending"    "$(bails true pending)" bailed
+eq "nor promote one to frozen"              "$(bails true frozen)" bailed
+eq "while an ordinary pass is unaffected"   "$(bails "" pending)" went-on
+
+echo
+echo "and it is reachable from that hold"
+# The wiring is a step output plus two Actions expressions, so the harness cannot drive it. It is the
+# only path by which a completed wave is retired, so assert it structurally, as the fence agreement
+# above is.
+hold_block=$(awk '/is not in the member set/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
+grep -q 'retire_only=true' <<< "$hold_block" \
+  && ok "the not-in-set hold enables the capture step before it returns" \
+  || ko "the hold returns without enabling retirement — a pull request held there is held forever"
+for step in "Mint snapshot-write token" "Capture activation snapshot"; do
+  if awk -v s="$step" '$0 ~ "name: " s {f=1;next} f && /^ *if:/ {print; exit}' "$ACTION" \
+    | grep -q 'retire_only'; then
+    ok "\"$step\" runs for a retire-only pass"
+  else
+    ko "\"$step\" is gated on capture alone, so a retire-only pass never reaches it"
+  fi
+done
+
+echo
+echo "the payload the step builds"
+eq "a frozen payload records when it froze" "$(payload_for frozen "$M2" | jq -r 'has("at")')" true
+eq "and the members it froze"               "$(payload_for frozen "$M2" | jq -c .members)" "$M2"
+eq "a pending payload records its clock"    "$(payload_for pending "$M2" | jq -r 'has("at")')" true
+eq "neither invents a boundary"             "$(payload_for pending "$M2" | jq -r 'has("since")')" false
+eq "both carry one they inherited"          "$(payload_for frozen "$M2" "$W" | jq -r .since)" "$W"
+eq "a retirement names no members"          "$(payload_for retire "$M2" | jq -r 'has("members")')" false
+eq "drawing the boundary at now"            "$(payload_for retire "$M2" | jq -r .since)" "$now"
+eq "not the one it inherited"               "$(payload_for retire "$M2" "$W" | jq -r .since)" "$now"
+eq "and it carries a note of its own"       "$(payload_for retire "$M2" >/dev/null; [ -n "$NOTE_OUT" ] && echo yes)" yes
+
 echo
 echo "splice, on its own"
 # Driven directly, because the retry loop hides it: a broken splice writes a body with no fences, the
@@ -476,7 +698,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -ne 76 ]; then
-  echo "::error::$ran assertion(s) ran, expected exactly 76 — the suite did not execute fully (or an assertion was added without raising this)"
+if [ "$ran" -ne 138 ]; then
+  echo "::error::$ran assertion(s) ran, expected exactly 138 — the suite did not execute fully (or an assertion was added without raising this)"
   exit 1
 fi

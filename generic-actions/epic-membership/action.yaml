@@ -23,6 +23,13 @@ description: >
   `{repo, number}`; each member's live state (open/merged/closed, draft, review) is re-read on
   every resolve — the set is frozen, the state is not.
 
+  The next wave begins when the previous one is retired. Once every member of a frozen set has
+  merged, merge-gate replaces the marker with a `retired` tombstone carrying the wave boundary, and
+  the next set to hold merge-ready captures its own snapshot. A wave with a member closed unmerged
+  did not land and is never retired: the snapshot is the only durable record that those pull requests
+  were members, so it stands until a human resolves it through epic-rollback. This reader selects on
+  `status == "frozen"` alone, so a `retired` marker falls through to the live label search.
+
 inputs:
   epic_number:
     required: true
