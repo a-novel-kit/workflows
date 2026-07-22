@@ -31,18 +31,17 @@ inputs:
 runs:
   using: composite
   steps:
-    # Org-level HALT (read FIRST, before the admin check or any mint): AGENT_KILL_SWITCH engaged →
-    # refuse to record an approval. A human-triggered mutation aborts loud so the operator sees the
-    # halt and lifts it deliberately rather than silently doing nothing.
+    # Org-level halt, read before the admin check or any mint. A human-triggered mutation aborts
+    # loudly so the operator sees the halt and lifts it deliberately.
     - name: Halt guard (kill-switch)
       shell: bash
       env:
         KILL_SWITCH: ${{ inputs.kill_switch }}
       run: |
         set -euo pipefail
-        # FAIL-SAFE: RUNNING only for an explicit off-token (empty/unset, 0, off, false, no,
-        # disabled); ANYTHING ELSE (a fat-fingered value or garbage) engages the halt. A failing step
-        # stops the composite, so the admin check, mint, and approval never run.
+        # Fail-safe: running only for an explicit off-token (empty/unset, 0, off, false, no,
+        # disabled); any other value engages the halt. A failing step stops the composite, so the
+        # admin check, the mint and the approval never run.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
@@ -51,10 +50,9 @@ runs:
             ;;
         esac
 
-    # Fail closed unless the actor who dispatched this is a repo admin —
-    # workflow_dispatch is open to anyone with write access, so this check is what
-    # keeps it admin-only. The collaborator-permission endpoint needs only
-    # Metadata:read (always present), so the default token suffices.
+    # Fail closed unless the dispatching actor is a repo admin: workflow_dispatch is
+    # open to anyone with write access. The collaborator-permission endpoint needs
+    # only Metadata:read, so the default token suffices.
     - name: Require admin
       shell: bash
       env:
@@ -72,8 +70,8 @@ runs:
         fi
         echo "@${ACTOR} is a repo admin — recording an [Agent] approval." | tee -a "$GITHUB_STEP_SUMMARY"
 
-    # Mint a token scoped to ONLY what an approval needs: read the repo (so the
-    # nested approve-bot can `gh pr checkout`) plus write the PR review.
+    # Mint a token scoped to what an approval needs: read the repo, so the nested
+    # approve-bot can `gh pr checkout`, plus write the PR review.
     - name: Mint approval token
       id: token
       uses: actions/create-github-app-token@v3
@@ -84,10 +82,10 @@ runs:
         permission-contents: read
         permission-pull-requests: write
 
-    # approve-bot runs `gh pr checkout`, so a base checkout must exist first. Use
-    # the minted token so the action stays on its least-privilege token and never
-    # depends on the default token's contents permission; persist-credentials:false
-    # keeps it out of the git config (approve-bot passes it to gh explicitly).
+    # approve-bot runs `gh pr checkout`, so a base checkout must exist first. The
+    # minted token keeps this off the default token's contents permission, and
+    # persist-credentials:false keeps it out of the git config — approve-bot passes
+    # it to gh explicitly.
     - uses: actions/checkout@v7
       with:
         token: ${{ steps.token.outputs.token }}

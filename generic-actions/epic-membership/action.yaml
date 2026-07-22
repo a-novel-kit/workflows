@@ -61,10 +61,9 @@ runs:
   using: composite
   steps:
     # Mint an org-wide [Agent] token: the search spans every repo in the org, and the
-    # default GITHUB_TOKEN is single-repo, so it can't see sibling PRs in other repos.
-    # Set `owner` and omit `repositories` to install org-wide; request only the two read
-    # scopes the search needs (issues + pull-requests) and nothing else — this action
-    # never writes.
+    # default GITHUB_TOKEN is single-repo, so it cannot see sibling PRs. Setting `owner`
+    # with no `repositories` installs it org-wide; the two read scopes are all the search
+    # needs, and this action never writes.
     - name: Mint token
       id: token
       uses: actions/create-github-app-token@v3
@@ -90,50 +89,51 @@ runs:
           echo "::error::epic_number is required"
           exit 1
         fi
-        # Coerce to an integer before it reaches the search grammar. `epic_number` builds
+        # Check for an integer before it reaches the search grammar: `epic_number` builds
         # the `label:"epic:${EPIC}"` qualifier, so a non-numeric value could close the
-        # quoted qualifier and inject further search terms — silently broadening the set.
-        # The label convention is numeric, so reject anything else outright.
+        # quoted qualifier and inject further search terms, broadening the set.
         if ! [[ "$EPIC" =~ ^[0-9]+$ ]]; then
           echo "::error::epic_number must be an integer, got \"$EPIC\""
           exit 1
         fi
 
         # --- Activation snapshot -----------------------------------------------------------------
-        # Once landing has stabilized, merge-gate freezes the member set into a marker in the Epic body
-        # (a two-phase pending→frozen capture, so an index-lagging member is never frozen out). A
-        # FROZEN marker IS the set — a later de-label, close, or relabel never changes it; per-member
-        # STATE is still read live below. A `pending` marker, a malformed one, or none → the live label
-        # search further down (the safe, self-healing default).
+        # Once landing has stabilized, merge-gate freezes the member set into a marker in the Epic
+        # body, capturing in two phases (pending then frozen) so an index-lagging member is never
+        # frozen out. A frozen marker is the set: a later de-label, close or relabel does not change
+        # it, while each member's state is still read live below. A pending marker, a malformed one,
+        # or none falls through to the live label search further down.
         #
-        # Guard planning_repo before it becomes an API path component (as the sibling actions do).
+        # Guard planning_repo before it becomes an API path component.
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
           exit 1
         fi
         frozen=""
-        # The fence strings, matched as WHOLE LINES — see the note in detect-partial-landing: an
-        # unanchored match lets a pseudo-fence planted in an HTML comment shadow the real region.
+        # The fence strings, matched as whole lines: under an unanchored match a pseudo-fence planted
+        # in an HTML comment would shadow the real region.
         START_M='<!-- epic-membership:snapshot:start -->'
         END_M='<!-- epic-membership:snapshot:end -->'
         # GitHub stores bodies with CRLF; strip \r so the marker lines match.
         if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
           # The fenced region holds a human-readable note and then the JSON, so skip to the first line
-          # that opens a value before parsing. Requiring the JSON to be one compact line at column 0
-          # (what a `grep '^{'` does) silently kills a pretty-printed marker; parsing the note as JSON
-          # kills every marker merge-gate actually emits. `-s .[0]` takes the first value if a hand-edit
-          # left several — though trailing prose inside the region still voids the whole marker, which fails safe. All three participants extract identically.
+          # that opens a value before parsing: parsing the note as JSON would kill every marker
+          # merge-gate emits, and requiring one compact line at column 0 would kill a pretty-printed
+          # one. `-s .[0]` takes the first value if a hand-edit left several; trailing prose inside
+          # the region voids the whole marker, which fails safe. All three participants extract
+          # this way.
           marker=$(printf '%s\n' "$body" \
             | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
             | sed -n '/^[[:space:]]*[{[]/,$p' \
             | jq -s -c '.[0] // empty' 2>/dev/null || true)
-          # Only a well-formed FROZEN marker with a valid member list counts; anything else (pending,
-          # hand-edited garbage, wrong shape) yields an empty `frozen` and falls through to the live
-          # search — never a crash or a permanent HOLD.
+          # Only a well-formed frozen marker with a valid member list counts. A pending marker,
+          # hand-edited garbage or the wrong shape yields an empty `frozen` and falls through to the
+          # live search, never a crash or a permanent hold.
           # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
           # document below, and the Epic body is writable by anyone with write access to this repo:
-          # `[^/]` would admit quotes and newlines (enough to inject fields), and `type == "number"`
-          # alone would admit 1.5, a document-level validation error rather than a skippable one.
+          # `[^/]` would admit quotes and newlines, enough to inject fields, and a bare
+          # `type == "number"` would admit 1.5, a document-level validation error rather than a
+          # skippable one.
           [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
             select(type == "object" and .status == "frozen" and (.members | type == "array"))
             | .members
@@ -145,16 +145,15 @@ runs:
         fi
         if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
           # Re-read each frozen member's current state (OPEN / MERGED / CLOSED), one GraphQL alias per
-          # member in a single call. The response must account for EVERY member: GitHub answers a
-          # multi-alias query with partial data plus an `errors` array, nulling what failed, and a
-          # dropped member here does not merely shrink a report — this set is what merge-gate gates on,
-          # so a member that silently vanishes is a member never evaluated, and the gate posts success
-          # on a wave that was never whole. That is the premature partial landing the gate exists to
-          # prevent. An incomplete answer therefore yields [], which merge-gate reads as a HOLD: a held
-          # pull request only waits, while a wrongly-passed set has already merged.
-          # Identity is the alias index plus the number, not the repository name: GraphQL follows a
-          # rename silently and answers with the new nameWithOwner, and a frozen marker is never
-          # rewritten, so name-matching would strand a renamed member's Epic permanently.
+          # member in a single call. The response has to account for every member: GitHub answers a
+          # multi-alias query with partial data plus an `errors` array, nulling what failed, and this
+          # set is what merge-gate gates on, so a member that vanishes is a member never evaluated and
+          # the gate posts success on a wave that was never whole. An incomplete answer therefore
+          # yields [], which merge-gate reads as a hold; a held pull request only waits, while a
+          # wrongly-passed set has already merged.
+          # Identity is the alias index plus the number. GraphQL follows a rename silently and answers
+          # with the new nameWithOwner, and a frozen marker is never rewritten, so matching on the
+          # repository name would strand a renamed member's Epic permanently.
           alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
               + "{pullRequest(number:\(.value.number|floor)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
@@ -192,20 +191,18 @@ runs:
           exit 0
         fi
 
-        # The authority: open PRs carrying the permission-gated `epic:<N>` label,
-        # org-wide. `is:pr is:open` bounds the search to open PRs; the quoted label name
-        # matches the `epic:<N>` convention exactly (the colon needs the quotes);
-        # `org:${OWNER}` scopes the walk to the workflow's org (the owner is an
-        # Organization — a user account would need the `user:` qualifier instead).
-        # GitHub's search index is eventually consistent, so a PR labeled or opened
-        # seconds ago may be missing from an otherwise-successful response (and a
-        # just-closed one briefly present); the caller must tolerate a transiently short
-        # set. The timeline-fold follow-up above closes this window by reading the Epic
-        # timeline live instead of the lagging index.
+        # Membership authority: open PRs carrying the permission-gated `epic:<N>` label,
+        # org-wide. The label name is quoted because of its colon, and `org:${OWNER}`
+        # scopes the walk to the workflow's org, which is an Organization; a user account
+        # would need the `user:` qualifier. GitHub's search index is eventually consistent,
+        # so a PR labeled or opened seconds ago may be missing from an otherwise-successful
+        # response, and a just-closed one briefly present, which the caller tolerates as a
+        # transiently short set. The timeline-fold follow-up above closes that window by
+        # reading the Epic timeline live.
         search="is:pr is:open label:\"epic:${EPIC}\" org:${OWNER}"
 
-        # Search returns the ISSUE union; PRs come through the PullRequest inline
-        # fragment. headRefOid is the current ready SHA the readiness gate anchors to.
+        # Search returns the ISSUE union, so PRs come through the PullRequest inline
+        # fragment. headRefOid is the ready SHA the readiness gate anchors to.
         q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
@@ -213,10 +210,9 @@ runs:
               number isDraft reviewDecision headRefOid
               repository{ nameWithOwner } } } } }'
 
-        # Retry transient GraphQL failures a few times. Unlike merge-gate (which posts a
-        # required check and so must fail open to avoid deadlocking the queue), this is a
-        # read helper with no side effect: if the set can't be resolved we fail with a
-        # clear message and let the caller choose hold-vs-fail-open with full context.
+        # Retry transient GraphQL failures a few times. This is a read helper with no side
+        # effect, so an unresolvable set fails with a clear message and the caller chooses
+        # between holding and failing open with full context.
         fetch() { # $1=cursor  → prints the response JSON on success, nothing on failure
           # -f (raw string) for every variable: all three are GraphQL String, and -f
           # skips the typed coercion -F applies (bare true/false/numeric, leading @=file).
@@ -224,9 +220,9 @@ runs:
           [ -n "${1:-}" ] && args+=(-f cursor="$1")
           local data
           for attempt in 1 2 3; do
-            # Capture stdout+stderr together so a transport / auth / rate-limit / query
-            # error (gh writes those to stderr) survives to be echoed on final failure;
-            # on success gh prints only the response JSON, which the jq check validates.
+            # Capture stdout and stderr together so a transport, auth, rate-limit or query
+            # error survives to be echoed on final failure; on success gh prints only the
+            # response JSON, which the jq check validates.
             if data=$(gh api graphql "${args[@]}" 2>&1) \
               && echo "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
               printf '%s' "$data"
@@ -234,18 +230,17 @@ runs:
             fi
             [ "$attempt" -lt 3 ] && sleep 2
           done
-          # This runs in a command-substitution subshell, so the caller's ::error:: can't
-          # see $data — echo the underlying error to the run log here so the fail-closed
-          # exit is diagnosable (auth, rate limit, query validation, …).
+          # This runs in a command-substitution subshell, where the caller's ::error:: has
+          # no access to $data, so echo the underlying error here to make the fail-closed
+          # exit diagnosable.
           printf 'epic-membership: GraphQL fetch failed after 3 attempts: %s\n' "$data" >&2
           return 1
         }
 
-        # Accumulate PR nodes across pages (an Epic can span more than 100 PRs) in a
-        # plain JSON string — no temp file, matching the pure-jq style of the sibling
-        # actions. `(.data.search.nodes // [])[]` tolerates a null `nodes` (so jq can't
-        # abort the graceful error path), and `.number != null` drops any non-PR row the
-        # ISSUE-union search might surface rather than emitting an empty object.
+        # Accumulate PR nodes across pages, since an Epic can span more than 100 PRs.
+        # `(.data.search.nodes // [])[]` tolerates a null `nodes`, keeping jq from aborting
+        # the graceful error path, and `.number != null` drops any non-PR row the
+        # ISSUE-union search surfaces.
         agg='[]'
         cursor=""
         while :; do
@@ -259,11 +254,11 @@ runs:
           cursor=$(printf '%s' "$resp" | jq -r '.data.search.pageInfo.endCursor')
         done
 
-        # Compact (jq -c) so the output is a single line — GITHUB_OUTPUT is line-based.
-        # Sorted by repo then number: GitHub's search order isn't stable, so an unsorted
-        # set churns downstream diffs/comparisons across runs. reviewDecision stays null
-        # when GitHub reports no decision yet; the caller reads head SHA + review live
-        # anyway, this is the discovery view.
+        # `jq -c` keeps the output on one line, because GITHUB_OUTPUT is line-based.
+        # Sorting by repo then number stabilizes the set: GitHub's search order is not
+        # stable, so an unsorted set churns downstream comparisons across runs.
+        # reviewDecision stays null while GitHub reports no decision; this is the discovery
+        # view, and the caller reads head SHA and review live.
         members=$(printf '%s' "$agg" | jq -c '[.[] | {
           repo: .repository.nameWithOwner,
           number,

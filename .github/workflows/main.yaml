@@ -6,13 +6,13 @@ on:
       - "**"
     branches:
       - "**"
-      # The transient ephemeral hotfix branches (pushed then deleted by hotfix.yaml, incl. dry-run
-      # drills) never become PRs, so there's nothing to lint — skip them to avoid churn runs.
+      # The ephemeral hotfix branches hotfix.yaml pushes and deletes, dry-run drills included, never
+      # become PRs, so there is nothing to lint on them.
       - "!hotfix/**"
 
-# Cancel an in-progress lint run when a newer commit lands on the same ref —
-# the superseded run's result is never useful. Safe here because this workflow
-# only lints (no release/deploy work that must run to completion).
+# Cancel an in-progress lint run when a newer commit lands on the same ref, since the superseded
+# run's result is worthless. This workflow only lints, with no release or deploy work that has to
+# run to completion.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -30,14 +30,12 @@ jobs:
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
           client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
 
-  # Guard against the v1.12.0 incident: a composite action's WHOLE manifest is
-  # expression-templated at load time — input descriptions and run: strings, bash
-  # comments included. The vars / secrets / needs / matrix / strategy contexts do not
-  # exist for composite actions, so a literal `vars.X` template expression anywhere in one — even
-  # as documentation — makes the action fail to LOAD, which took merge-gate offline
-  # org-wide until v1.12.1. Caller WORKFLOWS (.github/workflows/*) may use these; a
-  # composite action manifest may not. This job is a main.yaml job, so repocfg makes
-  # it a required check on this repo.
+  # A composite action's whole manifest is expression-templated at load time, input descriptions,
+  # `run:` strings and the bash comments inside them included. The vars, secrets, needs, matrix and
+  # strategy contexts do not exist for a composite action, so a literal `vars.X` template expression
+  # anywhere in one — documentation included — makes the action fail to load for every consumer.
+  # Caller workflows under .github/workflows may use those contexts; a composite manifest may not.
+  # This is a main.yaml job, so repocfg makes it a required check on this repo.
   lint-action-manifests:
     runs-on: ubuntu-latest
     permissions:
@@ -50,7 +48,7 @@ jobs:
           set -euo pipefail
           fail=0
           while IFS= read -r f; do
-            # Only composite actions are affected; reusable workflows are not composite.
+            # Only composite actions are affected; a reusable workflow is not one.
             grep -qE 'using:[[:space:]]*"?composite' "$f" || continue
             if grep -nE '\$\{\{[[:space:]]*(vars|secrets|needs|matrix|strategy)\.' "$f"; then
               echo "::error file=$f::references a context unavailable to composite actions (vars/secrets/needs/matrix/strategy) — deliteralize it: write the context as plain text (e.g. \`vars.X\`), never inside a template expression. See the v1.12.1 load-failure incident."
@@ -60,10 +58,9 @@ jobs:
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "✓ no composite-illegal expression contexts in any action manifest."
 
-  # The landing-saga actions are bash, and their decisions (freeze / clear / hold) are too costly to
-  # get wrong to leave unexercised. Each test in tests/ extracts the functions it covers straight out
-  # of its action manifest and runs them against stubbed network leaves — offline, deterministic, and
-  # no fixture drift, since the shipped code is what executes.
+  # The landing-saga actions are bash, and their freeze, clear and hold decisions are too costly to
+  # get wrong to leave unexercised. Each suite in tests/ extracts the functions it covers straight out
+  # of its action manifest and runs them against stubbed network leaves, offline and deterministic.
   test-actions:
     runs-on: ubuntu-latest
     permissions:

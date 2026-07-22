@@ -66,14 +66,9 @@ runs:
       run: |
         set -euo pipefail
 
-        # Org-level HALT (read FIRST): FAIL-SAFE — RUNNING only for an explicit off-token
-        # (empty/unset, 0, off, false, no, disabled); ANYTHING ELSE (a fat-fingered value or garbage)
-        # engages. The guard and the Python mutation share THIS one step, so an `exit 0` here
-        # genuinely skips the rollup (no board writes) — no later step can run past it.
-        # The org-Projects token is minted above, ahead of this guard, on purpose: nothing past the
-        # `exit 0` exercises it, so mint-vs-halt ordering is not blast radius here (token SCOPE, not
-        # mint timing, is the server-enforced bound) — and every action keeps one "mint per
-        # least-privilege, then halt-first" shape instead of duplicating this fail-safe parse pre-mint.
+        # Org-level halt, read before the rollup. Fail-safe: running only for an explicit off-token
+        # (empty/unset, 0, off, false, no, disabled); any other value engages the halt. The guard and
+        # the Python mutation share this one step, so the `exit 0` here skips the rollup entirely.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
@@ -117,8 +112,8 @@ runs:
             raise SystemExit("::error::rollup-board: board is missing a Status or Start date field")
         opt = {o["name"]: o["id"] for o in sfield.get("options", [])}
 
-        # Rank statuses by the board's own option order (its canonical progression), so
-        # the rollup never drifts from what the board actually defines.
+        # Rank statuses by the board's own option order, its canonical progression, so the
+        # rollup follows what the board defines.
         ORDER = [o["name"] for o in sfield.get("options", [])]
         RANK = {s: i for i, s in enumerate(ORDER)}
         for needed in ("In review", "Done", "In progress", "Awaiting release", "Tracking"):
@@ -155,8 +150,8 @@ runs:
                 pk = "%s#%s" % (p["repository"]["nameWithOwner"], p["number"])
                 children.setdefault(pk, []).append(it)
             typ = (c.get("issueType") or {}).get("name")
-            # Any parent with children rolls up — Initiatives included (rule 6), so an
-            # Initiative reaches Awaiting release once all its Epics do, over successive passes.
+            # Any parent with children rolls up, Initiatives included, so an Initiative reaches
+            # Awaiting release once all its Epics do, over successive passes.
             if (c.get("subIssues") or {}).get("totalCount", 0) > 0 and typ in ("Epic", "Feature", "Initiative"):
                 epics.append(it)
 
@@ -165,10 +160,9 @@ runs:
             if not rs:
                 return None
             mn, mx = min(rs), max(rs)
-            # An Initiative is a tracker, not a work item: you work its Epics, never the
-            # Initiative itself, so it never shows a pickup status (Ready / In progress). It
-            # holds Tracking until every child has reached Awaiting release, then rolls to the
-            # floor the same way a work item does (Awaiting release, later Applied).
+            # An Initiative is a tracker whose Epics carry the work, so it never shows a pickup
+            # status such as Ready or In progress. It holds Tracking until every child reaches
+            # Awaiting release, then rolls to the floor the way a work item does.
             if parent_type == "Initiative":
                 return ORDER[mn] if mn >= RANK["Awaiting release"] else "Tracking"
             if mn >= RANK["In review"]:     # ALL children In review or above → the floor
@@ -184,10 +178,11 @@ runs:
             c = e["content"]
             ek = "%s#%s" % (c["repository"]["nameWithOwner"], c["number"])
 
-            # Parent-archival (rules 5/6): once EVERY sub-issue is closed (children get archived+closed
-            # on publish), the parent is terminal — archive it off the board and close its tracker. It
-            # propagates up over successive passes (Task -> Feature -> Epic -> Initiative). Guard on the
-            # full node set: an epic with >50 sub-issues isn't fully seen here, so fall through to status.
+            # Parent archival: once every sub-issue is closed — children are archived and closed on
+            # publish — the parent is terminal, so archive it off the board and close its tracker.
+            # This propagates up over successive passes, Task to Feature to Epic to Initiative. The
+            # guard needs the full node set: an epic with more than 50 sub-issues is only partly
+            # visible here, and falls through to the status rollup.
             sub = c.get("subIssues") or {}
             tc = sub.get("totalCount", 0)
             nodes = sub.get("nodes") or []

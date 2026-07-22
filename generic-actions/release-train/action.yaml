@@ -69,9 +69,9 @@ inputs:
 runs:
   using: composite
   steps:
-    # Org-level HALT (read FIRST, before the admin check or any token mint): AGENT_KILL_SWITCH engaged
-    # → refuse to run. Cutting releases is a deliberate, un-halted decision, so this aborts loud rather
-    # than silently no-opping. FAIL-SAFE: running only for an explicit off-token.
+    # Org-level halt, read before the admin check or any token mint. Cutting releases is a
+    # deliberate, un-halted decision, so an engaged switch aborts loudly. Fail-safe: running only
+    # for an explicit off-token.
     - name: Halt guard (kill-switch)
       shell: bash
       env:
@@ -86,10 +86,9 @@ runs:
             ;;
         esac
 
-    # Defense in depth: re-check the dispatcher is a repo admin HERE, as the action's own step — the
-    # gate must not live ONLY in the caller's dispatch shell. Copied from epic-rollback: the
-    # collaborator-permission endpoint needs only Metadata:read; `|| echo ""` keeps a failed lookup
-    # from tripping `set -e` (empty permission fails closed).
+    # Re-check the dispatcher is a repo admin here as well as in the caller's dispatch shell. The
+    # collaborator-permission endpoint needs only Metadata:read, and `|| echo ""` keeps a failed
+    # lookup from tripping `set -e`; an empty permission fails closed.
     - name: Require admin (defense in depth)
       shell: bash
       env:
@@ -105,8 +104,8 @@ runs:
         fi
         echo "@${ACTOR} is a repo admin (action-level re-check passed)." | tee -a "$GITHUB_STEP_SUMMARY"
 
-    # Read token: the ledger search + per-repo commit-range + tag/release reads span every repo in the
-    # org, and the single-repo GITHUB_TOKEN can't see siblings. Least privilege: read only.
+    # Read token: the ledger search, per-repo commit ranges and tag or release reads span every repo
+    # in the org, and the single-repo GITHUB_TOKEN cannot see siblings.
     - name: Mint read token
       id: read
       uses: actions/create-github-app-token@v3
@@ -118,8 +117,9 @@ runs:
         permission-pull-requests: read
         permission-contents: read
 
-    # Dispatch token: actions:write to trigger each repo's release.yaml (the dispatches endpoint) and
-    # read the runs. NOT contents:write — the orchestrator never pushes; release-core mints its own.
+    # Dispatch token: actions:write to trigger each repo's release.yaml through the dispatches
+    # endpoint and read the runs. The orchestrator never pushes, so it holds no contents:write;
+    # release-core mints its own.
     - name: Mint dispatch token
       id: dispatch
       uses: actions/create-github-app-token@v3
@@ -129,8 +129,8 @@ runs:
         owner: ${{ inputs.org }}
         permission-actions: write
 
-    # Issue token: issues:write, scoped to the planning repo only, to splice the receipt block into the
-    # Epic body (best-effort audit; the receipt is NEVER the source of truth for resume — live tags are).
+    # Issue token: issues:write, scoped to the planning repo alone, to splice the receipt block into
+    # the Epic body. The receipt is a best-effort audit; resume reads live tags.
     - name: Mint issue token
       id: issue
       uses: actions/create-github-app-token@v3
@@ -144,8 +144,9 @@ runs:
     - name: Reconstruct the Epic, derive bumps, drive each release.yaml
       shell: bash
       env:
-        # Default GH_TOKEN is the READ token (bare `gh` for every read); the dispatch + issue tokens are
-        # applied inline at their call sites so a read can't hold a write scope.
+        # The default GH_TOKEN is the read token, which every bare-`gh` read picks up; the dispatch
+        # and issue tokens are applied inline at their call sites, so a read never holds a write
+        # scope.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         DISPATCH_TOKEN: ${{ steps.dispatch.outputs.token }}
         ISSUE_TOKEN: ${{ steps.issue.outputs.token }}
@@ -168,11 +169,11 @@ runs:
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""; exit 1
         fi
-        # dry_run defaults on; only the literal "false" mutates (cuts real releases).
+        # dry_run defaults on; only the literal "false" cuts real releases.
         dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
 
-        # ---- Per-Epic pause: refuse to release a paused Epic (best-effort read; a read error does NOT
-        # block — the admin gate already fenced this dispatch). Mirrors epic-rollback.
+        # ---- Per-Epic pause: refuse to release a paused Epic. The label read is best-effort, since
+        # the admin gate already fenced this dispatch, so a read error does not block.
         paused=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.labels[].name' 2>/dev/null || echo "")
         if printf '%s\n' "$paused" | grep -qx 'automation:paused'; then
           echo "::error::epic:#${EPIC} is automation:paused — remove the \`automation:paused\` label from the Epic issue before releasing it."
@@ -181,15 +182,15 @@ runs:
 
         # ================= Shared helpers ==========================================================
 
-        # PR-search node: number + repo + mergedAt (to anchor the ship-test on the NEWEST-merged sibling
-        # per repo, not an arbitrary first — a later sibling not yet in the tag must not be masked).
+        # PR-search node: number, repo and mergedAt, which anchors the ship test on each repo's
+        # newest-merged sibling, so a later sibling not yet in the tag cannot be masked.
         SEARCH_Q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number mergedAt repository{ nameWithOwner } } } } }'
 
         # Page an ISSUE search to completion, retrying transient GraphQL errors; prints the aggregated
-        # PR-node array. Returns 1 on failure so the caller fails closed. (epic-rollback pattern.)
+        # PR-node array. Returns 1 on failure so the caller fails closed.
         search_prs() { # $1 = search query
           local search="$1" cursor="" agg='[]' data page ok args
           while :; do
@@ -212,7 +213,7 @@ runs:
           printf '%s' "$agg"
         }
 
-        # REST authority for one PR: prints "<merged> <merge_commit_sha>" (the search index lags).
+        # REST authority for one PR, which the search index lags: prints "<merged> <merge_commit_sha>".
         rest_pr_merge() { # $1=owner/repo $2=number
           local data
           for attempt in 1 2 3; do
@@ -224,12 +225,12 @@ runs:
           printf 'rest_pr_merge failed for %s#%s\n' "$1" "$2" >&2; return 1
         }
 
-        # Newest release tag of a repo, honoring the sub-dir Go-module prefix (<dir>/vX.Y.Z). Retries a
-        # transient read (a swallowed error must NOT look like a first-release repo — that would
-        # double-release on a live resume): prints "__ERR__" on hard failure (caller aborts the repo),
-        # empty on a genuine no-tags repo. NOTE: `sort -V` over mixed namespaces is correct for the
-        # single go.mod release-core enforces; a repo that RELOCATED its module (both `v*` and `dir/v*`
-        # present) could pick the wrong namespace — a documented limitation, not reachable today.
+        # Newest release tag of a repo, honoring the sub-dir Go-module prefix (<dir>/vX.Y.Z). A
+        # transient read is retried and a hard failure prints "__ERR__", on which the caller aborts
+        # that repo: a swallowed error would look like a first-release repo and double-release on a
+        # live resume. A genuine no-tags repo prints empty. `sort -V` over mixed namespaces is correct
+        # for the single go.mod release-core enforces; a repo that relocated its module, carrying both
+        # `v*` and `dir/v*`, could pick the wrong namespace.
         latest_tag() { # $1=owner/repo
           local refs
           for attempt in 1 2 3; do
@@ -242,8 +243,9 @@ runs:
           printf '__ERR__'
         }
 
-        # Does <tag> contain <merge_sha>? compare base=merge_sha head=tag: ahead|identical = the tag is
-        # at/after the merge, i.e. the sibling shipped in it. Retries; returns 2 on a hard read error.
+        # Does <tag> contain <merge_sha>? Compare with base=merge_sha and head=tag: `ahead` or
+        # `identical` puts the tag at or after the merge, so the sibling shipped in it. Retries, and
+        # returns 2 on a hard read error.
         tag_contains() { # $1=owner/repo $2=tag $3=merge_sha
           local st
           for attempt in 1 2 3; do
@@ -255,10 +257,10 @@ runs:
           return 2
         }
 
-        # Does a PUBLISHED GitHub Release exist for <tag>? (A tag-only botched cut has none.) Retries all
-        # failures 3× (can't cheaply distinguish a definitive 404 from a transient error over --silent);
-        # any persistent failure returns 1 → fail-closed to "botched", which is loud and self-heals on
-        # a re-dispatch, so a transient blip at worst costs one extra loud-and-recoverable cycle.
+        # Does a published GitHub Release exist for <tag>? A tag-only botched cut has none. Every
+        # failure is retried three times, since `--silent` does not cheaply distinguish a definitive
+        # 404 from a transient error, and a persistent failure returns 1, failing closed to "botched".
+        # That is loud and self-heals on a re-dispatch, so a transient blip costs one extra cycle.
         release_exists() { # $1=owner/repo $2=tag
           for attempt in 1 2 3; do
             if gh api "repos/$1/releases/tags/$2" --silent >/dev/null 2>&1; then return 0; fi
@@ -267,11 +269,12 @@ runs:
           return 1
         }
 
-        # Derive the semver bump for a repo from its commit range since the last tag (this is what the
-        # release cuts — everything on the default branch since the last tag, not only the Epic's
-        # commits). Highest-wins: `!`/BREAKING footer → major; any feat → minor; else patch. Empty range
-        # → "none" (skip). Subject-line scan for feat/`!` (a body line starting `feat:` is not a type);
-        # full-body scan for the BREAKING-CHANGE footer. Uses the compare API (no checkout).
+        # Derive the semver bump for a repo from its commit range since the last tag, which is what
+        # the release cuts: everything on the default branch since that tag, wider than the Epic's own
+        # commits. Highest wins — a `!` or BREAKING footer gives major, any feat gives minor, else
+        # patch — and an empty range gives "none", which skips the repo. feat and `!` are read from
+        # subject lines, since a body line starting `feat:` is not a type, while the BREAKING-CHANGE
+        # footer is read from the full body. The compare API supplies both, so there is no checkout.
         commit_messages() { # $1=api path  $2=jq filter  $3=paginate(true|false)
           local out attempt
           for attempt in 1 2 3; do
@@ -288,20 +291,20 @@ runs:
         derive_bump() { # $1=owner/repo $2=last_tag ("" = first release) $3=default_branch
           local repo="$1" last="$2" head="$3" subjects bodies path paginate jq_bodies jq_subjects
           if [ -z "$last" ]; then
-            # First release: scan the recent default-branch history; default minor if quiet. Not
-            # paginated — answering "is there anything here" does not need the whole history.
+            # First release: scan the recent default-branch history, defaulting to minor when quiet.
+            # Unpaginated, since "is there anything here" does not need the whole history.
             path="repos/$repo/commits"; paginate=false
             jq_bodies='.[].commit.message'; jq_subjects='.[].commit.message | split("\n")[0]'
           else
             # Paginated: the compare API pages its commit list, and a feat past the first page would
-            # otherwise be invisible — shipping a minor as a patch.
+            # be invisible, shipping a minor as a patch.
             path="repos/$repo/compare/${last}...${head}"; paginate=true
             jq_bodies='.commits[].commit.message'; jq_subjects='.commits[].commit.message | split("\n")[0]'
           fi
-          # Fail-closed, like latest_tag and tag_contains. A read that failed is not an empty range;
-          # collapsing the two onto one value let a transient API error read as "nothing to release",
-          # so the repo was skipped, recorded as nochange, and the run stayed green — and because
-          # nothing recorded a failure, a re-dispatch recomputed the same skip forever.
+          # Fail closed, as latest_tag and tag_contains do. A failed read is not an empty range:
+          # collapsing the two onto one value makes a transient API error read as "nothing to
+          # release", so the repo is skipped and recorded as nochange while the run stays green, and
+          # with no failure recorded a re-dispatch recomputes the same skip.
           if ! bodies=$(commit_messages "$path" "$jq_bodies" "$paginate") \
             || ! subjects=$(commit_messages "$path" "$jq_subjects" "$paginate"); then
             printf '__ERR__'; return 0
@@ -317,11 +320,11 @@ runs:
           fi
         }
 
-        # Dispatch a repo's release.yaml and return the created run id. return_run_details gives the run
-        # id directly (GA 2026-02-19); on the older 204 answer, correlate by the App-bot actor + a
-        # created>= filter with a 60s skew margin (runner clock may lead GitHub's server time). Inputs
-        # are passed as STRINGS (the dispatches API takes string input values regardless of the input's
-        # declared type; release.yaml/`release-core` compare the string).
+        # Dispatch a repo's release.yaml and return the created run id. return_run_details gives that
+        # id directly; on the older 204 answer, correlate by the App-bot actor and a created>= filter
+        # with a 60s skew margin, since the runner clock may lead GitHub's server time. Inputs travel
+        # as strings, which is what the dispatches API takes whatever an input's declared type, and
+        # release.yaml and release-core compare the string.
         dispatch_release() { # $1=owner/repo $2=default_branch $3=release_type $4=run_dry(true|false) $5=since_ts
           local repo="$1" ref="$2" rt="$3" rdry="$4" ts="$5" body resp run_id enc
           body=$(jq -n --arg ref "$ref" --arg rt "$rt" --arg dry "$rdry" \
@@ -343,10 +346,10 @@ runs:
           printf '%s' "$run_id"
         }
 
-        # Poll a run to completion. Prints its conclusion (success/failure/…), or "blocked" if it parks
-        # at the protected `release` environment approval gate (`waiting`) — a fully-autonomous train
-        # needs the bot allowed as an approver, so surface it rather than hang; a blocked run is PENDING
-        # (may still complete on approval), never a hard failure.
+        # Poll a run to completion. Prints its conclusion, or "blocked" when it parks at the protected
+        # `release` environment approval gate in `waiting`: a fully-autonomous train needs the bot
+        # allowed as an approver, so the state is surfaced rather than waited out. A blocked run is
+        # pending and may still complete on approval, so it is not a hard failure.
         poll_run() { # $1=owner/repo $2=run_id
           local repo="$1" run_id="$2" i st cc
           for i in $(seq 1 180); do   # ~30 min cap at 10s (release-core can go install + build on a cold runner)
@@ -370,19 +373,19 @@ runs:
             | sed 's|refs/tags/||' | grep -E '(^|/)v[0-9]' | sort -u || true
         }
 
-        # Splice a marker-delimited region into the Epic body (render-epic-status discipline): exactly
-        # one balanced START/END pair → replace the region in place (markers + old content); otherwise
-        # strip any stray marker LINES and append one fresh region — a hand-edit can never drop the
-        # human prose, and stale content never accumulates. Prints the new body.
+        # Splice a marker-delimited region into the Epic body. Exactly one balanced START/END pair
+        # replaces the region in place, markers and old content together; anything else strips any
+        # stray marker lines and appends one fresh region, so a hand-edit never drops human prose and
+        # stale content never accumulates. Prints the new body.
         splice_body() { # $1=current body   $2=new region (incl. its markers)
           local body="$1" block="$2" s='<!-- release-train:receipts:start -->' e='<!-- release-train:receipts:end -->' ns ne sl el
           ns=$(printf '%s\n' "$body" | grep -cxF "$s" || true)
           ne=$(printf '%s\n' "$body" | grep -cxF "$e" || true)
           sl=$(printf '%s\n' "$body" | grep -nxF "$s" | head -1 | cut -d: -f1)
           el=$(printf '%s\n' "$body" | grep -nxF "$e" | head -1 | cut -d: -f1)
-          # In-place replace ONLY for a well-formed single pair with START before END (render-epic-status
-          # discipline) — an END-before-START hand-edit must fall through to strip+append, never eat prose.
-          # BLK via the environment (ENVIRON), not -v, so awk does not interpret backslash escapes.
+          # Replace in place only for a well-formed single pair with START before END; an
+          # END-before-START hand-edit falls through to strip-and-append rather than eating prose.
+          # BLK arrives through the environment (ENVIRON) so awk does not interpret backslash escapes.
           if [ "$ns" = "1" ] && [ "$ne" = "1" ] && [ -n "$sl" ] && [ -n "$el" ] && [ "$sl" -lt "$el" ]; then
             printf '%s\n' "$body" | BLK="$block" awk -v s="$s" -v e="$e" '
               $0==s { print ENVIRON["BLK"]; skip=1; next } $0==e { skip=0; next } !skip { print }'
@@ -398,9 +401,9 @@ runs:
         if ! cands=$(search_prs "is:pr is:merged label:\"epic:${EPIC}\" org:${ORG}"); then
           echo "::error::could not reconstruct the Epic (GraphQL search failed after retries)"; exit 1
         fi
-        # One row per repo, anchored on the NEWEST-merged sibling (max mergedAt): if the tag contains the
-        # newest epic commit it contains them all (they share a base under the atomic-Epic invariant), so
-        # a later sibling can't be masked by an earlier one.
+        # One row per repo, anchored on the newest-merged sibling by mergedAt: a tag containing the
+        # newest Epic commit contains them all, since they share a base under the atomic-landing
+        # invariant, so an earlier sibling cannot mask a later one.
         newest=$(printf '%s' "$cands" | jq -c '
           group_by(.repository.nameWithOwner)
           | map(max_by(.mergedAt) | {repo: .repository.nameWithOwner, number: .number})')
@@ -430,7 +433,7 @@ runs:
           repo=$(printf '%s' "$ledger" | jq -r ".[$i].repo")
           merge_sha=$(printf '%s' "$ledger" | jq -r ".[$i].sha")
 
-          # Resolve the default branch ONCE (retry; fail-closed — never guess a wrong ref).
+          # Resolve the default branch once, with retries, and fail closed rather than guess a ref.
           default_branch=""
           for attempt in 1 2 3; do
             default_branch=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null || echo "")
@@ -442,7 +445,7 @@ runs:
             echo "- ❌ **${repo}** — could not read the default branch; skipping." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
 
-          # -- Ship-state of THIS Epic's merge, from LIVE tags (never the receipt) -------------------
+          # -- Ship-state of this Epic's merge, read from live tags ----------------------------------
           last=$(latest_tag "$repo")
           if [ "$last" = "__ERR__" ]; then
             had_failure=true
@@ -450,9 +453,9 @@ runs:
             echo "- ❌ **${repo}** — tag read failed after retries; skipping (fail-closed, never assume first-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ -n "$last" ]; then
-            # Capture via `|| tc=$?` — a bare `tag_contains ...; tc=$?` would let the function's
-            # non-zero return (1 = not-yet-shipped, the normal case; 2 = read error) trip `set -e` and
-            # abort the whole action before tc is read. The `||` list suspends set -e through the call.
+            # Capture via `|| tc=$?`: the `||` list suspends set -e through the call. A bare
+            # `tag_contains ...; tc=$?` would let the function's non-zero return — 1 for the ordinary
+            # not-yet-shipped case, 2 for a read error — abort the action before tc is read.
             tc=0; tag_contains "$repo" "$last" "$merge_sha" || tc=$?
             if [ "$tc" -eq 2 ]; then
               had_failure=true
@@ -465,10 +468,11 @@ runs:
                 receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"skipped"}]')
                 continue
               fi
-              # BOTCHED: tag exists at/after the merge but has NO published Release (release-core failed
-              # between tag-push and release-create). The orchestrator can't create the Release (no
-              # contents:write, by design), and re-cutting would produce a HIGHER tag orphaning this one
-              # — so fail loud for manual repair (publish the Release for `$last`, or delete the tag to re-cut).
+              # A botched cut: the tag sits at or after the merge but has no published Release, so
+              # release-core failed between pushing the tag and creating it. The orchestrator holds no
+              # contents:write and cannot create the Release, and re-cutting would produce a higher
+              # tag that orphans this one, so fail loudly for manual repair — publish the Release for
+              # `$last`, or delete the tag to let a re-dispatch re-cut it.
               had_failure=true
               receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"botched"}]')
               echo "::error::${repo} — tag \`${last}\` exists (contains the Epic merge) but has NO published Release — a botched cut. Publish the Release for \`${last}\`, or delete the tag to let a re-dispatch re-cut it. Not skipping, not re-cutting." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -524,8 +528,8 @@ runs:
           fi
           concl=$(poll_run "$repo" "$rid")
           if [ "$concl" = "blocked" ]; then
-            # PENDING, not failed: the run may still cut the tag on approval. Do NOT re-dispatch on
-            # resume until it clears (a fresh dispatch would double-release once approved).
+            # Pending rather than failed: the run may still cut the tag on approval, so a resume
+            # waits for it to clear — a fresh dispatch would double-release once approved.
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
             had_failure=true
             echo "- ⏸️  **${repo}** — live release parked at the release-env approval gate (pending). Approve the run, then re-dispatch to record the receipt." | tee -a "$GITHUB_STEP_SUMMARY"; continue
@@ -541,10 +545,10 @@ runs:
             echo "- ✅ **${repo}** — released \`${newtag}\` (${bump})." | tee -a "$GITHUB_STEP_SUMMARY"
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$newtag" '$a + [{repo:$r, tag:$t, status:"shipped"}]')
           elif [ "$concl" = "success" ]; then
-            # Ran clean but the new tag isn't visible yet (ref-index lag) — the run succeeded, so a tag
-            # WAS cut; record success with a null tag and let resume confirm it from live tags (it
-            # self-heals; never double-releases). (Gating on the run conclusion alone — NOT on the OLD
-            # tag's Release, which is absent for a first-release repo.)
+            # Ran clean but the new tag is not visible yet, the ref index lagging. The run succeeded,
+            # so a tag was cut: record success with a null tag and let resume confirm it from live
+            # tags, which self-heals without double-releasing. The gate is the run conclusion alone,
+            # since a first-release repo has no old tag whose Release could be checked.
             echo "- ✅ **${repo}** — release ${bump} ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"shipped"}]')
           else
@@ -569,17 +573,17 @@ runs:
         if [ "$dry" = "false" ]; then
           block=$(printf '<!-- release-train:receipts:start -->\n### 🚂 Release train — epic:#%s (%s)\n%s\n<!-- release-train:receipts:end -->' \
             "$EPIC" "$(date -u +%Y-%m-%dT%H:%MZ)" "$table")
-          # Abort the write when the read that feeds it failed, as merge-gate and render-epic-status
-          # already do. `|| echo ""` here mapped a failed read onto an empty body, splice_body turned
-          # that into a body holding only the receipt block, and the PATCH then SUCCEEDED — so the
-          # error path never fired while the Epic's prose and its frozen activation snapshot were
-          # overwritten. That snapshot is what epic-membership, merge-gate and detect-partial-landing
-          # read, so losing it degrades the whole landing saga back to live-label membership.
+          # Abort the write when the read that feeds it failed. Mapping a failed read onto an empty
+          # body would make splice_body return a body holding only the receipt block, and the PATCH
+          # would succeed, overwriting the Epic's prose and its frozen activation snapshot without
+          # ever reaching the error path. That snapshot is what epic-membership, merge-gate and
+          # detect-partial-landing read, so losing it degrades the whole landing saga back to
+          # live-label membership.
           #
-          # An empty body read successfully is a different thing and still splices normally; only the
-          # exit status distinguishes them, which is why the guard is on the status and not on "$cur".
-          # The receipts are a best-effort audit — the same table is already in the run summary — so
-          # declining to write is strictly safer than writing one derived from a failure.
+          # A body that reads successfully as empty is a different thing and still splices normally.
+          # Only the exit status separates the two, which is why the guard reads the status rather
+          # than "$cur". The receipts are a best-effort audit and the same table is already in the run
+          # summary, so declining to write costs nothing.
           if ! cur=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null); then
             echo "::warning::could not read epic:#${EPIC} — leaving its body untouched; the receipt table is in the run summary."
           else

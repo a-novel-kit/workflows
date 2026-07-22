@@ -57,8 +57,8 @@ runs:
       id: discover
       run: |
         # Enumerate every package across every module. Iterating modules from
-        # `go list -m` (rather than a single `go list ./...`) is what makes this
-        # work in a Go workspace, where packages span more than one module.
+        # `go list -m` is what makes this work in a Go workspace, where packages
+        # span more than one module and a single `go list ./...` would miss them.
         echo "$(for mod in $(go list -m); do go list ${mod//$(go list .)/.}/... ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }}; done)" > modules.txt
         echo "MODULES=$(cat modules.txt | tr '\n' ' ')" >> $GITHUB_ENV
     - name: run tests

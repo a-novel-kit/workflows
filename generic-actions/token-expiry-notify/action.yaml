@@ -67,8 +67,8 @@ runs:
       run: |
         set -euo pipefail
 
-        # A fine-grained PAT's expiry rides on the response header of ANY authenticated request. A
-        # non-expiring credential (classic PAT / App token) has no such header → nothing to remind.
+        # A fine-grained PAT's expiry rides on the response header of any authenticated request. A
+        # non-expiring credential, such as a classic PAT or an App token, sends no such header.
         exp=$(curl -sfS -o /dev/null -D - -H "Authorization: Bearer ${TOKEN}" https://api.github.com/ 2>/dev/null \
           | grep -i '^github-authentication-token-expiration:' | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r' || true)
         if [ -z "$exp" ]; then
@@ -88,9 +88,9 @@ runs:
           exit 0
         fi
 
-        # Color-code by percentage of lifetime left (if lifetime_days given) or by absolute days.
-        # Discord embed colors are decimal RGB: green 0x2ECC71 / yellow 0xF1C40F / orange 0xE67E22 /
-        # red 0xE74C3C.
+        # Color-code by percentage of lifetime left when lifetime_days is given, otherwise by
+        # absolute days. Discord embed colors are decimal RGB: green 0x2ECC71, yellow 0xF1C40F,
+        # orange 0xE67E22, red 0xE74C3C.
         pctline=""
         if [ -n "${LIFETIME_DAYS:-}" ] && [ "${LIFETIME_DAYS}" -gt 0 ] 2>/dev/null; then
           pct=$(( days * 100 / LIFETIME_DAYS ))
@@ -107,8 +107,8 @@ runs:
           else color=15158332; fi
         fi
 
-        # The whole message is the embed DESCRIPTION (Discord renders ## / ### headings there) — no
-        # separate title field. Header, then the expiry as `-#` subtext (small + grey), then the
+        # The whole message is the embed description, where Discord renders ## and ### headings, so
+        # there is no separate title field: a header, the expiry as small grey `-#` subtext, then the
         # caller's regen Markdown.
         desc="## ⏳ [Token] ${TOKEN_NAME} - ${days} days left"$'\n'"-# Expires ${exp}${pctline}"
         if [ -n "${REGEN_MD:-}" ]; then
@@ -116,7 +116,7 @@ runs:
         fi
         desc=$(printf '%s' "$desc" | head -c 3900)
         desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
-        # allowed_mentions parse:[] — a maintenance nudge should never ping a role/@everyone.
+        # allowed_mentions parse:[] keeps a maintenance nudge from pinging a role or @everyone.
         payload=$(jq -n --arg d "$desc" --argjson c "$color" \
           '{embeds: [{description: $d, color: $c}], allowed_mentions: {parse: []}}')
 

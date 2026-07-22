@@ -118,18 +118,17 @@ inputs:
 runs:
   using: composite
   steps:
-    # Org-level HALT (read FIRST, before the admin check or any token mint): AGENT_KILL_SWITCH
-    # engaged → refuse to run. A destructive rollback must be an explicit, un-halted decision, so
-    # this aborts loud rather than silently no-opping.
+    # Org-level halt, read before the admin check or any token mint. A destructive rollback is an
+    # explicit, un-halted decision, so an engaged switch aborts loudly.
     - name: Halt guard (kill-switch)
       shell: bash
       env:
         KILL_SWITCH: ${{ inputs.kill_switch }}
       run: |
         set -euo pipefail
-        # FAIL-SAFE: RUNNING only for an explicit off-token (empty/unset, 0, off, false, no,
-        # disabled); ANYTHING ELSE (a fat-fingered value or garbage) engages the halt. A failing step
-        # stops the composite, so no later step (admin check, mints, revert) runs.
+        # Fail-safe: running only for an explicit off-token (empty/unset, 0, off, false, no,
+        # disabled); any other value engages the halt. A failing step stops the composite, so the
+        # admin check, the mints and the revert never run.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
@@ -138,12 +137,11 @@ runs:
             ;;
         esac
 
-    # Defense in depth: re-check the dispatcher is a repo admin HERE, as the action's first step —
-    # the gate must not live ONLY in the caller's dispatch shell (a hand-written or drifted copy could
-    # drop it). Copied from approve-pr/action.yaml: the collaborator-permission endpoint needs only
-    # Metadata:read (the default token always has it), and `|| echo ""` keeps a failed lookup from
-    # tripping `set -e` — an empty permission falls through and fails closed. github.repository /
-    # github.actor are the dispatching repo + user.
+    # Re-check the dispatcher is a repo admin here as well as in the caller's dispatch shell, which a
+    # hand-written or drifted copy could drop. The collaborator-permission endpoint needs only
+    # Metadata:read, which the default token always has, and `|| echo ""` keeps a failed lookup from
+    # tripping `set -e`: an empty permission falls through and fails closed. github.repository and
+    # github.actor are the dispatching repo and user.
     - name: Require admin (defense in depth)
       shell: bash
       env:
@@ -159,8 +157,8 @@ runs:
         fi
         echo "@${ACTOR} is a repo admin (action-level re-check passed)." | tee -a "$GITHUB_STEP_SUMMARY"
 
-    # Read token: the ledger search + REST reads span every repo in the org, and the single-repo
-    # GITHUB_TOKEN can't see sibling PRs / commits in other repos. Least privilege: read only.
+    # Read token: the ledger search and REST reads span every repo in the org, and the single-repo
+    # GITHUB_TOKEN cannot see sibling PRs or commits.
     - name: Mint read token
       id: read
       uses: actions/create-github-app-token@v3
@@ -172,11 +170,11 @@ runs:
         permission-pull-requests: read
         permission-contents: read
 
-    # Reconstruct the epic:<N> ledger (READ-only) and derive the epic-scoped repo set. Emits `proceed`
-    # (true only for a live run that cleared every gate), `ledger` (the reconstructed JSON — the single
-    # source of truth the mutation step consumes), and `repos` (the ledger's repos + the planning repo,
-    # the scope the write token is then minted for). Splitting reconstruct from mutate is what lets the
-    # write token be scoped to exactly the epic's repos — and not minted at all on a dry run.
+    # Reconstruct the epic:<N> ledger read-only and derive the epic-scoped repo set. Emits `proceed`,
+    # true only for a live run that cleared every gate; `ledger`, the reconstructed JSON the mutation
+    # step consumes; and `repos`, the ledger's repos plus the planning repo, which is the scope the
+    # write token is minted for. Splitting reconstruct from mutate is what lets that token be scoped
+    # to exactly the Epic's repos, and not minted at all on a dry run.
     - name: Reconstruct ledger + plan (read-only)
       id: plan
       shell: bash
@@ -194,13 +192,13 @@ runs:
         set -euo pipefail
 
         # ---- Validate untrusted inputs before they reach a search grammar --------------------
-        # epic_number builds `label:"epic:<N>"`; a non-numeric value could close the quoted
-        # qualifier and inject terms. The label convention is numeric — reject anything else.
+        # epic_number builds `label:"epic:<N>"`, so a non-numeric value could close the quoted
+        # qualifier and inject terms.
         if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
           echo "::error::epic_number must be an integer, got \"${EPIC:-}\""
           exit 1
         fi
-        # org feeds `org:<ORG>` — require GitHub-login chars so a stray value can't broaden scope.
+        # org feeds `org:<ORG>`, so require GitHub-login characters: a stray value would broaden scope.
         if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
           echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
           exit 1
@@ -209,31 +207,30 @@ runs:
           echo "::error::reason is required (it is the audit trail for the rollback)"
           exit 1
         fi
-        # planning_repo now feeds TWO sinks: the write token's `repositories:` scope (via the repos
-        # output) and the rollback-Epic issue's API path. Require a bare repo name so a stray value
-        # can't widen the token scope (a comma would add a repo) or break the `repos=` output (a
-        # newline). Mirrors the merge-gate / detect-partial-landing guard.
+        # planning_repo feeds two sinks: the write token's `repositories:` scope, through the repos
+        # output, and the rollback-Epic issue's API path. A bare repo name keeps a comma from widening
+        # the token scope and a newline from breaking the `repos=` output.
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
           exit 1
         fi
-        # BLAST-CAP bound feeds shell arithmetic + a `-gt` compare; require a positive integer.
-        # Hard internal default 5 so an empty/unset value is safe rather than an error.
+        # The blast-cap bound feeds shell arithmetic and a `-gt` compare, so require a positive
+        # integer. The internal default of 5 makes an empty or unset value safe.
         MAX_ROLLBACK_REPOS="${MAX_ROLLBACK_REPOS:-5}"
         if ! [[ "${MAX_ROLLBACK_REPOS}" =~ ^[0-9]+$ ]] || [ "${MAX_ROLLBACK_REPOS}" -lt 1 ]; then
           echo "::error::max_rollback_repos must be a positive integer, got \"${MAX_ROLLBACK_REPOS:-}\""
           exit 1
         fi
 
-        # dry_run defaults on; only the literal "false" (any case) mutates. Lowercase via tr
-        # (portable), not ${VAR,,} (bash-4 only).
+        # dry_run defaults on; only the literal "false" (any case) mutates. `tr` lowercases because
+        # ${VAR,,} is a Bash 4+ expansion.
         dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
 
         # ---- Per-Epic pause -------------------------------------------------------------------
-        # `automation:paused` on the Epic issue holds ALL [Agent] automation for that Epic. A
-        # destructive rollback must be an explicit, un-paused decision, so refuse to run while the
-        # Epic is paused. Read the Epic issue's labels (issues:read); a read error does NOT block
-        # (fail-open — the admin + typed-confirmation gate already fenced this dispatch).
+        # `automation:paused` on the Epic issue holds all [Agent] automation for that Epic, and a
+        # destructive rollback is an explicit, un-paused decision, so refuse to run while it is set.
+        # A failed label read does not block, since the admin and typed-confirmation gates already
+        # fenced this dispatch.
         paused_labels=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.labels[].name' 2>/dev/null || echo "")
         if printf '%s\n' "$paused_labels" | grep -qx 'automation:paused'; then
           echo "::error::epic:#${EPIC} is automation:paused — remove the \`automation:paused\` label from the Epic issue before rolling it back."
@@ -243,11 +240,11 @@ runs:
         # Marker file for the conflict-placeholder fallback (a ruleset may reject an empty commit).
         MARKER="ROLLBACK-HELD.md"
 
-        # ---- Shared GraphQL + read helpers (the detect-partial-landing search pattern) --------
+        # ---- Shared GraphQL + read helpers ----------------------------------------------------
 
-        # PR search node — extended from detect-partial-landing's SEARCH_Q with mergeCommit{oid}
-        # (a cross-check of the squash SHA) and closingIssuesReferences (the Task ids the board reset
-        # walks). REST remains the authority for the squash SHA; these are the read-only plan inputs.
+        # PR search node. mergeCommit{oid} cross-checks the squash SHA and closingIssuesReferences
+        # carries the Task ids the board reset walks. REST is the authority for the squash SHA; these
+        # are the read-only plan inputs.
         SEARCH_Q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
@@ -285,9 +282,8 @@ runs:
           printf '%s' "$agg"
         }
 
-        # REST authority for one PR (the search index lags): prints "<merged> <merge_commit_sha>"
-        # (e.g. "true a1b2c3…"). Extends detect-partial-landing's rest_pr_state to also return the
-        # squash SHA. Returns 1 on error so the caller fails closed.
+        # REST authority for one PR, which the search index lags: prints "<merged> <merge_commit_sha>"
+        # (e.g. "true a1b2c3…"). Returns 1 on error so the caller fails closed.
         rest_pr_merge() { # $1=owner/repo $2=number
           local data
           for attempt in 1 2 3; do
@@ -325,16 +321,16 @@ runs:
           exit 1
         fi
         cand_count=$(printf '%s' "$candidates" | jq 'length')
-        # Precondition: there must be something merged, or there is nothing to roll back. The
-        # INV-1-violation JUDGMENT stays with the human; this only refuses the nonsensical case.
+        # Something has to be merged, or there is nothing to roll back. Judging whether the landing
+        # was legitimate stays with the human; this only refuses the nonsensical case.
         if [ "$cand_count" -eq 0 ]; then
           echo "::error::no merged PRs carry epic:${EPIC} in org ${ORG} — nothing to roll back."
           exit 1
         fi
 
         # Per candidate: REST-confirm merged==true, take the authoritative squash SHA, assert a single
-        # parent, record the pre-merge parent + the Task ids. A row that REST says is NOT merged is
-        # excluded (authoritatively not landed); a two-parent commit means the ledger is wrong → abort.
+        # parent, and record the pre-merge parent and the Task ids. A row REST reports as unmerged is
+        # excluded; a two-parent commit means the ledger is wrong and aborts the run.
         ledger='[]'
         for i in $(seq 0 $((cand_count - 1))); do
           row=$(printf '%s' "$candidates" | jq -c ".[$i]")
@@ -408,20 +404,19 @@ runs:
         task_n=$(printf '%s' "$task_ids" | grep -c . || true)
         echo "### Board reset plan: ${task_n} rolled-back Task(s) → Status \"Ready\"" | tee -a "$GITHUB_STEP_SUMMARY"
 
-        # ---- BLAST-CAP (before ANY mutation, for both dry + real runs) --------------------------
-        # A rollback fans a DESTRUCTIVE revert across every repo in the ledger. Cap the distinct-repo
-        # target set: over the cap → ABORT LOUD rather than proceed, a guard against a runaway or
-        # mis-scoped rollback. The plan above is already in the summary, so the operator sees WHAT it
-        # would have touched; they raise max_rollback_repos deliberately if the width is genuine.
+        # ---- Blast cap, before any mutation, on both dry and live runs -------------------------
+        # A rollback fans a destructive revert across every repo in the ledger, so a distinct-repo
+        # count over the cap aborts. The plan above is already in the summary, so the operator sees
+        # what it would have touched and raises max_rollback_repos if the width is genuine.
         repo_n=$(printf '%s' "$repos" | grep -c . || true)
         if [ "$repo_n" -gt "$MAX_ROLLBACK_REPOS" ]; then
           echo "::error::BLAST-CAP: rollback of epic:#${EPIC} would touch ${repo_n} repos (> max_rollback_repos=${MAX_ROLLBACK_REPOS}) — aborting before any revert. A rollback this wide is almost certainly a mis-scoped Epic; investigate, or re-dispatch with a higher max_rollback_repos if it is genuinely intended." | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
         fi
 
-        # ---- Multi-base assert (before ANY mutation, for both dry + real runs) -----------------
-        # A repo's siblings must all target ONE base branch. Reverting an older-base sibling onto the
-        # newest base would revert a change that isn't on that base — abort loud rather than corrupt.
+        # ---- Multi-base assert, before any mutation, on both dry and live runs -----------------
+        # A repo's siblings all target one base branch. Reverting an older-base sibling onto the
+        # newest base would revert a change that is not on that base, so abort instead.
         multibase=$(printf '%s' "$ledger" | jq -r '
           group_by(.repo)[] | select((map(.base) | unique | length) > 1)
           | "\(.[0].repo): \((map(.base) | unique) | join(", "))"')
@@ -435,11 +430,11 @@ runs:
         fi
 
         # ---- Emit the ledger + the epic-scoped repo set for the gated, scoped write-token mint -----
-        # repos = the ledger's repo NAMES (the owner comes from the token's `owner:`) plus the planning
-        # repo, where the rollback-Epic issue + labels are written. create-github-app-token then scopes
-        # the write token to EXACTLY these repos, so a leaked token cannot reach a repo outside this
-        # rollback. The ledger is passed verbatim so the mutation reverts precisely what was scoped —
-        # one reconstruction, no time-of-check/time-of-use drift against a re-search.
+        # repos holds the ledger's repo names — the owner comes from the token's `owner:` — plus the
+        # planning repo, where the rollback-Epic issue and labels are written. create-github-app-token
+        # scopes the write token to exactly these, so a leaked token cannot reach a repo outside this
+        # rollback. The ledger is passed verbatim, so the mutation reverts what was scoped from one
+        # reconstruction and nothing drifts against a re-search.
         repos_csv=$(printf '%s' "$ledger" | jq -r --arg pr "$PLANNING_REPO" '([.[].repo | split("/")[1]] + [$pr]) | unique | join(",")')
         {
           echo "repos=${repos_csv}"
@@ -454,14 +449,14 @@ runs:
           echo "proceed=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        # Live run, every gate cleared → authorize the scoped write-token mint + the mutation step.
+        # A live run with every gate cleared authorizes the scoped write-token mint and the mutation.
         echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-    # Write token — minted ONLY on a live, gate-cleared run (steps.plan.outputs.proceed) and SCOPED
-    # via repositories: to just the epic's repos + the planning repo, not org-wide. Branch push + revert
-    # commit (contents), open + label + auto-merge the revert PRs (pull-requests), and open the
-    # rollback-Epic issue + edit its body + apply epic:<M> (issues). It never APPROVES — the App authors
-    # these reverts and GitHub 422s a self-approval, so a human approves the wave.
+    # Write token, minted only on a live, gate-cleared run and scoped through `repositories:` to the
+    # Epic's repos plus the planning repo. contents covers the branch push and revert commit,
+    # pull-requests covers opening, labeling and arming the revert PRs, and issues covers the
+    # rollback-Epic issue, its body and the epic:<M> label. It never approves: the App authors these
+    # reverts and GitHub 422s a self-approval, so a human approves the wave.
     - name: Mint scoped write token
       id: write
       if: ${{ steps.plan.outputs.proceed == 'true' }}
@@ -475,10 +470,10 @@ runs:
         permission-pull-requests: write
         permission-issues: write
 
-    # Board token: org-Projects write only — bounds a leak of this token to board edits. Also minted
-    # only on a live, gate-cleared run. organization-projects:write is org-scoped (repositories: does
-    # not apply), so it cannot be epic-scoped; gating the mint is the only blast-radius lever, and it
-    # suffices — no board token exists on a dry run.
+    # Board token, scoped to org-Projects write, which bounds a leak to board edits. Minted only on a
+    # live, gate-cleared run: organization-projects:write is org-scoped, `repositories:` does not
+    # apply to it, so gating the mint is the only blast-radius lever and no board token exists on a
+    # dry run.
     - name: Mint board token
       id: board
       if: ${{ steps.plan.outputs.proceed == 'true' }}
@@ -489,16 +484,17 @@ runs:
         owner: ${{ inputs.org }}
         permission-organization-projects: write
 
-    # Generate the reverts, land the wave, reset the board — the MUTATIONS, gated on the live-run flag
-    # and running with the SCOPED write token. Rehydrates the reconstructed ledger from the plan step
-    # (the single source of truth the scoped token was minted for).
+    # Generate the reverts, land the wave and reset the board. Every mutation lives here, gated on the
+    # live-run flag and running with the scoped write token, on the ledger rehydrated from the plan
+    # step that the token was minted for.
     - name: Generate reverts, land + reset
       id: mutate
       if: ${{ steps.plan.outputs.proceed == 'true' }}
       shell: bash
       env:
-        # Default GH_TOKEN is the READ token (bare `gh` for any read); the write + board tokens are
-        # applied inline at the mutating call sites so a read can't hold a write scope.
+        # The default GH_TOKEN is the read token, which every bare-`gh` read picks up; the write and
+        # board tokens are applied inline at the mutating call sites, so a read never holds a write
+        # scope.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         WRITE_TOKEN: ${{ steps.write.outputs.token }}
         BOARD_TOKEN: ${{ steps.board.outputs.token }}
@@ -513,12 +509,12 @@ runs:
       run: |
         set -euo pipefail
 
-        # Rehydrate the reconstructed ledger from the plan step — the single source of truth, and
-        # exactly the repos the scoped write token was minted for. Recompute the derived sets the
-        # mutation uses (repos = owner/name for the per-repo loop; task_n = the total Task count).
-        # INVARIANT (no-partial-rollback scope guarantee): the mutation MUST derive its repo set only
-        # from THIS ledger — never re-search the epic:<N> set here. The write token was scoped to
-        # exactly these repos (+ planning), so a repo from a fresh query would 403 mid-wave.
+        # Rehydrate the reconstructed ledger from the plan step: it names exactly the repos the scoped
+        # write token was minted for. The derived sets the mutation uses are recomputed from it —
+        # repos as owner/name for the per-repo loop, task_n as the total Task count.
+        # The mutation derives its repo set from this ledger alone and never re-searches the epic:<N>
+        # set, since the write token covers only these repos plus planning and a repo from a fresh
+        # query would 403 mid-wave.
         ledger="$LEDGER"
         repos=$(printf '%s' "$ledger" | jq -r '[.[].repo] | unique | .[]')
         task_n=$(printf '%s' "$ledger" | jq -r '[.[].tasks[]] | unique | length')
@@ -546,10 +542,11 @@ runs:
         produced='[]'
         had_failure=false
 
-        # Emit a cleanup summary of the revert PRs already opened under #M — printed on any mid-loop
-        # abort (clone / push / label failure) so we never exit silently leaving orphaned reverts. Every
-        # listed PR is already a labeled epic:${M} member with NO auto-merge armed and NO approval, so
-        # the merge-gate holds them — nothing lands. The human closes them (+ #M) or finishes by hand.
+        # Emit a cleanup summary of the revert PRs already opened under #M, printed on any mid-loop
+        # abort (clone, push or label failure) so the run never exits silently leaving orphaned
+        # reverts. Every listed PR is a labeled epic:${M} member with no auto-merge armed and no
+        # approval, so the merge-gate holds them and nothing lands. The human closes them and #M, or
+        # finishes the rollback by hand.
         orphan_summary() {
           local n
           n=$(printf '%s' "$produced" | jq 'length')
@@ -564,11 +561,10 @@ runs:
           echo "- Rollback-Epic: ${ORG}/${PLANNING_REPO}#${M}" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
-        # ---- PASS 1a: per repo — clone base, integrity-assert, revert newest-first, push, open PR,
-        # then apply epic:<M> INLINE (fatal). Applying the label as we go means a mid-loop abort still
-        # leaves every produced PR a labeled member the gate holds. The outer loop runs on fd 3 (like
-        # detect-partial-landing) so an inner git/gh call can't consume its stdin; the inner revert loop
-        # runs on fd 5.
+        # ---- PASS 1a: per repo — clone base, integrity-assert, revert newest-first, push, open the
+        # PR, then apply epic:<M> inline, fatally on failure. Labeling as it goes means a mid-loop
+        # abort still leaves every produced PR a labeled member the gate holds. The outer loop runs on
+        # fd 3 so an inner git or gh call cannot consume its stdin; the inner revert loop runs on fd 5.
         while IFS= read -r repo <&3; do
           [ -n "$repo" ] || continue
           owner="${repo%%/*}"
@@ -579,9 +575,9 @@ runs:
           orig_list=$(printf '%s' "$rows" | jq -r '[.[] | "\(.repo)#\(.number)"] | join(", ")')
 
           dir=$(mktemp -d)
-          # Bot checkout (the pull-bot pattern, inlined per-repo since a composite action can't loop
-          # actions/checkout): full history so the squash commit + its parent are reachable. The token
-          # lives only in this throwaway clone's remote URL on the ephemeral runner.
+          # Bot checkout, inlined per repo because a composite action cannot loop actions/checkout.
+          # Full history keeps the squash commit and its parent reachable, and the token lives only in
+          # this throwaway clone's remote URL on the ephemeral runner.
           if ! git clone --quiet --branch "$base" \
             "https://x-access-token:${WRITE_TOKEN}@github.com/${owner}/${name}.git" "$dir" 2>/dev/null; then
             echo "::error::could not clone ${repo}@${base}." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -599,8 +595,8 @@ runs:
             [ -n "$pair" ] || continue
             r_sha=$(printf '%s' "$pair" | awk '{print $1}')
             r_pre=$(printf '%s' "$pair" | awk '{print $2}')
-            # Integrity: the squash commit's real parent must equal the ledger's pre-merge SHA, or the
-            # branch was rewritten / we identified the wrong landing — refuse to revert a wrong target.
+            # The squash commit's real parent has to equal the ledger's pre-merge SHA; otherwise the
+            # branch was rewritten or the wrong landing was identified, and the target is wrong.
             actual_parent=$(git -C "$dir" rev-parse "${r_sha}^" 2>/dev/null || echo "")
             if [ "$actual_parent" != "$r_pre" ]; then
               conflict=true
@@ -616,16 +612,16 @@ runs:
           done 5< <(printf '%s' "$rows" | jq -r '.[] | "\(.sha) \(.premerge)"')
 
           if [ "$conflict" = true ]; then
-            # Fail LOUD, never auto-resolve. Reset to a clean base tip and open an explicit DRAFT
-            # placeholder (an empty commit so GitHub accepts the PR) labeled epic:#M below — a
-            # not-ready member holds the ENTIRE wave, so no partial rollback is possible.
+            # Fail loudly, never auto-resolve. Reset to a clean base tip and open a draft placeholder
+            # on an empty commit, which GitHub needs to accept the PR, labeled epic:#M below: a
+            # not-ready member holds the entire wave, so no partial rollback is possible.
             echo "::error::${repo}: ${detail}" | tee -a "$GITHUB_STEP_SUMMARY"
             git -C "$dir" reset --hard "origin/${base}" >/dev/null 2>&1
             git -C "$dir" commit --allow-empty --quiet \
               -m "HELD rollback placeholder for epic:#${EPIC} (rollback #${M}) — DO NOT MERGE"
             if ! git -C "$dir" push --quiet -u origin "$branch" 2>/dev/null; then
-              # A branch ruleset may reject an empty commit (a required file-change / linear rule). Fall
-              # back to a one-file marker commit so the held draft still exists to hold the wave.
+              # A branch ruleset may reject an empty commit, so fall back to a one-file marker commit
+              # and the held draft still exists to hold the wave.
               echo "::warning::${repo}: held-placeholder empty commit rejected (ruleset?) — retrying with a ${MARKER} marker commit."
               git -C "$dir" reset --hard "origin/${base}" >/dev/null 2>&1
               printf 'HELD rollback placeholder for epic:#%s (rollback #%s) — DO NOT MERGE.\n\nThe automated revert for %s could not be produced:\n\n%s\n\nFinish by hand: reset to `%s`, `git revert --no-edit` %s newest-first, resolve conflicts, delete this file, push, mark the PR ready.\n' \
@@ -675,9 +671,9 @@ runs:
             --argjson draft "$draft" '$acc + [{repo:$repo, number:$num, draft:$draft}]')
           echo "${repo}: opened $([ "$draft" = true ] && echo 'DRAFT ' )revert PR #${pr_num} ($pr_url)." | tee -a "$GITHUB_STEP_SUMMARY"
 
-          # Apply epic:<M> INLINE, FATAL on failure — the epic:<M> membership is the load-bearing
-          # no-partial-rollback guarantee. epic:<N> labels are ad-hoc (not in the managed set), so create
-          # epic:<M> in the repo first (idempotent — ignore "already exists").
+          # Apply epic:<M> inline, fatally on failure: that membership is what guarantees no partial
+          # rollback. epic:<N> labels are ad-hoc rather than part of the managed set, so create
+          # epic:<M> in the repo first, ignoring an "already exists".
           GH_TOKEN="$WRITE_TOKEN" gh label create "epic:${M}" --repo "$repo" --color BFD4F2 \
             --description "Rollback epic #${M} (reverts epic:#${EPIC})" >/dev/null 2>&1 || true
           if ! GH_TOKEN="$WRITE_TOKEN" gh pr edit "$pr_num" --repo "$repo" --add-label "epic:${M}" >/dev/null 2>&1; then
@@ -687,10 +683,10 @@ runs:
           fi
         done 3< <(printf '%s\n' "$repos")
 
-        # ---- PASS 1b: HARD-VERIFY epic:<M> actually stuck on EVERY produced PR (re-read labels) ----
-        # `gh pr edit` returning 0 does not prove the label persisted (eventual consistency, or it was
-        # stripped). Re-read each PR's labels; a missing epic:<M> is FATAL — an unlabeled member escapes
-        # the wave and could land alone, exactly the partial rollback this design forbids.
+        # ---- PASS 1b: verify epic:<M> stuck on every produced PR by re-reading its labels ---------
+        # `gh pr edit` returning 0 does not prove the label persisted; it may lag or have been
+        # stripped. A missing epic:<M> is fatal, because an unlabeled member escapes the wave and
+        # could land alone.
         prod_count=$(printf '%s' "$produced" | jq 'length')
         for i in $(seq 0 $((prod_count - 1))); do
           repo=$(printf '%s' "$produced" | jq -r ".[$i].repo")
@@ -704,10 +700,10 @@ runs:
         done
         echo "All ${prod_count} revert PR(s) verified as epic:${M} members." | tee -a "$GITHUB_STEP_SUMMARY"
 
-        # ---- Surface the wave for a HUMAN to review + approve ----------------------------------
-        # The App AUTHORS these reverts and GitHub 422s approving your own PR, so it never self-approves.
-        # The merge-gate's APPROVED requirement PARKS the wave until a human approves. Publish the revert
-        # PR list into both the Epic body and the step summary so the human has one place to act on.
+        # ---- Surface the wave for a human to review and approve ---------------------------------
+        # The App authors these reverts and GitHub 422s approving your own PR, so it never
+        # self-approves, and the merge-gate's approval requirement parks the wave until a human acts.
+        # The revert PR list goes into both the Epic body and the step summary.
         pr_list=$(printf '%s' "$produced" | jq -r '.[] | "- \(.repo)#\(.number)\(if .draft then " — HELD draft (finish by hand first)" else "" end)"')
         approve_body=$(printf '%s\n\n---\n\n### Revert PRs awaiting human approval\nThe [Agent] App authored these reverts and GitHub forbids approving your own PR, so the merge-gate holds the whole wave until a human approves them. **Review and APPROVE each PR below** (and finish any HELD draft); once all are approved the gate greens and they land together in reverse.\n\n%s' \
           "$epic_body" "$pr_list")
@@ -721,10 +717,10 @@ runs:
           echo "- Rollback-Epic: ${ORG}/${PLANNING_REPO}#${M}"
         } | tee -a "$GITHUB_STEP_SUMMARY"
 
-        # ---- PASS 2: only NOW (full set labeled + verified) arm native auto-merge on each ready revert.
-        # Arming here — never earlier — closes the race where an early member is auto-merge-armed before
-        # the set is complete. Auto-merge PARKS: the APPROVED requirement is unmet until a human approves,
-        # so nothing lands yet. A HELD draft is left unarmed (it is the member that holds the wave).
+        # ---- PASS 2: with the full set labeled and verified, arm native auto-merge on each ready
+        # revert. Arming only here closes the race where an early member is armed before the set is
+        # complete. Auto-merge parks, since the approval requirement is unmet until a human approves,
+        # so nothing lands yet. A held draft is left unarmed, being the member that holds the wave.
         for i in $(seq 0 $((prod_count - 1))); do
           repo=$(printf '%s' "$produced" | jq -r ".[$i].repo")
           pr_num=$(printf '%s' "$produced" | jq -r ".[$i].number")
@@ -743,22 +739,22 @@ runs:
           if [ "$arm_ok" = true ]; then
             echo "${repo}#${pr_num}: auto-merge armed — PARKED pending human approval." | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            # An un-armed revert whose siblings ARE armed half-lands the rollback the moment the human
-            # approves (approved siblings auto-merge, this one does not). Fail the whole run loud so the
-            # operator arms it by hand BEFORE approving — atomicity over convenience.
+            # An un-armed revert whose siblings are armed half-lands the rollback the moment the human
+            # approves, since the armed siblings auto-merge and this one does not. Fail the whole run
+            # so the operator arms it by hand before approving.
             had_failure=true
             echo "::error::could not arm auto-merge on ${repo}#${pr_num} after retries — enable it by hand before approving the wave." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
         done
 
-        # ---- Board reset: walk each FORWARD PR's Tasks → Status "Ready" -------------------------
-        # A revert is a forward commit: the originals stay MERGED, so nothing walks the Tasks back on
-        # its own. Reset each rolled-back Task to "Ready" (the same column derive-status uses for an
-        # abandoned attempt). Mirrors board-write inline (a composite action can't loop it): resolve
-        # the field + option once, then add-if-missing + compare-before-write per Task.
+        # ---- Board reset: walk each forward PR's Tasks to Status "Ready" -------------------------
+        # A revert is a forward commit and the originals stay MERGED, so nothing walks the Tasks back
+        # on its own. Each rolled-back Task is reset to "Ready", the column derive-status uses for an
+        # abandoned attempt. board-write is mirrored inline, since a composite action cannot loop it:
+        # resolve the field and option once, then add-if-missing and compare-before-write per Task.
         #
-        # Scope (fix): SKIP any Task whose repo revert was HELD as a draft — it did not land, so marking
-        # it "Ready" would lie. A Task touched by ANY held repo is excluded until that draft finishes.
+        # A Task whose repo revert was held as a draft is skipped: that revert did not land, so
+        # marking it "Ready" would lie. Any Task touched by a held repo waits for that draft.
         held_repos=$(printf '%s' "$produced" | jq -c '[.[] | select(.draft==true) | .repo]')
         reset_task_ids=$(printf '%s' "$ledger" | jq -r --argjson held "$held_repos" '
           ( [ .[] | select(.repo as $r | $held | index($r)) | .tasks[] ] | unique ) as $blocked
@@ -806,8 +802,8 @@ runs:
             echo "board: Task ${content} already \"Ready\" — no-op." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
-          # INLINE the single-select option id into the mutation string (mirror board-write): passing it
-          # via -F would let gh coerce an all-digit option id to an integer and the mutation would reject
+          # Inline the single-select option id into the mutation string, as board-write does: passed
+          # via -F, gh would coerce an all-digit option id to an integer and the mutation would reject
           # it. board_ready_opt came from GitHub's own options list, so it is safe to interpolate.
           wm="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{projectId:\$proj,itemId:\$item,fieldId:\$field,value:{singleSelectOptionId:\"${board_ready_opt}\"}}){ projectV2Item{ id } } }"
           GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$wm" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$board_status_field" >/dev/null || return 1

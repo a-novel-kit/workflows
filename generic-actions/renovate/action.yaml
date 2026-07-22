@@ -29,29 +29,27 @@ runs:
         token: ${{ steps.app_token.outputs.token }}
         docker-network: ${{ job.container.network }}
       env:
-        # npm post upgrade tasks require the installation of private npm packages, which is
-        # not supported in postUpgradeTasks. This forces the renovate process to run full
-        # installation from the main process (which has access to the correct token), so
-        # all the node modules are available to the post upgrade tasks.
+        # postUpgradeTasks cannot install private npm packages. Running the full install from
+        # the main renovate process, which holds the right token, leaves every node module
+        # in place before those tasks run.
         RENOVATE_SKIP_INSTALLS: false
-        # Default to a tight pnpm allowlist (install / format / dedupe) so the postUpgradeTasks
-        # run without permitting arbitrary `pnpm exec` / `pnpm dlx`. The `( |$)` suffix matches
-        # the command followed by args OR on its own (e.g. bare `pnpm i`). Callers that pass an
-        # empty `allowed_commands` would otherwise silently skip the tasks, leaving unformatted
-        # pnpm-workspace.yaml and stale lockfiles. Callers can still override.
+        # A tight pnpm allowlist by default — install, format, dedupe — so postUpgradeTasks run
+        # without permitting arbitrary `pnpm exec` or `pnpm dlx`. The `( |$)` suffix matches the
+        # command with arguments or on its own, such as a bare `pnpm i`. The default also covers
+        # a caller passing an empty `allowed_commands`, which would skip the tasks and leave an
+        # unformatted pnpm-workspace.yaml and stale lockfiles. Callers can still override it.
         RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands || '["^pnpm (install|i|format|dedupe)( |$)"]' }}
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
         RENOVATE_PR_HOURLY_LIMIT: 0
         LOG_LEVEL: debug
         RENOVATE_SECRETS: '{"GITHUB_TOKEN": "${{ inputs.github_token }}"}'
-        # Fetch public deps through the CDN-backed module proxy (reliable, cached) and
-        # fall back to direct only when the proxy can't serve a version. Plain "direct"
-        # made `go mod tidy` resolve every dependency from origin, which intermittently
-        # failed on vanity-import hosts (e.g. gonum.org reset the connection mid-fetch),
-        # aborting the tidy and leaving go.sum un-regenerated after a go.mod bump.
-        # GOPRIVATE keeps our own a-novel / a-novel-kit modules off the proxy and sumdb,
-        # so freshly tagged internal versions are fetched straight from GitHub without
-        # waiting for proxy.golang.org to index them.
+        # Fetch public dependencies through the CDN-backed module proxy, falling back to
+        # direct only when the proxy cannot serve a version. Resolving every dependency from
+        # origin makes `go mod tidy` fail intermittently on vanity-import hosts — gonum.org
+        # resets the connection mid-fetch — which aborts the tidy and leaves go.sum
+        # un-regenerated after a go.mod bump. GOPRIVATE keeps the a-novel and a-novel-kit
+        # modules off the proxy and sumdb, so a freshly tagged internal version is fetched
+        # straight from GitHub without waiting for proxy.golang.org to index it.
         RENOVATE_CUSTOM_ENV_VARIABLES: |
           {
             "GITHUB_TOKEN": "'{{ secrets.GITHUB_TOKEN }}'",

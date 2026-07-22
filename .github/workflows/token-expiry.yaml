@@ -1,17 +1,16 @@
-# Reusable daily fine-grained-PAT expiry watcher for a WHOLE org. Runs every day, but only PINGS the
-# dedicated Discord channel (TOKEN_EXPIRY_WEBHOOK) when a token hits a milestone in the PING POLICY
-# below — so quiet days stay silent. Each ping @mentions a single configured admin (default_mention)
-# who triages; the token's OWNER login is shown in the message. Per-owner pinging is deferred to the
-# Bitwarden resolver (a-novel-kit/.github#101, resolver #104) — wire it where `did` is resolved below.
-# Per-org caller pattern, like watchdog: the caller owns schedule + concurrency; this owns
-# enumeration + the policy + the pings.
+# Reusable daily fine-grained-PAT expiry watcher for a whole org. It runs every day but pings the
+# dedicated Discord channel only when a token crosses a milestone in the ping policy below, so quiet
+# days stay silent. Each ping @mentions one configured admin, who triages, and shows the token owner's
+# login in the message. Per-owner pinging waits on the Bitwarden resolver; wire it where `did` is
+# resolved below. The caller owns the schedule and concurrency, as it does for watchdog, while this
+# owns the enumeration, the policy and the pings.
 #
-# TEST RUN: fire the caller from the UI with test_run=true to post for EVERY PAT regardless of the
-# policy (still admin-only, still for real) — a safe end-to-end drill of the channel + formatting.
+# Firing the caller from the UI with test_run=true posts for every PAT regardless of the policy,
+# still admin-only and still for real: an end-to-end drill of the channel and the formatting.
 #
-# It reads ONLY metadata via the org PAT endpoint (the App token carries
-# organization_personal_access_tokens: READ) — owner login, name, expiry, access-granted date. It
-# never holds a token value: unlike a header-based check it can't leak a credential.
+# It reads metadata alone through the org PAT endpoint, on an App token carrying
+# organization_personal_access_tokens read: owner login, name, expiry, access-granted date. It never
+# holds a token value, so unlike a header-based check it cannot leak a credential.
 name: token-expiry
 
 on:
@@ -75,17 +74,18 @@ jobs:
           set -euo pipefail
           now=$(date -u +%s)
 
-          # ── PING POLICY — edit here ─────────────────────────────────────────────────────────────
-          # Ping ONCE as %-of-lifetime-remaining crosses BELOW each milestone (stateless: fired iff
-          # yesterday's % was above and today's is at/below it), AND every day within
-          # FINAL_STRETCH_DAYS of expiry (an already-expired token counts as within the stretch).
-          # Lifetime is derived as (expires_at − access_granted_at): EXACT for the final-stretch rule,
-          # APPROXIMATE for the % milestones (a token re-approval resets access_granted_at). A token
-          # with no derivable lifetime still gets the final-stretch pings.
+          # ── Ping policy — edit here ─────────────────────────────────────────────────────────────
+          # Ping once as the percentage of lifetime remaining crosses below each milestone. The rule
+          # is stateless: it fires when yesterday's percentage was above the milestone and today's is
+          # at or below it. It also pings every day within FINAL_STRETCH_DAYS of expiry, counting an
+          # already-expired token as inside the stretch. Lifetime is derived as expires_at minus
+          # access_granted_at, which is exact for the final-stretch rule and approximate for the
+          # percentage milestones, since a token re-approval resets access_granted_at. A token with no
+          # derivable lifetime still gets the final-stretch pings.
           LIFETIME_MILESTONES="50 30 10"
           FINAL_STRETCH_DAYS=7
           # ────────────────────────────────────────────────────────────────────────────────────────
-          # Returns a human ping reason (→ ping) or nothing (→ stay silent). $1 days-left, $2 lifetime-days.
+          # Prints a human ping reason, or nothing to stay silent. $1 days-left, $2 lifetime-days.
           ping_reason() {
             local days="$1" life="$2" m pct pct_yst
             if [ "$days" -le "$FINAL_STRETCH_DAYS" ]; then
@@ -104,12 +104,12 @@ jobs:
             return 1
           }
 
-          # A test run posts for EVERY token, for real (overrides dry_run).
+          # A test run posts for every token, for real, overriding dry_run.
           TEST_RUN=$(printf '%s' "${TEST_RUN:-false}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
           [ "$TEST_RUN" = "true" ] || TEST_RUN=false
           [ "$TEST_RUN" = "true" ] && DRY_RUN=false
 
-          # Post one Discord payload with a small retry + timeouts. $1 = JSON payload.
+          # Post one Discord payload with a small retry and explicit timeouts. $1 = JSON payload.
           post_discord() {
             local payload="$1" max=3 code=000 attempt
             for attempt in $(seq 1 "$max"); do
@@ -123,8 +123,8 @@ jobs:
             return 1
           }
 
-          # Every fine-grained PAT with org access + its expiry/grant metadata. Fail LOUD (not to [])
-          # so a read error can't masquerade as "nothing to ping".
+          # Every fine-grained PAT with org access, plus its expiry and grant metadata. A read error
+          # fails loudly rather than yielding an empty list, which would read as nothing to ping.
           if ! pats=$(gh api "/orgs/${ORG}/personal-access-tokens" --paginate 2>"$RUNNER_TEMP/pat.err"); then
             echo "::error::could not list PATs for ${ORG} ($(tr '\n' ' ' < "$RUNNER_TEMP/pat.err")). A 404 means the App lacks organization_personal_access_tokens:read on this org."
             exit 1
@@ -151,7 +151,7 @@ jobs:
             [ -n "${name:-}" ] || continue
             total=$((total + 1))
 
-            # Days remaining (expired → -1; a parsed past date clamps to 0).
+            # Days remaining; an expired token gives -1, and a parsed past date clamps to 0.
             exp_ts=0
             if [ "$expired" = "true" ]; then
               days=-1
@@ -163,7 +163,7 @@ jobs:
               echo "  - ${name} (${login}): no expiry metadata — skipped" >> "$GITHUB_STEP_SUMMARY"; continue
             fi
 
-            # Lifetime (days) from access_granted_at → expires_at; 0 when not derivable.
+            # Lifetime in days, from access_granted_at to expires_at, or 0 when not derivable.
             life=0
             if [ "$expired" != "true" ] && [ -n "$granted" ] && [ "$exp_ts" -gt 0 ]; then
               g_ts=$(date -u -d "$granted" +%s 2>/dev/null || echo 0)
@@ -172,37 +172,37 @@ jobs:
 
             status=$([ "$expired" = "true" ] && echo "EXPIRED" || echo "${days}d left")
             reason=$(ping_reason "$days" "$life" || true)
-            # A test run pings EVERY token (bypasses the policy) so we can validate the REAL message
-            # rendering — so it still needs a reason when no milestone fired: fall back to the token's
-            # status. Everything below is otherwise IDENTICAL to a genuine ping (same content, embed,
-            # color, reason format); only the recipient differs (admin, since we can't ping owners in a
-            # drill). The 🧪 markers live in the run summary only, never in the delivered message.
+            # A test run pings every token, bypassing the policy, to validate the real message
+            # rendering, so it still needs a reason when no milestone fired and falls back to the
+            # token's status. Everything below is identical to a genuine ping — same content, embed,
+            # color and reason format — and only the recipient differs, being the admin rather than
+            # the owner. The 🧪 markers live in the run summary, never in the delivered message.
             if [ "$TEST_RUN" = "true" ] && [ -z "$reason" ]; then reason="$status"; fi
             if [ -z "$reason" ]; then
               echo "  - ${name} (${login}): ${status} — no ping today" >> "$GITHUB_STEP_SUMMARY"; continue
             fi
             echo "  - ${name} (${login}): ${status} — PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
 
-            # ── "Our shape" — single source of truth is generic-actions/token-expiry-notify ────────
-            # The whole message is ONE embed description (no title field): a heading with days-left, a
-            # `-#` grey subtext, a blank line, then the masked regen link. Adapted for the org-wide
-            # sweep: the owner login is shown in the subtext (the owner isn't the runner), and a single
-            # admin is @mentioned via `content` — Discord only fires a notification on a content
-            # mention, never one inside an embed.
+            # ── Message shape, following generic-actions/token-expiry-notify ────────────────────
+            # The whole message is one embed description with no title field: a heading with the days
+            # left, a `-#` grey subtext, a blank line, then the masked regen link. The org-wide sweep
+            # adds the owner login to the subtext, since the owner is not the runner, and @mentions
+            # one admin through `content` — Discord fires a notification only on a content mention,
+            # never on one inside an embed.
             hdays=$([ "$days" -lt 0 ] && echo 0 || echo "$days")   # heading never shows a negative
             pctline=""
             if [ "$life" -gt 0 ]; then
               pct=$(( days * 100 / life )); [ "$pct" -gt 100 ] && pct=100; pctline=" | ${pct}% left"
             fi
-            # Color by absolute days remaining: green >30, yellow >14, orange >7, red ≤7 / expired.
+            # Color by absolute days remaining: green >30, yellow >14, orange >7, red ≤7 or expired.
             if [ "$expired" = "true" ] || [ "$days" -le 7 ]; then color=15158332
             elif [ "$days" -le 14 ]; then color=15105570
             elif [ "$days" -le 30 ]; then color=15844367
             else color=3066993; fi
-            # Scope + permissions come from the live per-token API data (not hardcoded), then the same
-            # regen recipe as the original notify-action message: masked link, owner/scope/permissions,
-            # and the `gh secret set` block. SECRET_NAME is a fill-in — the org PAT API exposes the
-            # token's own name, not the Actions-secret name it may be stored under.
+            # Scope and permissions come from the live per-token API data, followed by the same regen
+            # recipe the notify action's message uses: masked link, owner, scope, permissions and the
+            # `gh secret set` block. SECRET_NAME is a fill-in, since the org PAT API exposes the
+            # token's own name rather than the Actions-secret name it may be stored under.
             case "$repo_sel" in
               all)      scope="All repositories" ;;
               selected) scope="Selected repositories" ;;
@@ -220,9 +220,9 @@ jobs:
             desc=$(printf '%s' "$desc" | head -c 3900)
             desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc")
 
-            # The admin @mention lives in `content` (fail-soft: no admin → post the embed WITHOUT a
-            # ping, which then matches the notify action's own payload exactly). users:[id] allows ONLY
-            # that one admin; parse:[] blocks @everyone/@here/roles.
+            # The admin @mention lives in `content`, fail-soft: with no admin configured the embed
+            # posts unpinged, matching the notify action's own payload. users:[id] allows that one
+            # admin alone, and parse:[] blocks @everyone, @here and roles.
             did="${DEFAULT_MENTION:-}"; target=admin
             if [ -n "$did" ]; then
               echo "::add-mask::$did"   # defensive: keep the admin id out of logs

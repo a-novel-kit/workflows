@@ -21,18 +21,18 @@ runs:
         AUTHOR: ${{ github.event.pull_request.user.login }}
         AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
       run: |
-        # Pick the assignee. A human author owns their own PR. A bot/app author
-        # (Renovate, Dependabot) can't be assigned — GitHub rejects assigning an
-        # agent with an App installation token (HTTP 403) — so fall back to the
-        # repo's code owner, so dependency PRs still land in a human's queue.
-        # Assignees don't gate merge, so this never blocks the bot's auto-merge.
+        # Pick the assignee. A human author owns their own PR. A bot or app author
+        # such as Renovate cannot be assigned, since GitHub rejects assigning an
+        # agent with an App installation token (HTTP 403), so the repo's code owner
+        # takes it and dependency PRs still land in a human's queue. Assignees do
+        # not gate merge, so this never blocks the bot's auto-merge.
         if [ "$AUTHOR_TYPE" != "Bot" ]; then
           assignees="$AUTHOR"
         else
-          # Resolve the catch-all (*) owners from CODEOWNERS, read via the API
+          # Resolve the catch-all (*) owners from CODEOWNERS, read through the API
           # since this workflow has no checkout. GitHub's precedence is
           # .github/ > root > docs/, and the last matching rule wins. Only @user
-          # owners can be assignees (a @org/team can't), so keep those and drop @.
+          # owners can be assignees, so a @org/team entry is dropped.
           assignees=""
           for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
             content=$(gh api "repos/$REPO/contents/$path" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null) || true

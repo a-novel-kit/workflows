@@ -1,9 +1,8 @@
 name: release
 
-# Releases are cut from the GitHub UI (Actions ▸ release ▸ pick a type ▸ Run),
-# not from a developer's terminal. workflow_call exposes the same inputs so an
-# agent can drive an identical release headlessly later. The protected `release`
-# environment is the "who can publish" gate (configure its required reviewers).
+# Releases are cut from the GitHub UI: Actions ▸ release ▸ pick a type ▸ Run. workflow_call exposes
+# the same inputs, so an agent can drive an identical release headlessly. The protected `release`
+# environment is the "who can publish" gate, through its required reviewers.
 on:
   workflow_dispatch:
     inputs:
@@ -32,12 +31,11 @@ on:
 
 run-name: "🚀 release ${{ inputs.release_type }}${{ inputs.dry_run && ' (dry-run)' || '' }}"
 
-# No concurrency lock, on purpose. If two releases are triggered at once both
-# compute the same next tag; the first push wins and the second is rejected
-# (non-fast-forward / tag already exists) and fails in the release job below,
-# before any build job runs — so accidental double-triggers can't double-release.
-# A concurrency *queue* would instead serialize them and let the second cut a
-# second release. The protected `release` environment is the human gate on top.
+# There is no concurrency lock. Two releases triggered at once compute the same next tag: the first
+# push wins and the second is rejected as non-fast-forward, failing in the release job below before
+# any build job runs, so an accidental double-trigger cannot double-release. A concurrency queue
+# would serialize them instead and let the second cut a second release. The protected `release`
+# environment is the human gate on top.
 
 jobs:
   release:
@@ -49,8 +47,8 @@ jobs:
       version: ${{ steps.core.outputs.version }}
       tag: ${{ steps.core.outputs.tag }}
     steps:
-      # Initial checkout makes the local ./publish-actions/* actions available;
-      # release-core re-checks-out with the bot token to push.
+      # This checkout makes the local ./publish-actions/* actions available; release-core
+      # re-checks-out with the bot token to push.
       - uses: actions/checkout@v7
       - id: core
         uses: ./publish-actions/release-core
@@ -59,8 +57,8 @@ jobs:
           dry_run: ${{ inputs.dry_run }}
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
-      # Everything on master just shipped — clear this repo's awaiting-release
-      # items off the board. Skipped on a dry run (nothing was released).
+      # Everything on master has now shipped, so clear this repo's awaiting-release items off the
+      # board. Skipped on a dry run, where nothing was released.
       - if: ${{ !inputs.dry_run }}
         uses: ./generic-actions/archive-board-items
         with:
@@ -68,7 +66,6 @@ jobs:
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
           project_id: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
 
-      # Surface the cut version in the run summary so a release run is
-      # identifiable by version at a glance (run-name carries only the bump type).
+      # Surface the cut version in the run summary, since the run name carries only the bump type.
       - if: ${{ !inputs.dry_run }}
         run: echo "## 🚀 Released \`${{ steps.core.outputs.tag }}\` (${{ inputs.release_type }})" >> "$GITHUB_STEP_SUMMARY"

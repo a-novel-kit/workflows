@@ -1,18 +1,18 @@
-# Reusable board reconcile sweep — the fail-safe that repairs board state the
-# event-driven automation can miss. Each org's `.github` repo calls this on a schedule
-# with a thin caller, so the sweep logic lives in ONE place. Five passes:
+# Reusable board reconcile sweep: the fail-safe that repairs board state the event-driven
+# automation can miss. Each org's `.github` repo calls this on a schedule through a thin caller, so
+# the sweep logic lives in one place. Five passes:
 #   - rollup:   roll each epic's Status + Start date up from its children (read-only by default).
 #   - rederive: re-derive every open Task PR's board Status, catching dropped derive events.
 #   - regate:   re-post merge-gate on every open epic-member PR, since a sibling changing
 #               in another repo emits no event to it.
-#   - detect:   re-derive every active Epic's partial-landing state org-wide and post epic-freeze
-#               (the SWEEP half of the detector) — the level-triggered floor + standalone backstop.
+#   - detect:   re-derive every active Epic's partial-landing state org-wide and post epic-freeze,
+#               the sweep half of the detector: a level-triggered floor and standalone backstop.
 #   - render:   rewrite each active Epic's display-only status read-model into its issue body,
-#               derived from live truth. Never authority — no board write, no check-run; a lost or
-#               hand-edited table is cosmetic.
-# The per-PR passes matrix over the org's open PRs (enumerated first, paginated) and call
-# the generic-actions cross-repo via their repo inputs. All board mutations still go through
-# the single-writer actions. The `when` (cron / concurrency) lives in the caller.
+#               derived from live truth. It is not authority: no board write, no check-run, and a
+#               lost or hand-edited table is cosmetic.
+# The per-PR passes matrix over the org's open PRs, enumerated and paginated first, and call the
+# generic-actions cross-repo through their repo inputs. Every board mutation still goes through the
+# single-writer actions. The schedule and concurrency live in the caller.
 name: reconcile-board
 
 on:
@@ -62,8 +62,8 @@ on:
 
 jobs:
   rollup:
-    # Run AFTER rederive so epics aggregate fresh Task statuses, not stale ones — but
-    # still run when rederive is skipped (no task PRs) or failed; only a cancel stops it.
+    # Run after rederive, so Epics aggregate fresh Task statuses, but still run when rederive was
+    # skipped for want of Task PRs or failed; only a cancel stops it.
     needs: rederive
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -75,18 +75,17 @@ jobs:
           app_private_key: ${{ secrets.private_key }}
           project_id: ${{ inputs.project_id }}
           dry_run: ${{ inputs.rollup_dry_run }}
-          # Org-level HALT: the org variable, read from the reusable workflow's `vars` context
-          # (org variables are available to reusable workflows) and threaded into every action here
-          # (a composite action can't read `vars` itself). FAIL-SAFE semantics live in the actions:
-          # each is RUNNING only for an explicit off-token (empty/unset, 0, off, false, no, disabled)
-          # and ENGAGES for anything else — so an unset variable runs, and a fat-fingered value halts.
-          # Engaged → this writer no-ops.
+          # Org-level halt. The org variable is read from this reusable workflow's `vars` context and
+          # threaded into every action here, since a composite action cannot read `vars` itself. The
+          # fail-safe semantics live in the actions: each runs only for an explicit off-token
+          # (empty/unset, 0, off, false, no, disabled) and halts on anything else, so an unset
+          # variable runs and a mistyped one stops the automation. When engaged this writer no-ops.
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
-  # Clear terminal META work off the board: archive + close every org-wide "Applied" item (a resolved
-  # escalation ticket, a completed meta task). Per-repo "Awaiting release" archival happens on each
-  # repo's publish (release.yaml → archive-board-items); this sweep handles the Applied items that no
-  # release ever ships. Independent of the rollup pass, so it flips live on its own schedule.
+  # Clear terminal meta work off the board: archive and close every org-wide "Applied" item, such as
+  # a resolved escalation ticket. Per-repo "Awaiting release" archival happens on each repo's publish,
+  # through release.yaml and archive-board-items; this sweep handles the Applied items no release ever
+  # ships. It is independent of the rollup pass and goes live on its own schedule.
   archive:
     runs-on: ubuntu-latest
     permissions: {}
@@ -100,9 +99,9 @@ jobs:
           repo: "*"
           close: "true"
           dry_run: ${{ inputs.archive_dry_run }}
-      # Rule-4 complement: archive every board item whose ISSUE is CLOSED (org-wide) — done leaf
-      # planning issues in non-publishing .github never get archived by a publish otherwise, so this
-      # keeps closed ⟺ archived true on the board. Idempotent with the Applied pass above.
+      # Archive every board item whose issue is closed, org-wide. A done leaf planning issue in the
+      # non-publishing .github repo is never archived by a publish, so this keeps closed and archived
+      # equivalent on the board. Idempotent alongside the Applied pass above.
       - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.20.2
         with:
           client_id: ${{ inputs.client_id }}
@@ -112,7 +111,7 @@ jobs:
           repo: "*"
           dry_run: ${{ inputs.archive_dry_run }}
 
-  # Enumerate ALL the org's open PRs (paginated) → matrices for the two per-PR passes.
+  # Enumerate every open PR in the org, paginated, into matrices for the two per-PR passes.
   enumerate:
     runs-on: ubuntu-latest
     permissions: {}
@@ -140,7 +139,7 @@ jobs:
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number headRefOid repository{ name }
               closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } } }'
-          # Page every open PR — a fail-safe must not stop at the first 100.
+          # Page every open PR: a fail-safe cannot stop at the first 100.
           nodes='[]'
           cursor=""
           while :; do
@@ -151,8 +150,8 @@ jobs:
             [ "$(echo "$page" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
             cursor=$(echo "$page" | jq -r '.data.search.pageInfo.endCursor')
           done
-          # tasks    = open PRs that close an issue → re-derive their Status.
-          # epic_prs = those where ANY closing issue has a parent epic → re-post merge-gate.
+          # tasks holds the open PRs that close an issue, whose Status is re-derived.
+          # epic_prs holds those whose closing issue has a parent Epic, which get merge-gate re-posted.
           tasks=$(echo "$nodes" | jq -c '[.[]
             | select(.number and (.closingIssuesReferences.nodes | length > 0))
             | {repo: .repository.name, number, sha: .headRefOid}]')
@@ -164,7 +163,7 @@ jobs:
             echo "epic_prs=$epic_prs"
           } >> "$GITHUB_OUTPUT"
 
-  # Drift fail-safe: re-derive each open Task PR's Status (catches dropped derive events).
+  # Drift fail-safe: re-derive each open Task PR's Status, catching dropped derive events.
   rederive:
     needs: enumerate
     if: ${{ needs.enumerate.outputs.tasks != '[]' }}
@@ -182,7 +181,7 @@ jobs:
           client-id: ${{ inputs.client_id }}
           private-key: ${{ secrets.private_key }}
           owner: ${{ github.repository_owner }}
-          # This run only reads one PR — scope the token to that repo, not the org.
+          # This run reads one PR, so the token is scoped to that repo.
           repositories: ${{ matrix.pr.repo }}
           permission-contents: read
           permission-issues: read
@@ -195,12 +194,12 @@ jobs:
           repo: ${{ matrix.pr.repo }}
           pull_request_number: ${{ matrix.pr.number }}
           github_token: ${{ steps.token.outputs.token }}
-          # Org-level HALT: engaged → this writer no-ops (no re-derive, no board write).
+          # Org-level halt: when engaged this writer no-ops, with no re-derive and no board write.
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
-  # Staleness fail-safe: re-post merge-gate on each open epic-member PR — a sibling
-  # changing in another repo emits no event to it. merge-gate mints its own org-wide
-  # token (it walks siblings across repos), so no token is scoped here.
+  # Staleness fail-safe: re-post merge-gate on each open Epic-member PR, since a sibling changing in
+  # another repo emits no event to it. merge-gate walks siblings across repos and mints its own
+  # org-wide token, so nothing is scoped here.
   regate:
     needs: enumerate
     if: ${{ needs.enumerate.outputs.epic_prs != '[]' }}
@@ -218,15 +217,16 @@ jobs:
           repo: ${{ matrix.pr.repo }}
           pull_request_number: ${{ matrix.pr.number }}
           head_sha: ${{ matrix.pr.sha }}
-          # Org-level HALT: engaged → merge-gate HOLDs (posts failure) this idle PR too, so a PR that
-          # emits no event while halted is still stopped. A gate must post failure, never skip.
+          # Org-level halt: when engaged merge-gate holds this idle PR too by posting failure, so a
+          # PR that emits no event while halted is still stopped. A gate posts failure; skipping would
+          # leave a neutral check that passes.
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
-  # Partial-landing fail-safe: the SWEEP half of the epic-freeze detector. A single whole-org
-  # invocation — it self-enumerates every active Epic and every open head, so it needs no
-  # matrix and no `needs`. SWEEP mode (no pull_request_number; the event is schedule/dispatch).
-  # It mints its own org-wide tokens (read + checks +, sweep-only, a write token for grace-bounded
-  # roll-forward), so no token/permission is scoped here. dry_run threads from the caller.
+  # Partial-landing fail-safe: the sweep half of the epic-freeze detector. One whole-org invocation
+  # self-enumerates every active Epic and every open head, so it needs no matrix and no `needs`. It
+  # runs in sweep mode, with no pull_request_number, on a schedule or dispatch event. It mints its own
+  # org-wide read and checks tokens, plus a sweep-only write token for the grace-bounded
+  # roll-forward, so nothing is scoped here. dry_run threads from the caller.
   detect:
     runs-on: ubuntu-latest
     permissions: {}
@@ -236,16 +236,16 @@ jobs:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.detect_dry_run }}
-          # Org-level HALT (FAIL-SAFE, see the rollup job): engaged → the sweep skips all work
-          # (merge-gate HOLDs every PR via regate). The BLAST-CAP (max_freeze_repos) keeps its action
-          # default of 5 — an over-wide Epic is frozen ANYWAY (fail-safe) and merely flags the sweep RED.
+          # Org-level halt, fail-safe as in the rollup job: when engaged the sweep skips all work,
+          # while regate has merge-gate holding every PR. max_freeze_repos keeps its action default of
+          # 5; an over-wide Epic is frozen anyway and only flags the sweep red.
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
-  # Display-only read-model: rewrite each active Epic's derived status table into its issue body. A
-  # single whole-org invocation — it self-enumerates active Epics and their siblings, so it needs no
-  # matrix and no `needs`. It is NOT authority (no board write, no check-run; a lost table is
-  # cosmetic), so it mints its own org-wide token and never fails the sweep. dry_run threads from the
-  # caller, independent of the other passes.
+  # Display-only read-model: rewrite each active Epic's derived status table into its issue body. One
+  # whole-org invocation self-enumerates active Epics and their siblings, so it needs no matrix and no
+  # `needs`. It is not authority — no board write, no check-run, and a lost table is cosmetic — so it
+  # mints its own org-wide token and never fails the sweep. dry_run threads from the caller,
+  # independent of the other passes.
   render:
     runs-on: ubuntu-latest
     permissions: {}
@@ -255,5 +255,5 @@ jobs:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.render_dry_run }}
-          # Org-level HALT: engaged → this display-only writer no-ops (no Epic-body edits).
+          # Org-level halt: when engaged this display-only writer no-ops, editing no Epic body.
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
