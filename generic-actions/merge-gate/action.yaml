@@ -599,7 +599,6 @@ runs:
           local regionf="$1" bodyf outf attempt body marker err rc=1
           bodyf=$(mktemp); outf=$(mktemp)
           for attempt in 1 2 3; do
-            err=""   # or a later give-up reports an earlier attempt's error
             # Re-read every attempt, the first included.
             if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
               # Record it: a read failure has no diagnostic of its own, and clearing `err` each attempt

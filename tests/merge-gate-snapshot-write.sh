@@ -9,11 +9,19 @@
 # issue body from a job that does not wait for it — so writers overlap by design, against an API with
 # no conditional update.
 #
-# The subtle half is not the write, it is the DECISION. `$do` and `$payload` are computed from a body
-# read before the loop; a writer that re-reads but does not re-derive will freeze a member set the
-# world has already moved past, and a retry loop makes it win. Several cases below exist only to pin
-# that: a writer must abandon rather than make a stale freeze permanent.
+# The subtle half is not the write, it is what the write DOES WITH a decision made earlier. `$do` and
+# `$payload` are computed from a body read before the loop; a writer that re-reads but does not
+# re-derive will freeze a member set the world has already moved past, and a retry loop makes it win.
+# Several cases below exist only to pin that.
+#
+# Scope: this drives `write_marker` and its helpers. The decision step that PRODUCES `$do`/`$payload`
+# (the `do=` jq, and the MEMBERS normalization above it) is not extracted and is not covered here —
+# the fixtures set those as inputs. Their reachable range was checked by hand against that jq; adding
+# a decision-step suite is the obvious next increment.
 set -euo pipefail
+
+TOP_PID=$$
+die() { echo "::error::$1" >&2; kill -s TERM "$TOP_PID"; exit 1; }
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ACTION="${1:-$ROOT/generic-actions/merge-gate/action.yaml}"
@@ -45,8 +53,19 @@ export ORG=a-novel-kit PLANNING_REPO=.github EPIC=900
 export STABILIZE_SECONDS=120
 now=2026-07-22T10:00:00Z
 export GITHUB_STEP_SUMMARY="$WORK/summary.md"
-START='<!-- epic-membership:snapshot:start -->'
-END='<!-- epic-membership:snapshot:end -->'
+# Fences and region layout, read OUT OF THE MANIFEST. The fence literal is shared by merge-gate,
+# epic-membership and detect-partial-landing, so a restated copy here could not see the writer drift
+# away from both readers; and the ORDER inside the region matters — put the payload above the note
+# and `current_marker` reads every marker as absent.
+START=$(sed -n "s/^ *START='\(.*\)'\$/\1/p" "$ACTION" | head -1)
+END=$(sed -n "s/^ *END='\(.*\)'\$/\1/p" "$ACTION" | head -1)
+[ -n "$START" ] && [ -n "$END" ] || die "could not read the fence literals from $ACTION"
+REGION_BLOCK=$(awk '
+  /^        \{$/ { buf=""; inb=1; next }
+  inb && /^        \} > "\$regionf"$/ { printf "%s", buf; exit }
+  inb { buf = buf $0 "\n" }
+' "$ACTION")
+[ -n "$REGION_BLOCK" ] || die "could not read the region block from $ACTION"
 sleep() { :; }
 
 # ---- the stubbed body store ---------------------------------------------------------------
@@ -59,8 +78,14 @@ gh() {
   case "$*" in
     *"issues/${EPIC}"*)
       # File-backed: reads run inside $( ), so a shell-variable countdown would never reach the parent.
+      printf 'r' >> "$WORK/reads"
       if [ "$(< "$WORK/read_fails")" -gt 0 ]; then
         printf '%s' "$(($(< "$WORK/read_fails") - 1))" > "$WORK/read_fails"
+        return 1
+      fi
+      # Fail every read from the Nth onward — lets a read failure follow an edit failure, which is
+      # the only order in which the per-attempt `err` reset is observable.
+      if [ -s "$WORK/read_fail_from" ] && [ "$(wc -c < "$WORK/reads")" -ge "$(< "$WORK/read_fail_from")" ]; then
         return 1
       fi
       # GitHub stores bodies with CRLF. Serving LF would leave every `tr -d '\r'` in the action
@@ -86,11 +111,16 @@ gh() {
   esac
 }
 
-M1='[{"repo":"a-novel-kit/repo-a","number":1}]'
-M2='[{"repo":"a-novel-kit/repo-a","number":1},{"repo":"a-novel-kit/repo-b","number":2}]'
+# repo-a carries the HIGHER number on purpose: sorting by repo and sorting by number then give
+# different answers, so a guard using the wrong key is observable.
+M1='[{"repo":"a-novel-kit/repo-a","number":5}]'
+M2='[{"repo":"a-novel-kit/repo-a","number":5},{"repo":"a-novel-kit/repo-b","number":2}]'
 # Same size as M2, different members: without this, every "members differ" case also differs in
 # COUNT, and comparing lengths would be indistinguishable from comparing sets.
-M2B='[{"repo":"a-novel-kit/repo-a","number":1},{"repo":"a-novel-kit/repo-c","number":3}]'
+M2B='[{"repo":"a-novel-kit/repo-a","number":5},{"repo":"a-novel-kit/repo-c","number":3}]'
+# Two members in ONE repo, numbers out of input order: sorting by repo alone is stable and leaves them
+# as given, so only the composite (repo, number) key produces the canonical order.
+M2S='[{"repo":"a-novel-kit/repo-a","number":2},{"repo":"a-novel-kit/repo-a","number":9}]'
 
 pending_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --argjson m "$1" '{status:"pending", at:$at, members:$m}'; }
 frozen_json() { jq -cn --argjson m "$1" '{status:"frozen", members:$m}'; }
@@ -103,12 +133,17 @@ note_of() { # frozen|pending
   [ "$1" = frozen ] || key=PENDING
   sed -n "s/^ *note=\"\(_Epic membership, $key.*\)\"$/\1/p" "$ACTION" | head -1
 }
-region_file() { # $1 = payload json, $2 = frozen|pending -> the region exactly as the action builds it
-  local f note
+region_file() { # $1 = payload json, $2 = frozen|pending -> the region the action itself would build
+  local f note payload regionf
   note=$(note_of "${2:-pending}")
-  [ -n "$note" ] || { echo "::error::could not read the note text from $ACTION"; exit 1; }
-  f=$(mktemp -p "$WORK")
-  { echo "$START"; printf '%s\n' "$note"; printf '%s\n' "$1"; echo "$END"; } > "$f"
+  [ -n "$note" ] || die "could not read the note text from $ACTION"
+  payload="$1"
+  f=$(mktemp -p "$WORK"); regionf="$f"
+  # Run the manifest's own assembly rather than a copy of it.
+  # `$( )` strips the trailing newline, so the closing brace needs its own separator or bash
+  # reads it as an argument to the last command.
+  eval "{ $REGION_BLOCK
+} > \"\$regionf\""
   printf '%s' "$f"
 }
 server_body() { # $1 = marker json, or empty for a body with no marker
@@ -132,13 +167,26 @@ eq() { [ "$2" = "$3" ] && ok "$1" || ko "$1 (got '$2', want '$3')"; }
 
 reset() {
   printf 0 > "$WORK/read_fails"; : > "$WORK/writes"; : > "$WORK/steal"; : > "$WORK/noop"
-  : > "$WORK/edit_fails"
+  : > "$WORK/edit_fails"; : > "$WORK/read_fail_from"; : > "$WORK/reads"
   : > "$GITHUB_STEP_SUMMARY"; server_body ""
 }
 # Capture the function's own output so it cannot be mistaken for the exit code, and so both tee'd
 # and plain log lines can be asserted from one place.
 run() { write_marker "$(region_file "$payload" "$do")" > "$WORK/out" 2>&1 && echo 0 || echo $?; }
 said() { grep -q "$1" "$WORK/out"; }
+
+echo "the marker contract is shared by three actions"
+# A derived fixture follows merge-gate's fences rather than catching a change in them; what it cannot
+# see is the writer drifting away from the two READERS. Assert the contract across all three.
+for d in epic-membership detect-partial-landing; do
+  f="$ROOT/generic-actions/$d/action.yaml"
+  if [ ! -f "$f" ]; then ko "$d/action.yaml is missing"; continue; fi
+  if grep -qF -- "$START" "$f" && grep -qF -- "$END" "$f"; then
+    ok "$d uses the same fences as the writer"
+  else
+    ko "$d has drifted from merge-gate's fences — the snapshot would be invisible to it"
+  fi
+done
 
 echo "the ordinary write"
 reset
@@ -237,6 +285,14 @@ for bad in '"not-a-date"' 'null'; do
 done
 
 echo
+echo "the sort key is the pair, not either half"
+reset
+server_body "$(jq -cn --argjson m "$M2S" '{status:"pending", at:"2026-07-22T09:00:00Z", members:($m | reverse)}')"
+do=frozen; cur="$M2S"; payload=$(frozen_json "$M2S")
+eq "two members in one repo, reordered, still freeze" "$(run)" 0
+eq "and the marker is frozen" "$(marker_now | jq -r .status)" frozen
+
+echo
 echo "a freeze must not skip the stabilization window"
 # The decision step only says `frozen` once the marker has held still past STABILIZE_SECONDS. If the
 # guard does not re-check age, a peer's clock reset can be overtaken seconds later — freezing before
@@ -288,11 +344,22 @@ out=$(sp "$(printf 'only prose\n')" "$P")
 eq "a body with no region gains one" "$(inner "$out" | jq -r .status)" frozen
 grep -q '^only prose$' <<< "$out" && ok "and keeps the prose" || ko "prose lost on append"
 
-out=$(sp "$(printf '%s\nA\n%s\ntext\n%s\nB\n%s\n' "$START" "$END" "$START" "$END")" "$P")
+out=$(sp "$(printf 'HUMAN-A\n%s\nA\n%s\ntext\n%s\nB\n%s\nHUMAN-B\n' "$START" "$END" "$START" "$END")" "$P")
 one_region "$out" && ok "duplicate fences are healed to one region" || ko "duplicate fences survived"
+grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out" \
+  && ok "without dropping the prose around them" || ko "prose was destroyed healing duplicate fences"
 
-out=$(sp "$(printf '%s\nstray end first\n%s\n' "$END" "$START")" "$P")
+# Prose BETWEEN a stray fence and the end is the shape that discriminates: an in-place replace spans
+# from the first START to the END and discards everything inside, while the recovery path strips the
+# fence lines and keeps it. A malformed region must take the recovery path.
+out=$(sp "$(printf '%s\nHUMAN-A\n%s\nHUMAN-B\n%s\n' "$START" "$START" "$END")" "$P")
+one_region "$out" && ok "an unbalanced fence pair is healed to one region" || ko "unbalanced fences survived"
+grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out" \
+  && ok "keeping prose that was trapped inside it" || ko "prose between stray fences was destroyed"
+out=$(sp "$(printf 'HUMAN-A\n%s\nstray end first\n%s\nHUMAN-B\n' "$END" "$START")" "$P")
 one_region "$out" && ok "inverted fences are healed to one region" || ko "inverted fences survived"
+grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out" \
+  && ok "keeping the prose around those too" || ko "prose was destroyed healing inverted fences"
 
 echo
 echo "same status, different members of the same size"
@@ -309,6 +376,16 @@ server_body "$(pending_json "$M2B" 2026-07-22T09:00:00Z)"
 do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
 eq "and a freeze against an equal-size peer set abandons" "$(run)" 2
 eq "writing nothing" "$(writes)" 0
+
+echo
+echo "a shorter peer set is a difference, not a match"
+# The index-lag shape: a peer wrote a strict subset. If the comparison is a subset test rather than
+# equality, no writer ever corrects it.
+reset
+server_body "$(pending_json "$M1" 2026-07-22T09:00:00Z)"
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+eq "a subset marker is corrected, not accepted" "$(run)" 0
+eq "and our full set is what stands" "$(marker_now | jq -r '.members | length')" 2
 
 echo
 echo "a region holding more than one value"
@@ -353,7 +430,19 @@ do=pending; cur="$M2"; payload=$(pending_json "$M2")
 printf 'x' > "$WORK/edit_fails"
 eq "an edit that errors is retried, then given up on" "$(run)" 1
 eq "after three attempts" "$(writes)" 3
-said 'last write error' && ok "and the API error is surfaced, not swallowed" || ko "the edit error was discarded"
+said 'HTTP 422' && ok "and the API's own error text is surfaced, not swallowed" || ko "the edit error was discarded"
+
+echo
+echo "a give-up after mixed failures names a real cause"
+# err is cleared each attempt so a give-up cannot quote an earlier attempt's error. That reset is
+# only observable when the LAST attempts fail somewhere that sets no error of its own.
+reset
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+printf 'x' > "$WORK/edit_fails"
+printf 2 > "$WORK/read_fail_from"   # attempt 1 reads, edits, fails; every later read fails too
+eq "the pass gives up" "$(run)" 1
+said 'could not read' && ok "and names the failure that actually ended it" \
+  || ko "the give-up quotes a stale error from an earlier attempt"
 
 echo
 echo "read failures"
@@ -377,7 +466,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -ne 60 ]; then
-  echo "::error::$ran assertion(s) ran, expected exactly 60 — the suite did not execute fully (or an assertion was added without raising this)"
+if [ "$ran" -ne 72 ]; then
+  echo "::error::$ran assertion(s) ran, expected exactly 72 — the suite did not execute fully (or an assertion was added without raising this)"
   exit 1
 fi
