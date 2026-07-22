@@ -6,10 +6,13 @@
 #
 # What this covers is the lost-update race. The reconcile sweep runs merge-gate as a matrix over
 # every open member pull request with no concurrency bound, and render-epic-status edits the same
-# issue body from a job that does not wait for it — so several writers overlap by design, against an
-# API with no conditional update. The guard is read-modify-verify, and its failure modes (a writer
-# undoing a peer's frozen marker, or reporting success on a write that was reverted) are the kind
-# that reasoning alone gets wrong.
+# issue body from a job that does not wait for it — so writers overlap by design, against an API with
+# no conditional update.
+#
+# The subtle half is not the write, it is the DECISION. `$do` and `$payload` are computed from a body
+# read before the loop; a writer that re-reads but does not re-derive will freeze a member set the
+# world has already moved past, and a retry loop makes it win. Several cases below exist only to pin
+# that: a writer must abandon rather than make a stale freeze permanent.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -24,7 +27,7 @@ extract() { # $1 = function name — lift it out of the run: block and de-indent
     f && /^        \}$/ {exit}
   ' "$ACTION" | sed 's/^        //'
 }
-for fn in splice write_marker; do
+for fn in splice current_marker same_marker write_marker; do
   out=$(extract "$fn")
   if [ -z "$out" ]; then
     echo "::error::could not extract $fn from $ACTION — did its definition move or change indent?"
@@ -44,13 +47,12 @@ END='<!-- epic-membership:snapshot:end -->'
 sleep() { :; }
 
 # ---- the stubbed body store ---------------------------------------------------------------
-# BODY_FILE is the "issue body" on the server. FX_STEAL, when set, simulates a concurrent writer
-# that lands immediately AFTER our edit, on the given attempt — the case an exit-code check misses.
+# $WORK/body is the issue body on the server. $WORK/steal, when non-empty, is a peer write that lands
+# immediately AFTER ours, once — the case an exit-code check calls a win.
 gh() {
   case "$*" in
     *"issues/${EPIC}"*)
-      # File-backed: reads happen inside $( ), so a shell-variable countdown would never reach the
-      # parent and every read would keep failing.
+      # File-backed: reads run inside $( ), so a shell-variable countdown would never reach the parent.
       if [ "$(< "$WORK/read_fails")" -gt 0 ]; then
         printf '%s' "$(($(< "$WORK/read_fails") - 1))" > "$WORK/read_fails"
         return 1
@@ -61,40 +63,38 @@ gh() {
       # NOTE: ${*##pattern} strips per-positional-parameter and rejoins — join first, then strip.
       local all="$*" f
       f="${all##*--body-file }"; f="${f%% *}"
-      cp "$f" "$WORK/body"
-      # A peer write landing after ours, exactly once, on the nominated attempt.
-      if [ -n "$FX_STEAL" ]; then
-        printf '%s\n' "$FX_STEAL" > "$WORK/body"
-        FX_STEAL=""
-      fi
+      printf 'x' >> "$WORK/writes"
+      # A write that silently does not land — the API returned success but the body is unchanged.
+      [ -s "$WORK/noop" ] || cp "$f" "$WORK/body"
+      # File-backed for the same reason as read_fails: the write runs inside $( ), so clearing a
+      # shell variable here would never reach the parent and the peer would strike on every attempt.
+      if [ -s "$WORK/steal" ]; then cp "$WORK/steal" "$WORK/body"; : > "$WORK/steal"; fi
       ;;
     *) echo "unexpected gh call: $*" >&2; return 1 ;;
   esac
 }
 
-region() { # status members-json -> a region file, exactly as the action builds it
-  local payload note f
-  if [ "$1" = frozen ]; then
-    payload=$(jq -cn --argjson m "$2" '{status:"frozen", members:$m}')
-    note='_Epic membership, FROZEN at activation by the merge-gate. Do not edit._'
-  else
-    payload=$(jq -cn --arg s "$1" --argjson m "$2" '{status:$s, at:"2026-07-22T10:00:00Z", members:$m}')
-    note='_Epic membership, PENDING — stabilizing before it freezes. Do not edit._'
-  fi
-  f=$(mktemp)
-  { echo "$START"; echo "$note"; printf '%s\n' "$payload"; echo "$END"; } > "$f"
+M1='[{"repo":"a-novel-kit/repo-a","number":1}]'
+M2='[{"repo":"a-novel-kit/repo-a","number":1},{"repo":"a-novel-kit/repo-b","number":2}]'
+
+pending_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --argjson m "$1" '{status:"pending", at:$at, members:$m}'; }
+frozen_json() { jq -cn --argjson m "$1" '{status:"frozen", members:$m}'; }
+
+region_file() { # $1 = payload json -> a region file built exactly as the action builds it
+  local f
+  f=$(mktemp -p "$WORK")
+  { echo "$START"; echo "_Epic membership. Do not edit._"; printf '%s\n' "$1"; echo "$END"; } > "$f"
   printf '%s' "$f"
 }
-body_with() { # a server body already carrying a marker
-  printf 'Some prose.\n\n%s\n_note_\n%s\n%s\n\nMore prose.\n' "$START" "$1" "$END" > "$WORK/body"
+server_body() { # $1 = marker json, or empty for a body with no marker
+  if [ -z "${1:-}" ]; then
+    printf 'Some prose.\n\nMore prose.\n' > "$WORK/body"
+  else
+    printf 'Some prose.\n\n%s\n_note_\n%s\n%s\n\nMore prose.\n' "$START" "$1" "$END" > "$WORK/body"
+  fi
 }
-marker_now() { # what the marker on the server says
-  awk -v s="$START" -v e="$END" '$0==s{f=1;next} $0==e{f=0} f' "$WORK/body" \
-    | sed -n '/^[[:space:]]*[{[]/,$p' | jq -c '.' 2>/dev/null
-}
-
-M2='[{"repo":"a-novel-kit/repo-a","number":1},{"repo":"a-novel-kit/repo-b","number":2}]'
-M1='[{"repo":"a-novel-kit/repo-a","number":1}]'
+marker_now() { current_marker "$(cat "$WORK/body")"; }
+writes() { wc -c < "$WORK/writes" | tr -d ' '; }
 
 # shellcheck disable=SC1091
 . "$WORK/lib.sh"
@@ -103,54 +103,105 @@ pass=0
 fail=0
 ok() { printf '  ✓ %s\n' "$1"; pass=$((pass + 1)); }
 ko() { printf '  ✗ %s\n' "$1"; fail=$((fail + 1)); }
+eq() { [ "$2" = "$3" ] && ok "$1" || ko "$1 (got '$2', want '$3')"; }
 
-reset() { printf 0 > "$WORK/read_fails"; FX_STEAL=""; printf 'Some prose.\n\nMore prose.\n' > "$WORK/body"; : > "$GITHUB_STEP_SUMMARY"; }
+reset() {
+  printf 0 > "$WORK/read_fails"; : > "$WORK/writes"; : > "$WORK/steal"; : > "$WORK/noop"
+  : > "$GITHUB_STEP_SUMMARY"; server_body ""
+}
+# Capture the function's own output so it cannot be mistaken for the exit code, and so both tee'd
+# and plain log lines can be asserted from one place.
+run() { write_marker "$(region_file "$payload")" > "$WORK/out" 2>&1 && echo 0 || echo $?; }
+said() { grep -q "$1" "$WORK/out"; }
 
 echo "the ordinary write"
 reset
-do=pending; payload=$(jq -cn --arg at "2026-07-22T10:00:00Z" --argjson m "$M2" '{status:"pending", at:$at, members:$m}')
-write_marker "$(region pending "$M2")" && ok "a pending marker is written" || ko "the write failed"
-[ "$(marker_now | jq -r .status)" = pending ] && ok "and the server carries it" || ko "server body has no pending marker"
-grep -q 'Some prose' "$WORK/body" && ok "human prose either side is preserved" || ko "prose was dropped"
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+eq "a fresh pending marker is written" "$(run)" 0
+eq "and the server carries it" "$(marker_now | jq -r .status)" pending
+grep -q 'Some prose' "$WORK/body" && ok "human prose either side survives" || ko "prose was dropped"
 
 echo
 echo "a peer that writes after us"
-# The edit succeeds, then a concurrent writer overwrites it. An exit-code check would call this a win.
 reset
-body_with "$(jq -cn --argjson m "$M2" '{status:"pending", at:"2026-07-22T09:00:00Z", members:$m}')"
-do=frozen; payload=$(jq -cn --argjson m "$M2" '{status:"frozen", members:$m}')
-FX_STEAL=$(printf 'Some prose.\n\n%s\n_note_\n%s\n%s\n' "$START" "$(jq -cn --argjson m "$M1" '{status:"pending", at:"2026-07-22T09:30:00Z", members:$m}')" "$END")
-write_marker "$(region frozen "$M2")" && ok "the write is retried until it survives" || ko "gave up despite a retry being available"
-[ "$(marker_now | jq -r .status)" = frozen ] && ok "and frozen is what finally stands" || ko "the peer's write won"
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+# The peer reverts the body, discarding our write. Nothing about that invalidates a pending decision,
+# so we should notice and retry rather than trust the edit's exit code.
+printf 'Some prose.\n\nMore prose.\n' > "$WORK/steal"
+eq "we retry until our write survives" "$(run)" 0
+eq "and our marker is what finally stands" "$(marker_now | jq -r '.members | length')" 2
+eq "which took two writes, not one" "$(writes)" 2
 
 echo
-echo "frozen is terminal — a pending writer must not undo it"
+echo "a wiped marker invalidates a freeze in flight"
+# A freeze means "the set held still since this pending marker". If the marker is gone, that premise
+# cannot be re-established, so the pass abandons rather than freezing on faith.
 reset
-body_with "$(jq -cn --argjson m "$M2" '{status:"frozen", members:$m}')"
-do=pending; payload=$(jq -cn --arg at "2026-07-22T10:00:00Z" --argjson m "$M1" '{status:"pending", at:$at, members:$m}')
-write_marker "$(region pending "$M1")" && ok "the pending writer reports success" || ko "it failed instead of yielding"
-[ "$(marker_now | jq -r .status)" = frozen ] && ok "and the frozen marker is left intact" || ko "a pending write clobbered frozen"
-[ "$(marker_now | jq -r '.members | length')" = 2 ] && ok "with its member set untouched" || ko "the frozen member set changed"
-grep -q 'another writer froze the snapshot first' "$GITHUB_STEP_SUMMARY" \
-  && ok "and it says so in the run log" || ko "the yield is silent"
+server_body "$(pending_json "$M2" 2026-07-22T09:00:00Z)"
+do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
+printf 'Some prose.\n\nMore prose.\n' > "$WORK/steal"
+eq "the freeze is abandoned once its pending basis disappears" "$(run)" 2
 
 echo
-echo "a frozen writer may still write frozen"
+echo "frozen is terminal"
 reset
-body_with "$(jq -cn --argjson m "$M2" '{status:"frozen", members:$m}')"
-do=frozen; payload=$(jq -cn --argjson m "$M2" '{status:"frozen", members:$m}')
-write_marker "$(region frozen "$M2")" && ok "an idempotent re-write succeeds" || ko "it refused its own value"
+server_body "$(frozen_json "$M2")"
+do=pending; cur="$M1"; payload=$(pending_json "$M1")
+eq "a pending writer yields rather than resetting it" "$(run)" 2
+eq "the frozen marker is left intact" "$(marker_now | jq -r .status)" frozen
+eq "with its member set untouched" "$(marker_now | jq -r '.members | length')" 2
+eq "and nothing was written" "$(writes)" 0
+said 'already frozen' && ok "and it says so in the run log" || ko "the yield is silent"
+
+echo
+echo "a stale freeze must not become permanent"
+# THE case this rewrite exists for. Our pass decided `frozen` against members=M2. A peer has since
+# seen the set change to M1 and reset the clock. Freezing M2 now would make a superseded set
+# terminal — and the member it drops is then held forever by the gate.
+reset
+server_body "$(pending_json "$M1" 2026-07-22T10:05:00Z)"
+do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
+eq "the writer abandons instead of freezing a superseded set" "$(run)" 2
+eq "the peer's pending marker stands" "$(marker_now | jq -r .status)" pending
+eq "with the peer's member set" "$(marker_now | jq -r '.members | length')" 1
+eq "and nothing was written" "$(writes)" 0
+said 'member set moved' && ok "and the abandonment is explained" || ko "abandoning is silent"
+
+echo
+echo "equivalent writers agree instead of fighting"
+# Two writers with the same member set differ only in `at`. Byte-equality would leave neither able to
+# satisfy the other: they would ping-pong to exhaustion and both report a failure that never happened.
+reset
+server_body "$(pending_json "$M2" 2026-07-22T09:59:00Z)"
+do=pending; cur="$M2"; payload=$(pending_json "$M2" 2026-07-22T10:00:00Z)
+eq "an equivalent marker already present counts as done" "$(run)" 0
+eq "and no redundant write is issued" "$(writes)" 0
+
+echo
+echo "an orphaned payload line does not satisfy the verify"
+# splice's recovery path strips fence lines but leaves old JSON behind as prose. A whole-body grep
+# would match that orphan and report success while the region says something else.
+reset
+orphan=$(frozen_json "$M2")
+# The body carries our exact payload as loose prose (what splice's recovery path leaves behind) plus
+# a region saying something else. The write does not land, so a correct verify must fail — a
+# whole-body grep would match the orphan and report success.
+printf 'Some prose.\n%s\n\n%s\n_note_\n%s\n%s\n' "$orphan" "$START" "$(pending_json "$M2")" "$END" > "$WORK/body"
+printf 'x' > "$WORK/noop"
+do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
+eq "a write that never landed is not masked by the orphan" "$(run)" 1
+eq "and the region still says what it did" "$(marker_now | jq -r .status)" pending
 
 echo
 echo "read failures"
 reset
-do=pending; payload=$(jq -cn --arg at "2026-07-22T10:00:00Z" --argjson m "$M2" '{status:"pending", at:$at, members:$m}')
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
 printf 2 > "$WORK/read_fails"
-write_marker "$(region pending "$M2")" && ok "two failed reads still converge on the third attempt" || ko "gave up too early"
+eq "two failed reads still converge on the third attempt" "$(run)" 0
 reset
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
 printf 99 > "$WORK/read_fails"
-do=pending; payload=$(jq -cn --arg at "2026-07-22T10:00:00Z" --argjson m "$M2" '{status:"pending", at:$at, members:$m}')
-write_marker "$(region pending "$M2")" && ko "reported success with every read failing" || ok "a total read failure gives up rather than claiming success"
+eq "a total read failure gives up rather than claiming success" "$(run)" 1
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
@@ -159,7 +210,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 12 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 12) — the suite did not execute fully"
+if [ "$ran" -lt 20 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 20) — the suite did not execute fully"
   exit 1
 fi

@@ -562,45 +562,93 @@ runs:
         # stubbed gh. The sweep runs this gate as a matrix over every open member pull request with no
         # concurrency bound, and the read-model renderer edits the same body from another job, so
         # writers overlap by design. GitHub's issues API offers no conditional update — a GET returns an
-        # ETag, PATCH accepts no If-Match — so the closest available guarantee is to splice into a body
-        # read moments ago and then confirm the write survived, retrying against whatever landed.
-        write_marker() { # $1 = region file. 0 = the marker is in place, 1 = give up (caller warns)
-          local regionf="$1" bodyf outf attempt body rc=1
+        # ETag, PATCH accepts no If-Match — so the guarantee has to be built from reads.
+        #
+        # Re-reading is not enough on its own: the decision ($do / $payload) was computed from a body
+        # fetched earlier, and a peer may have moved the set since. A writer that re-reads but does not
+        # RE-DERIVE will happily freeze a member set the world has already moved past, and the retry
+        # below would make it win. So each attempt re-checks the decision against what is actually there.
+
+        # The marker currently in the body, as JSON — empty when there is none or it is unusable.
+        current_marker() { # $1 = body
+          printf '%s\n' "$1" \
+            | awk -v s="$START" -v e="$END" '$0 == s {f=1;next} $0 == e {f=0} f' \
+            | sed -n '/^[[:space:]]*[{[]/,$p' \
+            | jq -s -c '.[0] // empty' 2>/dev/null || true
+        }
+
+        # Same marker for our purposes: same status and same member set. Deliberately ignores `at`,
+        # which is per-writer — byte equality would make two writers with an identical set unable to
+        # satisfy each other and ping-pong until both gave up, reporting a failure that never happened.
+        same_marker() { # $1 = marker json, $2 = marker json
+          [ -n "$1" ] && [ -n "$2" ] && jq -e -n --argjson a "$1" --argjson b "$2" \
+            '($a.status == $b.status) and (($a.members // []) == ($b.members // []))' >/dev/null 2>&1
+        }
+
+        write_marker() { # $1 = region file. 0 = our marker is in place, 2 = yielded, 1 = gave up
+          local regionf="$1" bodyf outf attempt body marker err rc=1
           bodyf=$(mktemp); outf=$(mktemp)
           for attempt in 1 2 3; do
-            # Re-read every attempt, the first included: `body` was fetched before the decision was
-            # computed, and a sibling job may have written since.
+            # Re-read every attempt, the first included.
             if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
               [ "$attempt" -lt 3 ] && sleep 2
               continue
             fi
-            # A marker that turned FROZEN under us is another writer's promotion, not a conflict to
-            # win: frozen is terminal, so leave it rather than reset it to pending.
-            if [ "$do" != "frozen" ] && printf '%s\n' "$body" \
-              | awk -v s="$START" -v e="$END" '$0 == s {f=1;next} $0 == e {f=0} f' \
-              | sed -n '/^[[:space:]]*[{[]/,$p' | jq -e 'select(.status == "frozen")' >/dev/null 2>&1; then
-              echo "Epic #${EPIC}: another writer froze the snapshot first — leaving it." | tee -a "$GITHUB_STEP_SUMMARY"
+            marker=$(current_marker "$body")
+
+            # Already says what we were going to say — nothing to write, by us or anyone.
+            if same_marker "$marker" "$payload"; then
               rc=0
               break
             fi
+
+            # A frozen marker is terminal: it is the authority every reader has been using, and
+            # rewriting it mid-landing is the one thing "frozen" forbids. Yield, whatever we intended.
+            if [ -n "$marker" ] && [ "$(printf '%s' "$marker" | jq -r '.status // ""')" = "frozen" ]; then
+              echo "Epic #${EPIC}: the snapshot is already frozen (a peer got there first) — leaving it." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              rc=2
+              break
+            fi
+
+            # RE-DERIVE the freeze. `do=frozen` means "the set has held still long enough", judged
+            # against the marker this pass read at the start. If the marker has moved since — a peer
+            # saw the set change and reset the clock — that judgement is stale, and freezing it would
+            # make a wrong set permanent. Abandon; the next pass decides on current truth.
+            if [ "$do" = "frozen" ] \
+              && ! jq -e -n --argjson m "${marker:-null}" --argjson cur "$cur" \
+                   '($m | type == "object") and $m.status == "pending" and ($m.members == $cur)' >/dev/null 2>&1; then
+              echo "::warning::Epic #${EPIC}: the member set moved while this pass was deciding — not freezing a stale set; the next pass re-derives."
+              rc=2
+              break
+            fi
+
             printf '%s' "$body" > "$bodyf"
             splice "$bodyf" "$regionf" > "$outf"
-            gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" >/dev/null 2>&1 || true
-            # Verify rather than trust the exit code: a concurrent write can land after ours and undo it.
-            if gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r' \
-              | grep -qxF -- "$payload"; then
+            err=$(gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" 2>&1) || true
+            # Verify rather than trust the edit's exit code: a peer write can land after ours. Compare
+            # the REGION semantically — grepping the whole body would also match an orphaned payload
+            # line that splice's recovery path leaves behind as prose.
+            if body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r') \
+              && same_marker "$(current_marker "$body")" "$payload"; then
               rc=0
               break
             fi
             [ "$attempt" -lt 3 ] && sleep 2
           done
+          if [ "$rc" = 1 ] && [ -n "${err:-}" ]; then
+            echo "::warning::Epic #${EPIC}: last write error — ${err}"
+          fi
           rm -f "$bodyf" "$outf"
           return "$rc"
         }
 
-        if write_marker "$regionf"; then
+        write_marker "$regionf" && wm=0 || wm=$?
+        if [ "$wm" = 0 ]; then
           n=$(printf '%s' "$cur" | jq 'length')
-          echo "Epic #${EPIC}: wrote ${do} activation snapshot — ${n} member(s)." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Epic #${EPIC}: ${do} activation snapshot in place — ${n} member(s)." | tee -a "$GITHUB_STEP_SUMMARY"
+        elif [ "$wm" = 2 ]; then
+          : # yielded deliberately; write_marker already said why
         else
           echo "::warning::Epic #${EPIC}: could not write the ${do} activation snapshot after 3 attempts; membership stays live-derived."
         fi
