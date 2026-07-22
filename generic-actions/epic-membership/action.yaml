@@ -177,7 +177,7 @@ runs:
               | .value.pullRequest | select(. != null)
               | select($members[$i] != null and .number == ($members[$i].number | floor))
               | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, state} ]
-            | sort_by(.repo, .number)' 2>/dev/null || printf '[]')
+            | sort_by((.repo | ascii_downcase), .number)' 2>/dev/null || printf '[]')
           if [ "$(printf '%s' "$members" | jq 'length')" -ne "$want" ]; then
             echo "::warning::Epic #${EPIC}: could not re-read all ${want} frozen member(s) — reporting an empty set, which holds the Epic rather than gating on a partial one."
             members='[]'
@@ -271,7 +271,7 @@ runs:
           isDraft,
           reviewDecision,
           state: "OPEN"
-        }] | sort_by(.repo, .number)')
+        }] | sort_by((.repo | ascii_downcase), .number)')
         count=$(printf '%s' "$members" | jq 'length')
 
         {

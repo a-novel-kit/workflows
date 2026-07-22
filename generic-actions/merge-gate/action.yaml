@@ -463,12 +463,20 @@ runs:
         # here). GitHub stores bodies with CRLF; strip \r so the exact marker matches (grep + splice).
         body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' | tr -d '\r')
 
+        # Repository names are CANONICALIZED to lower case, not merely deduped case-insensitively.
+        # GitHub resolves them case-insensitively and can answer with either casing, so folding only in
+        # the dedup left the surviving element carrying whatever spelling arrived first — two passes
+        # then computed byte-different sets for the same members. The decision reads that as "members
+        # moved", resets the stabilization clock, and the Epic never freezes. Lower case is safe to
+        # store: every lookup built from it is case-insensitive, and both readers match members by
+        # alias index and number rather than by name.
         # Normalize exactly as the readers validate, so the writer cannot emit a marker they reject —
         # a frozen marker is never rewritten, so one they refuse is a permanently dead snapshot that
         # silently degrades every Epic to live membership. Dedup is case-folded (GitHub resolves repo
         # names case-insensitively) and the 50-member cap matches theirs.
         cur=$(printf '%s' "$MEMBERS" | jq -c '
-          [.[] | {repo, number}] | unique_by((.repo | ascii_downcase), .number) | sort_by(.repo, .number)')
+          [.[] | {repo: (.repo | ascii_downcase), number}]
+          | unique_by(.repo, .number) | sort_by(.repo, .number)')
         if ! printf '%s' "$cur" | jq -e '
               length > 0 and length <= 50
               and all(.[]; (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
@@ -496,7 +504,7 @@ runs:
           elif $mk.status == "frozen" then "skip"
           elif ($mk.status == "pending" and ($mk.members | type == "array") and ($mk.at | type == "string"))
             then (
-              if (($mk.members | sort_by(.repo, .number)) != $cur) then "pending"
+              if (($mk.members | sort_by((.repo | ascii_downcase), .number)) != $cur) then "pending"
               # An unparseable `at` rewrites a fresh pending rather than promoting or waiting. Reading it
               # as epoch 0 made a corrupt timestamp infinitely old and promoted on the next pass, skipping
               # the stabilization window; reading it as "now" never ages, and since the member set is
@@ -640,7 +648,7 @@ runs:
               && ! jq -e -n --argjson m "${marker:-null}" --argjson cur "$cur" \
                    --arg now "$now" --argjson thr "${STABILIZE_SECONDS}" \
                    '($m | type == "object") and $m.status == "pending"
-                    and (($m.members // []) | sort_by(.repo, .number)) == $cur
+                    and (($m.members // []) | sort_by((.repo | ascii_downcase), .number)) == $cur
                     and ($m.at | try (fromdateiso8601 | true) catch false)
                     and (($now | fromdateiso8601) - ($m.at | fromdateiso8601)) >= $thr' >/dev/null 2>&1; then
               echo "::warning::Epic #${EPIC}: the member set moved while this pass was deciding — not freezing a stale set; the next pass re-derives." \

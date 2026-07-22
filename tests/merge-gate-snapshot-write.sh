@@ -175,6 +175,27 @@ reset() {
 run() { write_marker "$(region_file "$payload" "$do")" > "$WORK/out" 2>&1 && echo 0 || echo $?; }
 said() { grep -q "$1" "$WORK/out"; }
 
+# The MEMBERS normalization, lifted from the manifest. It decides what `$cur` IS, so the
+# members-moved branch and both re-derive guards all rest on it — and it had no coverage.
+NORMALIZE_JQ=$(awk '/^ *cur=\$\(printf/{f=1;next} f{print} f&&/\)$/{exit}' "$ACTION" \
+  | sed "s/^[[:space:]]*'//; s/')$//")
+[ -n "$NORMALIZE_JQ" ] || die "could not read the member normalization from $ACTION"
+normalize() { printf '%s' "$1" | jq -c "$NORMALIZE_JQ" 2>/dev/null || echo '[]'; }
+
+echo "the member set is canonical, whatever casing GitHub answers with"
+# GitHub resolves repository names case-insensitively and may answer with either spelling. If the
+# normalized set differs between passes the decision reads "members moved", resets the stabilization
+# clock, and the Epic never freezes — silently, forever.
+mixed='[{"repo":"A-Novel-Kit/repo-b","number":2},{"repo":"a-novel-kit/repo-a","number":1}]'
+lower='[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"a-novel-kit/repo-a","number":1}]'
+eq "two casings of one set normalize identically" "$(normalize "$mixed")" "$(normalize "$lower")"
+eq "and the stored names are canonical" \
+  "$(normalize "$mixed" | jq -r '[.[].repo] | join(",")')" "a-novel-kit/repo-a,a-novel-kit/repo-b"
+eq "input order does not change the set" \
+  "$(normalize "$lower")" "$(normalize "$(printf '%s' "$lower" | jq -c 'reverse')")"
+eq "a case-variant duplicate is one member" \
+  "$(normalize '[{"repo":"a-novel-kit/R","number":1},{"repo":"a-novel-kit/r","number":1}]' | jq 'length')" 1
+
 echo "the marker contract is shared by three actions"
 # A derived fixture follows merge-gate's fences rather than catching a change in them; what it cannot
 # see is the writer drifting away from the two READERS. Assert the contract across all three.
@@ -466,7 +487,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -ne 72 ]; then
-  echo "::error::$ran assertion(s) ran, expected exactly 72 — the suite did not execute fully (or an assertion was added without raising this)"
+if [ "$ran" -ne 76 ]; then
+  echo "::error::$ran assertion(s) ran, expected exactly 76 — the suite did not execute fully (or an assertion was added without raising this)"
   exit 1
 fi
