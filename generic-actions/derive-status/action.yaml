@@ -96,8 +96,8 @@ runs:
           pullRequest(number:$num){
             state isDraft reviewDecision
             closingIssuesReferences(first:5){ nodes{ id number labels(first:20){ nodes{ name } } } } } } }'
-        # A missing or inaccessible PR makes the GraphQL call error; catch it here for a
-        # clear message instead of gh's raw error mid-pipeline.
+        # A missing or inaccessible PR makes the GraphQL call error; catch it here so the failure
+        # surfaces as one clear message.
         if ! pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR"); then
           echo "::error::could not query PR #$PR (not found, or the token lacks access)"
           exit 1
@@ -179,8 +179,8 @@ runs:
           | tee -a "$GITHUB_STEP_SUMMARY"
 
     # Write the derived Status. board-write mints the [Agent] token, resolves the item,
-    # adding it if absent, and compares before writing. The ref is pinned externally
-    # because a ./ path would resolve against the consumer repo's workspace.
+    # adding it if absent, and compares before writing. The ref is pinned externally, since a `./`
+    # path resolves against the consumer repo's workspace.
     - name: Write Status
       # A composite action has no early return, so the guard step's exit 0 does not stop this
       # mutating step; the `halted` gate does.

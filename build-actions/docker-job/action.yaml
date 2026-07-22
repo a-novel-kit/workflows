@@ -104,9 +104,8 @@ runs:
         # Persist the module and go-build cache across runs, so an image whose Go
         # sources are unchanged, or only partly changed, reuses the previous run's
         # compilation. mode=max also caches the intermediate builder stage where
-        # `go build` runs. The scope is per image, since each image builds in its
-        # own job and a shared scope would let those parallel builds evict each
-        # other's cache.
+        # `go build` runs. The scope is per image, so the parallel jobs building
+        # different images keep separate caches.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
         cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
         load: true

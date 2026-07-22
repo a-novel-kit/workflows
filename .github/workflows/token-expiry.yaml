@@ -124,7 +124,7 @@ jobs:
           }
 
           # Every fine-grained PAT with org access, plus its expiry and grant metadata. A read error
-          # fails loudly rather than yielding an empty list, which would read as nothing to ping.
+          # fails loudly, since an empty list reads as nothing to ping.
           if ! pats=$(gh api "/orgs/${ORG}/personal-access-tokens" --paginate 2>"$RUNNER_TEMP/pat.err"); then
             echo "::error::could not list PATs for ${ORG} ($(tr '\n' ' ' < "$RUNNER_TEMP/pat.err")). A 404 means the App lacks organization_personal_access_tokens:read on this org."
             exit 1
@@ -175,8 +175,8 @@ jobs:
             # A test run pings every token, bypassing the policy, to validate the real message
             # rendering, so it still needs a reason when no milestone fired and falls back to the
             # token's status. Everything below is identical to a genuine ping — same content, embed,
-            # color and reason format — and only the recipient differs, being the admin rather than
-            # the owner. The 🧪 markers live in the run summary, never in the delivered message.
+            # color and reason format — and only the recipient differs: a test run delivers to the
+            # admin. The 🧪 markers live in the run summary, never in the delivered message.
             if [ "$TEST_RUN" = "true" ] && [ -z "$reason" ]; then reason="$status"; fi
             if [ -z "$reason" ]; then
               echo "  - ${name} (${login}): ${status} — no ping today" >> "$GITHUB_STEP_SUMMARY"; continue
@@ -201,8 +201,8 @@ jobs:
             else color=3066993; fi
             # Scope and permissions come from the live per-token API data, followed by the same regen
             # recipe the notify action's message uses: masked link, owner, scope, permissions and the
-            # `gh secret set` block. SECRET_NAME is a fill-in, since the org PAT API exposes the
-            # token's own name rather than the Actions-secret name it may be stored under.
+            # `gh secret set` block. SECRET_NAME is a fill-in: the org PAT API exposes the token's own
+            # name, and the Actions-secret name it is stored under is unavailable there.
             case "$repo_sel" in
               all)      scope="All repositories" ;;
               selected) scope="Selected repositories" ;;

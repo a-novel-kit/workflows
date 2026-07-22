@@ -42,7 +42,7 @@ runs:
   steps:
     # Releases run from the default branch only, so a dispatch or workflow_call
     # from any other ref is rejected before a token is minted or anything is
-    # mutated: a bump tag pushed from a feature branch would be wrong.
+    # mutated: a bump tag pushed from a feature branch names the wrong commit.
     - name: Guard — default branch only
       shell: bash
       run: |

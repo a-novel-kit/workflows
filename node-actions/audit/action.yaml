@@ -39,8 +39,8 @@ runs:
       run: |
         # `pnpm audit --fix` rewrites the overrides but leaves the lockfile stale, so
         # reconcile it before `pnpm format`: pnpm 11 runs a verify-deps-before-run
-        # pre-hook on any `pnpm <script>`, which would spawn a frozen install and
-        # abort with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+        # pre-hook on any `pnpm <script>`, which spawns a frozen install and aborts
+        # with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
         pnpm audit --fix=override
         pnpm i --no-frozen-lockfile
         pnpm format

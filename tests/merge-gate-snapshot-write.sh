@@ -121,8 +121,8 @@ M2S='[{"repo":"a-novel-kit/repo-a","number":2},{"repo":"a-novel-kit/repo-a","num
 pending_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --argjson m "$1" '{status:"pending", at:$at, members:$m}'; }
 frozen_json() { jq -cn --argjson m "$1" '{status:"frozen", members:$m}'; }
 
-# The note the action writes, read out of the manifest: a note beginning with `[` or `{` would make
-# current_marker latch onto it and read every marker as absent, which a restated copy could not show.
+# The note the action writes, read out of the manifest: a note beginning with `[` or `{` makes
+# current_marker latch onto it and read every marker as absent, which a restated copy cannot show.
 note_of() { # frozen|pending
   local key=FROZEN
   [ "$1" = frozen ] || key=PENDING
@@ -215,7 +215,7 @@ echo "a peer that writes after us"
 reset
 do=pending; cur="$M2"; payload=$(pending_json "$M2")
 # The peer reverts the body, discarding our write. A pending decision survives that, so the pass
-# notices and retries instead of trusting the edit's exit code.
+# notices the loss and retries; the edit's exit code says nothing about it.
 { cat "$WORK/body"; printf '\n<!-- rendered by the peer -->\n'; } > "$WORK/steal"
 eq "we retry until our write survives" "$(run)" 0
 eq "and our marker is what finally stands" "$(marker_now | jq -r '.members | length')" 2
@@ -248,8 +248,8 @@ said 'already frozen' && ok "and it says so in the run log" || ko "the yield is 
 echo
 echo "a stale freeze must not become permanent"
 # Our pass decided `frozen` against members=M2, and a peer has since seen the set change to M1 and
-# reset the clock. Freezing M2 now would make a superseded set terminal, and the gate would hold the
-# member it drops forever.
+# reset the clock. Freezing M2 now makes a superseded set terminal, and the gate then holds the member
+# it drops forever.
 reset
 server_body "$(pending_json "$M1" 2026-07-22T10:05:00Z)"
 do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
@@ -261,8 +261,8 @@ said 'member set moved' && ok "and the abandonment is explained" || ko "abandoni
 
 echo
 echo "equivalent writers agree instead of fighting"
-# Two writers with the same member set differ only in `at`. Under byte-equality neither could satisfy
-# the other, and both would ping-pong to exhaustion reporting a failure that never happened.
+# Two writers with the same member set differ only in `at`. Under byte equality neither satisfies the
+# other, and both ping-pong to exhaustion reporting a failure that never happened.
 reset
 server_body "$(pending_json "$M2" 2026-07-22T09:59:00Z)"
 do=pending; cur="$M2"; payload=$(pending_json "$M2" 2026-07-22T10:00:00Z)
@@ -286,7 +286,7 @@ eq "and the region still says what it did" "$(marker_now | jq -r .status)" pendi
 
 echo "a marker that cannot age must be repaired, not accepted"
 # The decision step routes a corrupt or missing `at` here: a timestamp that cannot be read never
-# ages, so the marker would sit pending forever while every sweep logged success.
+# ages, leaving the marker pending forever while every sweep logs success.
 for bad in '"not-a-date"' 'null'; do
   reset
   server_body "$(jq -cn --argjson m "$M2" --argjson at "$bad" '{status:"pending", at:$at, members:$m}')"
@@ -375,8 +375,8 @@ grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out" \
 
 echo
 echo "same status, different members of the same size"
-# Every other members-differ case also differs in count, so comparing lengths would pass for
-# comparing sets in both the equivalence check and the re-derive guard.
+# Every other members-differ case also differs in count, so a length compare passes for a set compare
+# in both the equivalence check and the re-derive guard. This case tells the two apart.
 reset
 server_body "$(pending_json "$M2B" 2026-07-22T09:00:00Z)"
 do=pending; cur="$M2"; payload=$(pending_json "$M2")

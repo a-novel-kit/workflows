@@ -68,7 +68,7 @@ runs:
 
     # Bot-authenticated checkout of the ephemeral branch named by the `ref` input, with full history
     # and tags so the baseline assert and the tag resolve.
-    # The checkout goes into a sub-path: a root checkout would clobber $GITHUB_WORKSPACE with the
+    # The checkout goes into a sub-path: a root checkout replaces $GITHUB_WORKSPACE with the
     # old-baseline tree, breaking this action's own sibling read of ../release-core/*.cjs, absent on
     # old lines, and any local `./` action a caller runs after the cut. With a sub-path the root
     # workspace stays on the caller's ref and $GITHUB_ACTION_PATH/../release-core resolves to the
@@ -142,8 +142,8 @@ runs:
 
         # Assert the ephemeral branch is cut from a real release. bump.cjs derives the next version
         # from package.json at this ref, so the baseline vX.Y.Z it patches from has to be a released
-        # tag and this HEAD has to descend from it; otherwise the branch was cut from the wrong place
-        # and the tag would be bogus.
+        # tag and this HEAD has to descend from it. A branch cut from anywhere else yields a bogus
+        # tag.
         baseline=$(node -p "require('./package.json').version")
         if ! git rev-parse -q --verify "refs/tags/v${baseline}" >/dev/null; then
           echo "::error::baseline v${baseline} (this ref's package.json version) is not a released tag — a hotfix must be cut from a release tag, not an arbitrary commit."
@@ -159,7 +159,7 @@ runs:
         version=$(node -p "require('./package.json').version")
 
         # Refresh doc version refs where a prepublish:doc script exists. The env var skips pnpm's
-        # pre-run install, which would need npm-registry auth.
+        # pre-run install, which needs npm-registry auth.
         if [ "$STAMP_NEEDED" = "true" ]; then
           PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm run prepublish:doc
         fi

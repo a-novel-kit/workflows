@@ -110,18 +110,17 @@ runs:
           exit 1
         fi
         frozen=""
-        # The fence strings, matched as whole lines: under an unanchored match a pseudo-fence planted
-        # in an HTML comment would shadow the real region.
+        # The fence strings, matched as whole lines — the same match merge-gate's splice uses, so a
+        # pseudo-fence planted in an HTML comment cannot shadow the real region.
         START_M='<!-- epic-membership:snapshot:start -->'
         END_M='<!-- epic-membership:snapshot:end -->'
         # GitHub stores bodies with CRLF; strip \r so the marker lines match.
         if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
           # The fenced region holds a human-readable note and then the JSON, so skip to the first line
-          # that opens a value before parsing: parsing the note as JSON would kill every marker
-          # merge-gate emits, and requiring one compact line at column 0 would kill a pretty-printed
-          # one. `-s .[0]` takes the first value if a hand-edit left several; trailing prose inside
-          # the region voids the whole marker, which fails safe. All three participants extract
-          # this way.
+          # that opens a value before parsing: the note is not JSON, and the JSON may be pretty-printed
+          # across several lines. `-s .[0]` takes the first value if a hand-edit left several; trailing
+          # prose inside the region voids the whole marker, which fails safe. All three participants
+          # extract this way.
           marker=$(printf '%s\n' "$body" \
             | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
             | sed -n '/^[[:space:]]*[{[]/,$p' \
@@ -130,10 +129,10 @@ runs:
           # hand-edited garbage or the wrong shape yields an empty `frozen` and falls through to the
           # live search, never a crash or a permanent hold.
           # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
-          # document below, and the Epic body is writable by anyone with write access to this repo:
-          # `[^/]` would admit quotes and newlines, enough to inject fields, and a bare
-          # `type == "number"` would admit 1.5, a document-level validation error rather than a
-          # skippable one.
+          # document below, and the Epic body is writable by anyone with write access to this repo.
+          # The repo pattern excludes quotes and newlines, which are enough to inject fields, and the
+          # number must be a whole integer, since 1.5 is a document-level validation error that
+          # rejects the whole query.
           [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
             select(type == "object" and .status == "frozen" and (.members | type == "array"))
             | .members
@@ -152,8 +151,8 @@ runs:
           # yields [], which merge-gate reads as a hold; a held pull request only waits, while a
           # wrongly-passed set has already merged.
           # Identity is the alias index plus the number. GraphQL follows a rename silently and answers
-          # with the new nameWithOwner, and a frozen marker is never rewritten, so matching on the
-          # repository name would strand a renamed member's Epic permanently.
+          # with the new nameWithOwner, while a frozen marker is never rewritten, so the repository
+          # name stays out of the match.
           alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
               + "{pullRequest(number:\(.value.number|floor)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
@@ -193,8 +192,8 @@ runs:
 
         # Membership authority: open PRs carrying the permission-gated `epic:<N>` label,
         # org-wide. The label name is quoted because of its colon, and `org:${OWNER}`
-        # scopes the walk to the workflow's org, which is an Organization; a user account
-        # would need the `user:` qualifier. GitHub's search index is eventually consistent,
+        # scopes the walk to the workflow's org, which is an Organization; the `user:`
+        # qualifier covers a user account. GitHub's search index is eventually consistent,
         # so a PR labeled or opened seconds ago may be missing from an otherwise-successful
         # response, and a just-closed one briefly present, which the caller tolerates as a
         # transiently short set. The timeline-fold follow-up above closes that window by

@@ -324,7 +324,7 @@ runs:
         pred='.[] | select(((.body // "") | split("\n")[0] | rtrimstr("\r")) == $m)'
 
         # Strongly consistent dedup, failing closed on a list error: an API hiccup swallowed as an
-        # empty list would spawn a duplicate ticket or falsely report nothing to resolve. `open`
+        # empty list spawns a duplicate ticket, or falsely reports nothing to resolve. `open`
         # lists open tickets only, since a closed one means resolved; `resolve` lists all, so a
         # ticket whose board drive failed after close is re-driven.
         list_state=open
@@ -483,13 +483,13 @@ runs:
         fi
 
         # POST with a small retry and explicit timeouts: composite steps cannot set timeout-minutes,
-        # so a black-hole webhook would hang the page. Discord answers 204 on success, 429 when rate
+        # so a black-hole webhook hangs the page. Discord answers 204 on success, 429 when rate
         # limited, 5xx transiently; curl runs without --fail so those codes are captured and retried.
         max=3
         code=000
         for attempt in $(seq 1 "$max"); do
           # The fallback sits outside the substitution: curl already prints "000" via -w on failure,
-          # so `|| echo 000` inside would append and yield "000000".
+          # so `|| echo 000` inside appends to it and yields "000000".
           code=$(curl -sS --connect-timeout 5 --max-time 15 \
             -o "$RUNNER_TEMP/esc_push_resp" -w '%{http_code}' \
             -X POST -H 'Content-Type: application/json' --data "$payload" "$PUSH_WEBHOOK") || code=000

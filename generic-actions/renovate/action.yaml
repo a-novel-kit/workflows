@@ -35,8 +35,8 @@ runs:
         RENOVATE_SKIP_INSTALLS: false
         # A tight pnpm allowlist by default — install, format, dedupe — so postUpgradeTasks run
         # without permitting arbitrary `pnpm exec` or `pnpm dlx`. The `( |$)` suffix matches the
-        # command with arguments or on its own, such as a bare `pnpm i`. The default also covers
-        # a caller passing an empty `allowed_commands`, which would skip the tasks and leave an
+        # command with arguments or on its own, such as a bare `pnpm i`. The default also covers a
+        # caller passing an empty `allowed_commands`, where the tasks are skipped and leave an
         # unformatted pnpm-workspace.yaml and stale lockfiles. Callers can still override it.
         RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands || '["^pnpm (install|i|format|dedupe)( |$)"]' }}
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"

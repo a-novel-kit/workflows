@@ -227,8 +227,8 @@ runs:
 
         # Newest release tag of a repo, honoring the sub-dir Go-module prefix (<dir>/vX.Y.Z). A
         # transient read is retried and a hard failure prints "__ERR__", on which the caller aborts
-        # that repo: a swallowed error would look like a first-release repo and double-release on a
-        # live resume. A genuine no-tags repo prints empty. `sort -V` over mixed namespaces is correct
+        # that repo: a swallowed error looks like a first-release repo and double-releases on a live
+        # resume. A genuine no-tags repo prints empty. `sort -V` over mixed namespaces is correct
         # for the single go.mod release-core enforces; a repo that relocated its module, carrying both
         # `v*` and `dir/v*`, could pick the wrong namespace.
         latest_tag() { # $1=owner/repo
@@ -348,8 +348,8 @@ runs:
 
         # Poll a run to completion. Prints its conclusion, or "blocked" when it parks at the protected
         # `release` environment approval gate in `waiting`: a fully-autonomous train needs the bot
-        # allowed as an approver, so the state is surfaced rather than waited out. A blocked run is
-        # pending and may still complete on approval, so it is not a hard failure.
+        # allowed as an approver, so the state is surfaced to the operator. A blocked run is pending
+        # and may still complete on approval, so it is not a hard failure.
         poll_run() { # $1=owner/repo $2=run_id
           local repo="$1" run_id="$2" i st cc
           for i in $(seq 1 180); do   # ~30 min cap at 10s (release-core can go install + build on a cold runner)
@@ -384,7 +384,7 @@ runs:
           sl=$(printf '%s\n' "$body" | grep -nxF "$s" | head -1 | cut -d: -f1)
           el=$(printf '%s\n' "$body" | grep -nxF "$e" | head -1 | cut -d: -f1)
           # Replace in place only for a well-formed single pair with START before END; an
-          # END-before-START hand-edit falls through to strip-and-append rather than eating prose.
+          # END-before-START hand-edit falls through to strip-and-append, which leaves prose intact.
           # BLK arrives through the environment (ENVIRON) so awk does not interpret backslash escapes.
           if [ "$ns" = "1" ] && [ "$ne" = "1" ] && [ -n "$sl" ] && [ -n "$el" ] && [ "$sl" -lt "$el" ]; then
             printf '%s\n' "$body" | BLK="$block" awk -v s="$s" -v e="$e" '
@@ -433,7 +433,7 @@ runs:
           repo=$(printf '%s' "$ledger" | jq -r ".[$i].repo")
           merge_sha=$(printf '%s' "$ledger" | jq -r ".[$i].sha")
 
-          # Resolve the default branch once, with retries, and fail closed rather than guess a ref.
+          # Resolve the default branch once, with retries, and fail closed on an unresolved ref.
           default_branch=""
           for attempt in 1 2 3; do
             default_branch=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null || echo "")
@@ -453,9 +453,9 @@ runs:
             echo "- ❌ **${repo}** — tag read failed after retries; skipping (fail-closed, never assume first-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ -n "$last" ]; then
-            # Capture via `|| tc=$?`: the `||` list suspends set -e through the call. A bare
-            # `tag_contains ...; tc=$?` would let the function's non-zero return — 1 for the ordinary
-            # not-yet-shipped case, 2 for a read error — abort the action before tc is read.
+            # Capture via `|| tc=$?`: the `||` list suspends set -e through the call. The function
+            # returns non-zero on ordinary outcomes too — 1 for the not-yet-shipped case, 2 for a read
+            # error — and under `set -e` that aborts the action before tc is read.
             tc=0; tag_contains "$repo" "$last" "$merge_sha" || tc=$?
             if [ "$tc" -eq 2 ]; then
               had_failure=true
@@ -470,9 +470,9 @@ runs:
               fi
               # A botched cut: the tag sits at or after the merge but has no published Release, so
               # release-core failed between pushing the tag and creating it. The orchestrator holds no
-              # contents:write and cannot create the Release, and re-cutting would produce a higher
-              # tag that orphans this one, so fail loudly for manual repair — publish the Release for
-              # `$last`, or delete the tag to let a re-dispatch re-cut it.
+              # contents:write and cannot create the Release, and a re-cut produces a higher tag that
+              # orphans this one, so fail loudly for manual repair — publish the Release for `$last`,
+              # or delete the tag to let a re-dispatch re-cut it.
               had_failure=true
               receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"botched"}]')
               echo "::error::${repo} — tag \`${last}\` exists (contains the Epic merge) but has NO published Release — a botched cut. Publish the Release for \`${last}\`, or delete the tag to let a re-dispatch re-cut it. Not skipping, not re-cutting." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -528,8 +528,8 @@ runs:
           fi
           concl=$(poll_run "$repo" "$rid")
           if [ "$concl" = "blocked" ]; then
-            # Pending rather than failed: the run may still cut the tag on approval, so a resume
-            # waits for it to clear — a fresh dispatch would double-release once approved.
+            # Recorded as pending: the run may still cut the tag on approval, so a resume waits for
+            # it to clear. A fresh dispatch double-releases once the parked run is approved.
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
             had_failure=true
             echo "- ⏸️  **${repo}** — live release parked at the release-env approval gate (pending). Approve the run, then re-dispatch to record the receipt." | tee -a "$GITHUB_STEP_SUMMARY"; continue
@@ -573,10 +573,10 @@ runs:
         if [ "$dry" = "false" ]; then
           block=$(printf '<!-- release-train:receipts:start -->\n### 🚂 Release train — epic:#%s (%s)\n%s\n<!-- release-train:receipts:end -->' \
             "$EPIC" "$(date -u +%Y-%m-%dT%H:%MZ)" "$table")
-          # Abort the write when the read that feeds it failed. Mapping a failed read onto an empty
-          # body would make splice_body return a body holding only the receipt block, and the PATCH
-          # would succeed, overwriting the Epic's prose and its frozen activation snapshot without
-          # ever reaching the error path. That snapshot is what epic-membership, merge-gate and
+          # Abort the write when the read that feeds it failed. A failed read mapped onto an empty
+          # body makes splice_body return a body holding only the receipt block, and the PATCH then
+          # succeeds, overwriting the Epic's prose and its frozen activation snapshot without ever
+          # reaching the error path. That snapshot is what epic-membership, merge-gate and
           # detect-partial-landing read, so losing it degrades the whole landing saga back to
           # live-label membership.
           #

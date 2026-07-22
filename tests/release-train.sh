@@ -9,7 +9,7 @@
 # range: mapping both onto "none" skips a repo, records it as nochange, and leaves the run green,
 # and with nothing marking a failure a re-dispatch recomputes the same skip. splice_body is the other
 # end — fed the empty body a failed read produces, it returns a body holding only the receipt block,
-# which the PATCH would write over the Epic's prose and its frozen activation snapshot.
+# and the PATCH then writes that over the Epic's prose and its frozen activation snapshot.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

@@ -119,7 +119,7 @@ runs:
 
         # ---- Validate the untrusted inputs before they reach a search grammar or a date argument.
         # org feeds `org:<ORG>` search qualifiers, so require GitHub-login characters: a stray value
-        # would broaden the scope or break the query. planning_repo becomes an API path component,
+        # broadens the scope or breaks the query. planning_repo becomes an API path component,
         # and lookback feeds `date`.
         if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
           echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
@@ -233,7 +233,7 @@ runs:
 
         # Drop the volatile "_Rendered … " stamp line and all blank lines from stdin, so
         # compare-before-write sees only material content and a fresh timestamp on its own never
-        # counts as a change, which would edit-spam every Epic each sweep.
+        # counts as a change. Counting one edit-spams every Epic each sweep.
         strip_volatile() {
           grep -v '^_Rendered ' | sed '/^[[:space:]]*$/d' || true
         }
@@ -253,10 +253,9 @@ runs:
         splice() { # $1 = body file, $2 = region file (already wrapped in the markers)
           local bodyf="$1" regionf="$2" ns ne sl el wellformed=false
           # Well-formed means exactly one START, exactly one END, START before END, which replaces in
-          # place; anything else strips all marker lines and appends one fresh region. Gating on
-          # well-formedness rather than mere existence is what stops an unclosed trailing START from
-          # making awk swallow the human text after it, since the strip-and-append path only ever
-          # removes marker lines.
+          # place; anything else strips all marker lines and appends one fresh region. The gate is on
+          # well-formedness, so an unclosed trailing START takes the strip-and-append path, which only
+          # ever removes marker lines and leaves the human text after it intact.
           ns=$(grep -cxF -- "$START" "$bodyf" || true)
           ne=$(grep -cxF -- "$END" "$bodyf" || true)
           if [ "$ns" = "1" ] && [ "$ne" = "1" ]; then
@@ -403,7 +402,7 @@ runs:
             + "\([.[] | select(.bucket=="closed")] | length) closed-unmerged"')
 
           # The managed region, timestamp included. Passing $rows as a %s argument keeps its backticks
-          # literal, where an unquoted heredoc would run them as command substitution.
+          # literal; an unquoted heredoc runs them as command substitution.
           local ts region_inner
           ts=$(date -u '+%Y-%m-%d %H:%M')
           region_inner=$(printf '### Epic status — display-only, derived from live GitHub truth (not authority)\n\n_Rendered %s UTC by the reconcile sweep. A lost or hand-edited table is cosmetic — every decision reads live state._\n\n%s\n\n| Repo | PR | State | SHA | Released |\n|------|----|-------|-----|----------|\n%s' \
@@ -412,9 +411,9 @@ runs:
           # Re-read before deciding anything. The body fetched at the top of this pass is stale by
           # now: the member searches, tag walks and compares take seconds to tens of seconds, and
           # merge-gate writes the activation snapshot into this same body from a matrix of concurrent
-          # jobs. Rewriting the stale copy would carry the whole body back and erase a frozen member
-          # set with a cosmetic table. The re-read also precedes the compare, which would otherwise
-          # answer about a body nobody is going to write.
+          # jobs. Rewriting the stale copy carries the whole body back and erases a frozen member set
+          # with a cosmetic table. The re-read also precedes the compare, so the compare answers about
+          # the body that is actually going to be written.
           local fresh
           if fresh=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${epic}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
             body="$fresh"

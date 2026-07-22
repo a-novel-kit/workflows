@@ -3,7 +3,7 @@
 # its own lock wait, but an App outage, a hung step or a dropped event can still leave a required
 # check with no conclusion — blocking a PR indefinitely, since a plain PR has no merge-queue timeout —
 # or a hotfix run hung holding its lock. This scheduled sweep notices those and escalates each, so a
-# stuck automation surfaces to a human instead of silently blocking work.
+# stuck automation surfaces to a human.
 #
 # Two detections, org-wide:
 #   - stale check: an open PR whose required merge-gate / epic-freeze check has had no terminal

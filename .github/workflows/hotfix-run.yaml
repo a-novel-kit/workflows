@@ -107,7 +107,7 @@ jobs:
             # Only an actively-running release blocks, meaning in_progress or queued. A release
             # parked in `waiting` for its environment approval is ignored: it may never be approved,
             # and the emergency hotfix must not spin on an unapproved dispatch. A gh error yields
-            # "err" and retries rather than aborting the emergency path on a transient blip.
+            # "err" and retries, so a transient blip does not abort the emergency path.
             active=$(gh run list --repo "$REPO" --workflow release.yaml --limit 30 \
               --json status --jq '[.[] | select(.status | IN("in_progress","queued"))] | length' 2>/dev/null || echo "err")
             if [ "$active" = "0" ]; then
@@ -159,7 +159,7 @@ jobs:
           git config user.name "${{ steps.token.outputs.app-slug }}[bot]"
           git config user.email "${{ steps.token.outputs.app-slug }}[bot]@users.noreply.github.com"
 
-          # A leftover ephemeral branch from an aborted run would block a fresh cut, so remove it.
+          # A leftover ephemeral branch from an aborted run blocks a fresh cut, so remove it.
           git push origin --delete "$ephemeral" 2>/dev/null || true
           git checkout -b "$ephemeral" "$baseline"
 
@@ -183,9 +183,8 @@ jobs:
           git push origin "$ephemeral"
 
           # Restore the main workspace to the triggering commit, so the local `./` actions in the
-          # cut, reconcile and escalate steps resolve from the current ref rather than the old
-          # baseline this step checked out. release-core-hotfix re-checks-out the ephemeral branch
-          # from the remote.
+          # cut, reconcile and escalate steps resolve from the current ref; this step left it on the
+          # baseline. release-core-hotfix re-checks-out the ephemeral branch from the remote.
           git checkout --force "$GITHUB_SHA" >/dev/null 2>&1
 
           {

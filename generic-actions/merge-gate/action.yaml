@@ -88,7 +88,7 @@ runs:
     # Mint an [Agent] token: checks:write to post the status, plus org-wide issues and
     # pull-requests read. The read stays org-wide because the `Closes` hint resolves a
     # closing issue's parent Epic, which lives in the org's planning repo; a repo-scoped
-    # token would resolve that parent to null and drop the "add the `epic:<N>` label"
+    # token resolves that parent to null and drops the "add the `epic:<N>` label"
     # nudge. Membership needs no cross-repo read here — the nested epic-membership action
     # mints its own org-wide token.
     - name: Mint token
@@ -155,7 +155,7 @@ runs:
         # no, disabled — while any other value engages the halt. It arrives as an input because a
         # composite action cannot read the `vars` context, so the caller passes vars.AGENT_KILL_SWITCH
         # and the value resolves with no token and no API call before anything gates. A required-check
-        # gate holds by posting `failure`; skipping would leave a neutral check that passes. The hold
+        # gate holds by posting `failure`, since a skipped check stays neutral and passes. The hold
         # also dequeues a live merge_group. It is posted before every success path — the standalone
         # fast-path, the misconfig branch, the merge_group re-affirm — because the org-wide halt rests
         # on merge-gate holding every PR.
@@ -169,7 +169,7 @@ runs:
         esac
 
         # planning_repo becomes an API path component in the Epic-pause read below, so require a bare
-        # repo name: an owner slash, whitespace or an injected path would redirect the request. It is
+        # repo name: an owner slash, whitespace or an injected path redirects the request. It is
         # validated after the read-free kill-switch, so the halt wins even on a malformed value.
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
@@ -192,8 +192,8 @@ runs:
         # passing. A null `pullRequest` — a valid-looking number that resolves to nothing,
         # such as a deleted PR or a merge_group ref naming a PR in another repo — comes back
         # with no GraphQL `.errors`, so it is guarded explicitly and treated as a fetch
-        # failure; otherwise the later `.labels.nodes[]` aborts under `set -e` and leaves no
-        # check posted at all instead of the caller's explicit `failure` hold.
+        # failure; otherwise the later `.labels.nodes[]` aborts under `set -e`, leaving the
+        # caller's explicit `failure` hold unposted and no check on the head at all.
         fetch_pr() { # $1=pr number
           local q data
           q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
@@ -212,8 +212,8 @@ runs:
         }
 
         # A head SHA with neither a PR nor a merge_group is a misconfigured caller, so fail
-        # closed: passing a required check on a real SHA with nothing evaluated would let it
-        # satisfy the ruleset unchecked.
+        # closed: a required check passed on a real SHA with nothing evaluated satisfies the
+        # ruleset unchecked.
         if [ -z "${IN_QUEUE:-}" ] && [ -z "${PR_NUMBER:-}" ]; then
           post_check failure "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event — refusing to pass a required check without evaluating a PR."
           emit ""
@@ -320,8 +320,8 @@ runs:
       with:
         epic_number: ${{ steps.discover.outputs.epic_number }}
         # Threaded through because this gate writes the snapshot to planning_repo below and this
-        # step reads it back. On its own default the two would target different repos the moment a
-        # caller overrides planning_repo, and the gate would gate on a set it never froze.
+        # step reads it back. On its own default the two target different repos as soon as a caller
+        # overrides planning_repo, and the gate then gates on a set it never froze.
         planning_repo: ${{ inputs.planning_repo }}
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
@@ -372,9 +372,9 @@ runs:
         # set no longer all-ready and the `failure` below dequeues the group. A shrinking
         # set — a member closed unmerged — belongs to the partial-landing detector.
         # A PR carrying epic:<N> that is absent from the resolved set, labeled after the
-        # snapshot froze or missed at capture, is held rather than inheriting the wave's
-        # verdict, which would merge it un-gated for its own readiness: it belongs to a later
-        # wave. Pre-snapshot the live set is the PR's own set, so this is a no-op, and a
+        # snapshot froze or missed at capture, is held: it belongs to a later wave, and the
+        # wave's verdict says nothing about its own readiness. Pre-snapshot the live set is
+        # the PR's own set, so this is a no-op, and a
         # merge_group event gates the whole group.
         if [ -z "${IN_QUEUE:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
           if [ "$(printf '%s' "$MEMBERS" | jq --arg r "$REPO_FULL" --argjson n "${PR_NUMBER}" \
@@ -458,13 +458,11 @@ runs:
         # passes reach here. GitHub stores bodies with CRLF; strip \r so the marker lines match.
         body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' | tr -d '\r')
 
-        # Repository names are canonicalized to lower case, not merely deduped case-insensitively.
-        # GitHub resolves them case-insensitively and can answer with either casing, so folding only
-        # in the dedup would leave the surviving element carrying whatever spelling arrived first, and
-        # two passes would compute byte-different sets for the same members. The decision reads that
-        # as "members moved", resets the stabilization clock, and the Epic never freezes. Lower case
-        # is safe to store: every lookup built from it is case-insensitive, and both readers match
-        # members by alias index and number.
+        # Repository names are canonicalized to lower case, so every pass computes a byte-identical
+        # set for the same members. GitHub resolves names case-insensitively and answers with either
+        # casing, and the decision reads a byte-different set as "members moved", resets the
+        # stabilization clock, and the Epic never freezes. Lower case is safe to store: every lookup
+        # built from it is case-insensitive, and both readers match members by alias index and number.
         # The normalization matches what the readers validate, so the writer cannot emit a marker they
         # reject: a frozen marker is never rewritten, so one they refuse is a permanently dead
         # snapshot that degrades every Epic to live membership. The 50-member cap matches theirs.
@@ -485,7 +483,7 @@ runs:
         # the snapshot was frozen to remember. All three participants extract this way.
         marker=$(current_marker "$body")
         # An unparseable marker, such as hand-edited garbage, counts as absent and yields a fresh
-        # pending, which self-heals it rather than crashing or freezing corruption.
+        # pending, which self-heals the region.
         if [ -z "$marker" ] || ! printf '%s' "$marker" | jq empty 2>/dev/null; then marker=null; fi
         now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -499,7 +497,7 @@ runs:
           elif ($mk.status == "pending" and ($mk.members | type == "array") and ($mk.at | type == "string"))
             then (
               if (($mk.members | sort_by((.repo | ascii_downcase), .number)) != $cur) then "pending"
-              # An unparseable `at` rewrites a fresh pending rather than promoting or waiting. Read as
+              # An unparseable `at` rewrites a fresh pending. Read as
               # epoch 0 a corrupt timestamp is infinitely old and promotes on the next pass, skipping
               # the stabilization window; read as "now" it never ages, and with the member set
               # unchanged the reset branch above never fires either, so the marker stalls and the Epic
@@ -574,9 +572,9 @@ runs:
         # it win. So each attempt re-checks the decision against what is actually there.
 
         # The marker says what we intend and can still make progress: same status, same member set.
-        # `at` is per-writer and ignored, since byte equality would leave two writers with an identical
-        # set unable to satisfy each other, ping-ponging until both gave up on a failure that never
-        # happened. Both the entry short-circuit and the post-write verify call this, so a repair that
+        # `at` is per-writer and ignored: under byte equality two writers with an identical set never
+        # satisfy each other, ping-ponging until both give up on a failure that never happened. Both
+        # the entry short-circuit and the post-write verify call this, so a repair that
         # was clobbered cannot read as a repair that landed.
         marker_settled() { # $1 = live marker json, $2 = our payload json
           same_marker "$1" "$2" || return 1
@@ -598,18 +596,18 @@ runs:
           for attempt in 1 2 3; do
             # Re-read every attempt, the first included.
             if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
-              # Record it: a read failure has no diagnostic of its own, and clearing `err` each
-              # attempt would leave the give-up message empty when the last attempts fail here.
+              # Record it: a read failure has no diagnostic of its own, and `err` survives the
+              # attempt so the give-up message is populated when the last attempts fail here.
               err="could not read ${ORG}/${PLANNING_REPO}#${EPIC} (attempt ${attempt})"
               [ "$attempt" -lt 3 ] && sleep 2
               continue
             fi
             marker=$(current_marker "$body")
 
-            # The body already says what this pass would write, so nothing needs writing. A `pending`
+            # The body already carries this pass's payload, so nothing needs writing. A `pending`
             # marker whose `at` does not parse is not equivalent, however close its members look: the
             # decision step routes that case here to repair it, since a timestamp that cannot be read
-            # never ages and the marker would sit pending while every sweep logged success.
+            # never ages and leaves the marker pending while every sweep logs success.
             if marker_settled "$marker" "$payload"; then
               rc=0
               break
@@ -628,7 +626,7 @@ runs:
 
             # Re-derive the freeze. `do=frozen` means the set has held still long enough, judged
             # against the marker this pass read at the start. If a peer has since seen the set change
-            # and reset the clock, that judgment is stale and freezing would make a wrong set
+            # and reset the clock, that judgment is stale and a freeze on it makes a wrong set
             # permanent. Age is re-checked too: without it a freeze lands seconds after a peer's
             # reset, skipping the window that lets the lagging label index surface a missing member.
             # Abandon, and the next pass decides on current truth.
@@ -648,9 +646,9 @@ runs:
             printf '%s' "$body" > "$bodyf"
             splice "$bodyf" "$regionf" > "$outf"
             err=$(gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" 2>&1 >/dev/null) || true
-            # Verify rather than trust the edit's exit code, since a peer write can land after ours.
-            # The comparison is semantic and scoped to the region: grepping the whole body would also
-            # match an orphaned payload line that splice's recovery path leaves behind as prose.
+            # Verify the result: a peer write can land after ours and the edit's exit code says
+            # nothing about that. The comparison is semantic and scoped to the region, so an orphaned
+            # payload line that splice's recovery path leaves behind as prose does not match.
             if body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r') \
               && marker_settled "$(current_marker "$body")" "$payload"; then
               rc=0

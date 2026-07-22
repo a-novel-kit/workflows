@@ -103,7 +103,7 @@ runs:
       run: |
         set -euo pipefail
 
-        # cleanup_task feeds `Closes #<n>`, so a bare integer: a stray value would break the closing
+        # cleanup_task feeds `Closes #<n>`, so a bare integer: a stray value breaks the closing
         # keyword or the PR body.
         if ! printf '%s' "$CLEANUP_TASK" | grep -qE '^[0-9]+$'; then
           echo "::error::cleanup_task must be an integer, got \"$CLEANUP_TASK\"."
@@ -134,7 +134,7 @@ runs:
         # No '+' means the fix is already reconciled — a re-run after the PR merged, or a fix that
         # also went to master directly — so close the loop without a redundant PR.
         # git-cherry's output is captured and its exit checked explicitly: piped straight into grep,
-        # an unresolvable baseline or fix_head would read as "0 pending" and skip the reconcile.
+        # an unresolvable baseline or fix_head reads as "0 pending" and skips the reconcile.
         if ! cherry_out=$(git -C "$dir" cherry "origin/${default_branch}" "$FIX_HEAD" "$BASELINE" 2>&1); then
           echo "::error::git cherry failed (baseline/fix_head unresolvable?): ${cherry_out}"
           rm -rf "$dir"

@@ -198,7 +198,7 @@ runs:
           echo "::error::epic_number must be an integer, got \"${EPIC:-}\""
           exit 1
         fi
-        # org feeds `org:<ORG>`, so require GitHub-login characters: a stray value would broaden scope.
+        # org feeds `org:<ORG>`, so require GitHub-login characters: a stray value broadens the scope.
         if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
           echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
           exit 1
@@ -407,7 +407,7 @@ runs:
         # ---- Blast cap, before any mutation, on both dry and live runs -------------------------
         # A rollback fans a destructive revert across every repo in the ledger, so a distinct-repo
         # count over the cap aborts. The plan above is already in the summary, so the operator sees
-        # what it would have touched and raises max_rollback_repos if the width is genuine.
+        # the planned targets and raises max_rollback_repos if the width is genuine.
         repo_n=$(printf '%s' "$repos" | grep -c . || true)
         if [ "$repo_n" -gt "$MAX_ROLLBACK_REPOS" ]; then
           echo "::error::BLAST-CAP: rollback of epic:#${EPIC} would touch ${repo_n} repos (> max_rollback_repos=${MAX_ROLLBACK_REPOS}) — aborting before any revert. A rollback this wide is almost certainly a mis-scoped Epic; investigate, or re-dispatch with a higher max_rollback_repos if it is genuinely intended." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -416,7 +416,7 @@ runs:
 
         # ---- Multi-base assert, before any mutation, on both dry and live runs -----------------
         # A repo's siblings all target one base branch. Reverting an older-base sibling onto the
-        # newest base would revert a change that is not on that base, so abort instead.
+        # newest base reverts a change that is not on that base, so a multi-base ledger aborts.
         multibase=$(printf '%s' "$ledger" | jq -r '
           group_by(.repo)[] | select((map(.base) | unique | length) > 1)
           | "\(.[0].repo): \((map(.base) | unique) | join(", "))"')
@@ -513,8 +513,8 @@ runs:
         # write token was minted for. The derived sets the mutation uses are recomputed from it —
         # repos as owner/name for the per-repo loop, task_n as the total Task count.
         # The mutation derives its repo set from this ledger alone and never re-searches the epic:<N>
-        # set, since the write token covers only these repos plus planning and a repo from a fresh
-        # query would 403 mid-wave.
+        # set: the write token covers only these repos plus planning, and a repo from a fresh query
+        # 403s mid-wave.
         ledger="$LEDGER"
         repos=$(printf '%s' "$ledger" | jq -r '[.[].repo] | unique | .[]')
         task_n=$(printf '%s' "$ledger" | jq -r '[.[].tasks[]] | unique | length')
@@ -672,8 +672,8 @@ runs:
           echo "${repo}: opened $([ "$draft" = true ] && echo 'DRAFT ' )revert PR #${pr_num} ($pr_url)." | tee -a "$GITHUB_STEP_SUMMARY"
 
           # Apply epic:<M> inline, fatally on failure: that membership is what guarantees no partial
-          # rollback. epic:<N> labels are ad-hoc rather than part of the managed set, so create
-          # epic:<M> in the repo first, ignoring an "already exists".
+          # rollback. epic:<N> labels are ad-hoc, outside the managed set, so create epic:<M> in the
+          # repo first, ignoring an "already exists".
           GH_TOKEN="$WRITE_TOKEN" gh label create "epic:${M}" --repo "$repo" --color BFD4F2 \
             --description "Rollback epic #${M} (reverts epic:#${EPIC})" >/dev/null 2>&1 || true
           if ! GH_TOKEN="$WRITE_TOKEN" gh pr edit "$pr_num" --repo "$repo" --add-label "epic:${M}" >/dev/null 2>&1; then
@@ -753,8 +753,8 @@ runs:
         # abandoned attempt. board-write is mirrored inline, since a composite action cannot loop it:
         # resolve the field and option once, then add-if-missing and compare-before-write per Task.
         #
-        # A Task whose repo revert was held as a draft is skipped: that revert did not land, so
-        # marking it "Ready" would lie. Any Task touched by a held repo waits for that draft.
+        # A Task whose repo revert was held as a draft is skipped: that revert did not land, so the
+        # Task keeps its current Status. Any Task touched by a held repo waits for that draft.
         held_repos=$(printf '%s' "$produced" | jq -c '[.[] | select(.draft==true) | .repo]')
         reset_task_ids=$(printf '%s' "$ledger" | jq -r --argjson held "$held_repos" '
           ( [ .[] | select(.repo as $r | $held | index($r)) | .tasks[] ] | unique ) as $blocked
@@ -802,9 +802,9 @@ runs:
             echo "board: Task ${content} already \"Ready\" — no-op." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
-          # Inline the single-select option id into the mutation string, as board-write does: passed
-          # via -F, gh would coerce an all-digit option id to an integer and the mutation would reject
-          # it. board_ready_opt came from GitHub's own options list, so it is safe to interpolate.
+          # Inline the single-select option id into the mutation string, as board-write does: gh
+          # coerces an all-digit option id passed via -F to an integer, which the mutation rejects.
+          # board_ready_opt came from GitHub's own options list, so it is safe to interpolate.
           wm="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{projectId:\$proj,itemId:\$item,fieldId:\$field,value:{singleSelectOptionId:\"${board_ready_opt}\"}}){ projectV2Item{ id } } }"
           GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$wm" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$board_status_field" >/dev/null || return 1
           echo "board: Task ${content} \"${cur:-<unset>}\" → \"Ready\"." | tee -a "$GITHUB_STEP_SUMMARY"

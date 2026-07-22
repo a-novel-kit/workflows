@@ -33,8 +33,7 @@ run-name: "🚀 release ${{ inputs.release_type }}${{ inputs.dry_run && ' (dry-r
 
 # There is no concurrency lock. Two releases triggered at once compute the same next tag: the first
 # push wins and the second is rejected as non-fast-forward, failing in the release job below before
-# any build job runs, so an accidental double-trigger cannot double-release. A concurrency queue
-# would serialize them instead and let the second cut a second release. The protected `release`
+# any build job runs, so an accidental double-trigger cannot double-release. The protected `release`
 # environment is the human gate on top.
 
 jobs:
