@@ -59,8 +59,50 @@ runs:
         # Enumerate every package across every module. Iterating modules from
         # `go list -m` is what makes this work in a Go workspace, where packages
         # span more than one module and a single `go list ./...` reaches only one.
-        echo "$(for mod in $(go list -m); do go list ${mod//$(go list .)/.}/... ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }}; done)" > modules.txt
-        echo "MODULES=$(cat modules.txt | tr '\n' ' ')" >> $GITHUB_ENV
+        #
+        # Every read is checked, and the resulting set has to be non-empty. An empty MODULES is
+        # passed to gotestsum as no package arguments at all, which makes it default to `.` — a
+        # directory that in most of these modules holds no test files. It reports `DONE 0 tests`
+        # and exits 0, coverage comes out as the bare `mode: set` header, and the job goes green
+        # having run nothing. This action is the only place these tests run.
+        discover_modules() {
+          local root modules mod packages
+
+          if ! root=$(go list .); then
+            echo "::error::go list . failed — cannot derive the module path prefix"
+            return 1
+          fi
+
+          if ! modules=$(go list -m); then
+            echo "::error::go list -m failed — cannot enumerate the modules"
+            return 1
+          fi
+
+          : >modules.txt
+
+          for mod in $modules; do
+            if ! packages=$(go list "${mod//$root/.}/..."); then
+              echo "::error::go list failed for module ${mod}"
+              return 1
+            fi
+
+            # A module contributing nothing is legitimate — every one of its packages may be
+            # filtered out, and then the filter chain's last grep exits 1. Only the emptiness of
+            # the whole set is a failure, so it is checked once, below.
+            [ -n "$packages" ] || continue
+
+            printf '%s\n' "$packages" ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }} >>modules.txt
+          done
+
+          if [ ! -s modules.txt ]; then
+            echo "::error::discovery produced no packages — the test run would report success having run nothing"
+            return 1
+          fi
+        }
+
+        discover_modules || exit 1
+
+        echo "MODULES=$(tr '\n' ' ' <modules.txt)" >>"$GITHUB_ENV"
     - name: run tests
       shell: bash
       run: |
