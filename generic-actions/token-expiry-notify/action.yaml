@@ -67,14 +67,85 @@ runs:
       run: |
         set -euo pipefail
 
+        # Post one embed to the webhook, retrying a failed delivery. Returns non-zero once the
+        # attempts are spent, so a caller decides whether an undelivered notice fails the job.
+        post_embed() { # $1=embed description  $2=decimal embed color
+          local payload code attempt
+          # allowed_mentions parse:[] keeps a maintenance nudge from pinging a role or @everyone.
+          payload=$(jq -n --arg d "$1" --argjson c "$2" \
+            '{embeds: [{description: $d, color: $c}], allowed_mentions: {parse: []}}')
+
+          if [ "$DRY_RUN" = "true" ]; then
+            { echo "[dry-run] would post the ${TOKEN_NAME} embed (color $2):"; printf '%s\n' "$1"; } \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::warning::no webhook configured — can't post the \"${TOKEN_NAME}\" notice."
+            return 1
+          fi
+
+          code=000
+          for attempt in 1 2 3; do
+            code=$(curl -sS --connect-timeout 5 --max-time 15 -o "$RUNNER_TEMP/tok_resp" -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
+            if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+              echo "Posted the ${TOKEN_NAME} notice (HTTP $code)." | tee -a "$GITHUB_STEP_SUMMARY"
+              return 0
+            fi
+            echo "::warning::notice post attempt $attempt/3 failed (HTTP $code)."
+            [ "$attempt" -lt 3 ] && sleep "$((attempt * attempt * 2))"
+          done
+
+          echo "::error::couldn't post the ${TOKEN_NAME} notice after 3 attempts (last HTTP $code)."
+          return 1
+        }
+
+        # Classify what the credential check found. A transport failure, a credential GitHub rejects,
+        # and a credential that carries no expiry are three outcomes, and only the last is benign.
+        token_state() { # $1=curl exit status  $2=HTTP status  $3=expiry header value
+          if [ "$1" -ne 0 ]; then printf 'unreachable'
+          elif [ "$2" != "200" ]; then printf 'rejected'
+          elif [ -z "$3" ]; then printf 'non-expiring'
+          else printf 'expiring'
+          fi
+        }
+
         # A fine-grained PAT's expiry rides on the response header of any authenticated request. A
         # non-expiring credential, such as a classic PAT or an App token, sends no such header.
-        exp=$(curl -sfS -o /dev/null -D - -H "Authorization: Bearer ${TOKEN}" https://api.github.com/ 2>/dev/null \
-          | grep -i '^github-authentication-token-expiration:' | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r' || true)
-        if [ -z "$exp" ]; then
-          echo "Token \"${TOKEN_NAME}\" has no expiration header (non-expiring / not a fine-grained PAT) — nothing to remind." | tee -a "$GITHUB_STEP_SUMMARY"
-          exit 0
-        fi
+        #
+        # curl runs without -f so a rejected credential still returns its status line, which is what
+        # separates an expired token from a network fault and from a token that has no expiry.
+        headers="$RUNNER_TEMP/tok_headers"
+        curl_err="$RUNNER_TEMP/tok_curl_err"
+        curl_status=0
+        http_code=$(curl -sS -o /dev/null -D "$headers" -w '%{http_code}' \
+          -H "Authorization: Bearer ${TOKEN}" https://api.github.com/ 2>"$curl_err") || curl_status=$?
+        exp=$(grep -i '^github-authentication-token-expiration:' "$headers" 2>/dev/null \
+          | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r' || true)
+
+        case "$(token_state "$curl_status" "${http_code:-000}" "$exp")" in
+          unreachable)
+            echo "::error::could not reach GitHub to check \"${TOKEN_NAME}\": $(tr -d '\n' <"$curl_err")"
+            exit 1
+            ;;
+          rejected)
+            # The credential the automation depends on is already gone. This is the outcome the
+            # reminder exists for, so it alerts and fails.
+            alert="## 🚨 [Token] ${TOKEN_NAME} - rejected by GitHub"$'\n'"-# HTTP ${http_code} — expired, revoked, or without the access it needs. Rotate it."
+            if [ -n "${REGEN_MD:-}" ]; then
+              alert="${alert}"$'\n\n'"${REGEN_MD}"
+            fi
+            post_embed "$alert" 15158332 || true
+            echo "::error::GitHub rejected \"${TOKEN_NAME}\" with HTTP ${http_code} — expired, revoked, or without the access it needs."
+            exit 1
+            ;;
+          non-expiring)
+            echo "Token \"${TOKEN_NAME}\" carries no expiry (classic PAT or App token) — nothing to remind." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+            ;;
+        esac
         exp_ts=$(date -u -d "$exp" +%s 2>/dev/null || echo 0)
         if [ "$exp_ts" -eq 0 ]; then
           echo "::warning::couldn't parse the expiry \"${exp}\" for \"${TOKEN_NAME}\" — skipping."
@@ -116,29 +187,5 @@ runs:
         fi
         desc=$(printf '%s' "$desc" | head -c 3900)
         desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
-        # allowed_mentions parse:[] keeps a maintenance nudge from pinging a role or @everyone.
-        payload=$(jq -n --arg d "$desc" --argjson c "$color" \
-          '{embeds: [{description: $d, color: $c}], allowed_mentions: {parse: []}}')
 
-        if [ "$DRY_RUN" = "true" ]; then
-          { echo "[dry-run] would post the ${TOKEN_NAME} expiry embed (color ${color}, ${days}d left):"; printf '%s\n' "$desc"; } | tee -a "$GITHUB_STEP_SUMMARY"
-          exit 0
-        fi
-        if [ -z "${WEBHOOK:-}" ]; then
-          echo "::warning::no webhook configured — can't post the \"${TOKEN_NAME}\" expiry reminder (${days}d left)."
-          exit 0
-        fi
-
-        max=3; code=000
-        for attempt in $(seq 1 "$max"); do
-          code=$(curl -sS --connect-timeout 5 --max-time 15 -o "$RUNNER_TEMP/tok_resp" -w '%{http_code}' \
-            -X POST -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
-          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
-            echo "Posted the ${TOKEN_NAME} expiry reminder (HTTP $code, ${days}d left)." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "::warning::reminder post attempt $attempt/$max failed (HTTP $code)."
-          [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
-        done
-        echo "::error::couldn't post the ${TOKEN_NAME} expiry reminder after $max attempts (last HTTP $code)."
-        exit 1
+        post_embed "$desc" "$color"
