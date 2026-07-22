@@ -443,6 +443,14 @@ runs:
         STABILIZE_SECONDS: "120"
       run: |
         set -euo pipefail
+        # The marker currently in the body, as JSON — empty when there is none or it is unusable.
+        current_marker() { # $1 = body
+          printf '%s\n' "$1" \
+            | awk -v s="$START" -v e="$END" '$0 == s {f=1;next} $0 == e {f=0} f' \
+            | sed -n '/^[[:space:]]*[{[]/,$p' \
+            | jq -s -c '.[0] // empty' 2>/dev/null || true
+        }
+
         START='<!-- epic-membership:snapshot:start -->'
         END='<!-- epic-membership:snapshot:end -->'
 
@@ -474,10 +482,7 @@ runs:
         # an unreadable FROZEN marker falls to the `pending` branch below, which OVERWRITES it with the
         # current live set — erasing exactly the de-labeled member the snapshot was frozen to remember.
         # All three participants extract identically.
-        marker=$(printf '%s\n' "$body" \
-          | awk -v s="$START" -v e="$END" '$0 == s {f=1;next} $0 == e {f=0} f' \
-          | sed -n '/^[[:space:]]*[{[]/,$p' \
-          | jq -s -c '.[0] // empty' 2>/dev/null || true)
+        marker=$(current_marker "$body")
         # An unparseable marker (hand-edited garbage) is treated as absent → a fresh pending, which
         # self-heals it rather than crashing or freezing corruption.
         if [ -z "$marker" ] || ! printf '%s' "$marker" | jq empty 2>/dev/null; then marker=null; fi
@@ -569,13 +574,6 @@ runs:
         # RE-DERIVE will happily freeze a member set the world has already moved past, and the retry
         # below would make it win. So each attempt re-checks the decision against what is actually there.
 
-        # The marker currently in the body, as JSON — empty when there is none or it is unusable.
-        current_marker() { # $1 = body
-          printf '%s\n' "$1" \
-            | awk -v s="$START" -v e="$END" '$0 == s {f=1;next} $0 == e {f=0} f' \
-            | sed -n '/^[[:space:]]*[{[]/,$p' \
-            | jq -s -c '.[0] // empty' 2>/dev/null || true
-        }
 
         # Same marker for our purposes: same status and same member set. Deliberately ignores `at`,
         # which is per-writer — byte equality would make two writers with an identical set unable to

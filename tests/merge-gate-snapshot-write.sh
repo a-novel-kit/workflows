@@ -82,21 +82,34 @@ gh() {
 
 M1='[{"repo":"a-novel-kit/repo-a","number":1}]'
 M2='[{"repo":"a-novel-kit/repo-a","number":1},{"repo":"a-novel-kit/repo-b","number":2}]'
+# Same size as M2, different members: without this, every "members differ" case also differs in
+# COUNT, and comparing lengths would be indistinguishable from comparing sets.
+M2B='[{"repo":"a-novel-kit/repo-a","number":1},{"repo":"a-novel-kit/repo-c","number":3}]'
 
 pending_json() { jq -cn --arg at "${2:-2026-07-22T10:00:00Z}" --argjson m "$1" '{status:"pending", at:$at, members:$m}'; }
 frozen_json() { jq -cn --argjson m "$1" '{status:"frozen", members:$m}'; }
 
-region_file() { # $1 = payload json -> a region file built exactly as the action builds it
-  local f
+# The note the action actually writes, read OUT OF THE MANIFEST. Restating it here is how a fixture
+# comes to encode a belief instead of the format: a note that ever began with `[` or `{` would make
+# current_marker latch onto it and read every marker as absent, and a paraphrase could never show it.
+note_of() { # frozen|pending
+  local key=FROZEN
+  [ "$1" = frozen ] || key=PENDING
+  sed -n "s/^ *note=\"\(_Epic membership, $key.*\)\"$/\1/p" "$ACTION" | head -1
+}
+region_file() { # $1 = payload json, $2 = frozen|pending -> the region exactly as the action builds it
+  local f note
+  note=$(note_of "${2:-pending}")
+  [ -n "$note" ] || { echo "::error::could not read the note text from $ACTION"; exit 1; }
   f=$(mktemp -p "$WORK")
-  { echo "$START"; echo "_Epic membership. Do not edit._"; printf '%s\n' "$1"; echo "$END"; } > "$f"
+  { echo "$START"; printf '%s\n' "$note"; printf '%s\n' "$1"; echo "$END"; } > "$f"
   printf '%s' "$f"
 }
 server_body() { # $1 = marker json, or empty for a body with no marker
   if [ -z "${1:-}" ]; then
     printf 'Some prose.\n\nMore prose.\n' > "$WORK/body"
   else
-    printf 'Some prose.\n\n%s\n_note_\n%s\n%s\n\nMore prose.\n' "$START" "$1" "$END" > "$WORK/body"
+    printf 'Some prose.\n\n%s\n%s\n%s\n%s\n\nMore prose.\n' "$START" "$(note_of pending)" "$1" "$END" > "$WORK/body"
   fi
 }
 marker_now() { current_marker "$(cat "$WORK/body")"; }
@@ -118,7 +131,7 @@ reset() {
 }
 # Capture the function's own output so it cannot be mistaken for the exit code, and so both tee'd
 # and plain log lines can be asserted from one place.
-run() { write_marker "$(region_file "$payload")" > "$WORK/out" 2>&1 && echo 0 || echo $?; }
+run() { write_marker "$(region_file "$payload" "$do")" > "$WORK/out" 2>&1 && echo 0 || echo $?; }
 said() { grep -q "$1" "$WORK/out"; }
 
 echo "the ordinary write"
@@ -233,7 +246,7 @@ echo "splice, on its own"
 # splice defect therefore reads as a green suite unless it is exercised on its own.
 sp() { # $1 = body text, $2 = payload -> the spliced result
   local b r
-  b=$(mktemp -p "$WORK"); r=$(region_file "$2")
+  b=$(mktemp -p "$WORK"); r=$(region_file "$2" frozen)
   printf '%s\n' "$1" > "$b"
   splice "$b" "$r"
 }
@@ -263,6 +276,43 @@ out=$(sp "$(printf '%s\nstray end first\n%s\n' "$END" "$START")" "$P")
 one_region "$out" && ok "inverted fences are healed to one region" || ko "inverted fences survived"
 
 echo
+echo "same status, different members of the same size"
+# Without this, every members-differ case also differs in COUNT, so comparing lengths would pass for
+# comparing sets — in both the equivalence check and the re-derive guard.
+reset
+server_body "$(pending_json "$M2B" 2026-07-22T09:00:00Z)"
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+eq "an equal-size but different set is corrected" "$(run)" 0
+eq "which takes a write" "$(writes)" 1
+eq "and our members are what stand" "$(marker_now | jq -c '.members')" "$M2"
+reset
+server_body "$(pending_json "$M2B" 2026-07-22T09:00:00Z)"
+do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
+eq "and a freeze against an equal-size peer set abandons" "$(run)" 2
+eq "writing nothing" "$(writes)" 0
+
+echo
+echo "a region holding more than one value"
+# jq -s '.[0]' takes the first. If a hand-edit leaves two, the first wins — including an empty frozen
+# set, which would pin the Epic to no members at all.
+reset
+# BOTH values sit inside the fences — that is what makes "first" meaningful.
+printf 'prose\n%s\n%s\n%s\n%s\n%s\n' "$START" "$(note_of pending)" \
+  "$(pending_json "$M1")" "$(jq -cn '{status:"frozen",members:[]}')" "$END" > "$WORK/body"
+eq "the first value in the region is the one read" "$(marker_now | jq -r '.status')" pending
+eq "not the last" "$(marker_now | jq -r '.members | length')" 1
+
+echo
+
+echo
+echo "a failing edit"
+reset
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+printf 'x' > "$WORK/edit_fails"
+eq "an edit that errors is retried, then given up on" "$(run)" 1
+eq "after three attempts" "$(writes)" 3
+said 'last write error' && ok "and the API error is surfaced, not swallowed" || ko "the edit error was discarded"
+
 echo
 echo "read failures"
 reset
@@ -271,8 +321,12 @@ printf 2 > "$WORK/read_fails"
 eq "two failed reads still converge on the third attempt" "$(run)" 0
 reset
 do=pending; cur="$M2"; payload=$(pending_json "$M2")
+printf 'Important human prose.\n\nA hand-written plan.\n' > "$WORK/body"
 printf 99 > "$WORK/read_fails"
 eq "a total read failure gives up rather than claiming success" "$(run)" 1
+eq "and writes nothing at all" "$(writes)" 0
+grep -q 'A hand-written plan' "$WORK/body" \
+  && ok "leaving the Epic body untouched" || ko "the body was written blind after a failed read"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
@@ -281,7 +335,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 39 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 39) — the suite did not execute fully"
+if [ "$ran" -ne 52 ]; then
+  echo "::error::$ran assertion(s) ran, expected exactly 52 — the suite did not execute fully (or an assertion was added without raising this)"
   exit 1
 fi
