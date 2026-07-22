@@ -47,6 +47,17 @@ on:
           When "true" (default), the Epic status read-model only logs the table it would render; set
           "false" to rewrite it into each active Epic's issue body. Display-only (no board write, no
           check-run), so it flips live on its own schedule, independent of the other passes.
+      planning_repo:
+        required: false
+        type: string
+        default: .github
+        description: >
+          Repository (name only; owner is `org`) holding the Epic issues this sweep reads: the
+          `automation:paused` marker, the activation snapshot, and the status read-model it renders.
+          Defaults to the org `.github` repo. Every pass below is threaded from this one value,
+          because merge-gate writes the snapshot where detect-partial-landing looks for it — set it on
+          one pass and leave another default and every Epic quietly falls back to live label
+          membership, with no error anywhere.
       regate_snapshot_dry_run:
         required: false
         type: string
@@ -237,6 +248,7 @@ jobs:
           pull_request_number: ${{ matrix.pr.number }}
           head_sha: ${{ matrix.pr.sha }}
           snapshot_dry_run: ${{ inputs.regate_snapshot_dry_run }}
+          planning_repo: ${{ inputs.planning_repo }}
           # Org-level halt: when engaged merge-gate holds this idle PR too by posting failure, so a
           # PR that emits no event while halted is still stopped. A gate posts failure; skipping would
           # leave a neutral check that passes.
@@ -254,6 +266,7 @@ jobs:
       - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.22.0
         with:
           client_id: ${{ inputs.client_id }}
+          planning_repo: ${{ inputs.planning_repo }}
           app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.detect_dry_run }}
           # Org-level halt, fail-safe as in the rollup job: when engaged the sweep skips all work,
@@ -273,6 +286,7 @@ jobs:
       - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.22.0
         with:
           client_id: ${{ inputs.client_id }}
+          planning_repo: ${{ inputs.planning_repo }}
           app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.render_dry_run }}
           # Org-level halt: when engaged this display-only writer no-ops, editing no Epic body.

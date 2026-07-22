@@ -34,6 +34,24 @@ on:
         required: false
         type: string
         default: ""
+      planning_repo:
+        description: >-
+          Repository (name only; owner is the org) holding the Epic issues the gate resolves
+          membership from and writes the activation snapshot into. Defaults to the org `.github` repo.
+          The gate, epic-membership and detect-partial-landing must all read the same repo: the gate
+          writes the snapshot there and the others look for it there, so a value set on one and left
+          default on another degrades every Epic to live label membership without an error anywhere.
+        required: false
+        type: string
+        default: .github
+      snapshot_dry_run:
+        description: >-
+          When "true", the gate logs the activation snapshot it would capture and leaves the Epic body
+          alone; the `merge-gate` check-run is posted either way. Defaults to writing, since a
+          rehearsing gate captures nothing and every Epic falls back to live label membership.
+        required: false
+        type: string
+        default: "false"
     secrets:
       app_private_key:
         description: The [Agent] bot App private key (PEM).
@@ -56,6 +74,8 @@ jobs:
           # org variable because a composite action cannot read `vars` itself, and the variable need
           # not exist: an unset value reads as empty, which is a running state.
           kill_switch: ${{ inputs.kill_switch }}
+          planning_repo: ${{ inputs.planning_repo }}
+          snapshot_dry_run: ${{ inputs.snapshot_dry_run }}
 
   auto-merge:
     # Only where there is a PR to enable (pull_request events), and never on a draft.
