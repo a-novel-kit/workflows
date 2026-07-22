@@ -47,6 +47,17 @@ on:
           When "true" (default), the Epic status read-model only logs the table it would render; set
           "false" to rewrite it into each active Epic's issue body. Display-only (no board write, no
           check-run), so it flips live on its own schedule, independent of the other passes.
+      regate_snapshot_dry_run:
+        required: false
+        type: string
+        default: "false"
+        description: >
+          When "true", the re-posted merge-gate logs the activation snapshot it would capture and
+          leaves the Epic body alone; the gate check-run is posted either way. Defaults to writing,
+          unlike the flags around it: those gate the rollout of new behavior, while the capture is
+          already live, and this sweep is usually the only thing that runs on a set that is ready and
+          waiting. A pending marker promotes to frozen on a later pass, so a rehearsing sweep leaves
+          it pending and the Epic lands on live label membership.
       archive_dry_run:
         required: false
         type: string
@@ -225,6 +236,7 @@ jobs:
           repo: ${{ matrix.pr.repo }}
           pull_request_number: ${{ matrix.pr.number }}
           head_sha: ${{ matrix.pr.sha }}
+          snapshot_dry_run: ${{ inputs.regate_snapshot_dry_run }}
           # Org-level halt: when engaged merge-gate holds this idle PR too by posting failure, so a
           # PR that emits no event while halted is still stopped. A gate posts failure; skipping would
           # leave a neutral check that passes.
