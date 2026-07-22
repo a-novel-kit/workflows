@@ -578,6 +578,18 @@ runs:
         # Same marker for our purposes: same status and same member set. Deliberately ignores `at`,
         # which is per-writer — byte equality would make two writers with an identical set unable to
         # satisfy each other and ping-pong until both gave up, reporting a failure that never happened.
+        # "The marker already says what we intend, AND it is a marker that can still make progress."
+        # Used for BOTH the entry short-circuit and the post-write verify: if these two ever answer
+        # differently, a repair that was clobbered reads as a repair that landed.
+        marker_settled() { # $1 = live marker json, $2 = our payload json
+          same_marker "$1" "$2" || return 1
+          # A frozen marker carries no `at` and needs none — it is terminal.
+          [ "$(printf '%s' "$1" | jq -r '.status // ""')" = "frozen" ] && return 0
+          # A pending marker whose `at` cannot be parsed can never age, so it is not settled however
+          # equal its members look: the decision step routes exactly that case to a repairing write.
+          printf '%s' "$1" | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null 2>&1
+        }
+
         same_marker() { # $1 = marker json, $2 = marker json
           [ -n "$1" ] && [ -n "$2" ] && jq -e -n --argjson a "$1" --argjson b "$2" \
             '($a.status == $b.status) and (($a.members // []) == ($b.members // []))' >/dev/null 2>&1
@@ -590,6 +602,9 @@ runs:
             err=""   # or a later give-up reports an earlier attempt's error
             # Re-read every attempt, the first included.
             if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+              # Record it: a read failure has no diagnostic of its own, and clearing `err` each attempt
+              # would otherwise leave the give-up message empty when the last attempts fail here.
+              err="could not read ${ORG}/${PLANNING_REPO}#${EPIC} (attempt ${attempt})"
               [ "$attempt" -lt 3 ] && sleep 2
               continue
             fi
@@ -600,9 +615,7 @@ runs:
             # decision step routes exactly that case here to REPAIR it, because a timestamp that cannot
             # be read can never age, so the marker would sit pending forever and the Epic would keep
             # live membership with a success line in the log every sweep.
-            if same_marker "$marker" "$payload" \
-              && { [ "$(printf '%s' "$marker" | jq -r '.status // ""')" = "frozen" ] \
-                || printf '%s' "$marker" | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null 2>&1; }; then
+            if marker_settled "$marker" "$payload"; then
               rc=0
               break
             fi
@@ -621,11 +634,16 @@ runs:
             # RE-DERIVE the freeze. `do=frozen` means "the set has held still long enough", judged
             # against the marker this pass read at the start. If the marker has moved since — a peer
             # saw the set change and reset the clock — that judgement is stale, and freezing it would
-            # make a wrong set permanent. Abandon; the next pass decides on current truth.
+            # make a wrong set permanent. Age is re-checked too: without it a freeze can land seconds
+            # after a peer's reset, skipping the very window that lets the lagging label index surface
+            # a missing member. Abandon; the next pass decides on current truth.
             if [ "$do" = "frozen" ] \
               && ! jq -e -n --argjson m "${marker:-null}" --argjson cur "$cur" \
+                   --arg now "$now" --argjson thr "${STABILIZE_SECONDS}" \
                    '($m | type == "object") and $m.status == "pending"
-                    and (($m.members // []) | sort_by(.repo, .number)) == $cur' >/dev/null 2>&1; then
+                    and (($m.members // []) | sort_by(.repo, .number)) == $cur
+                    and ($m.at | try (fromdateiso8601 | true) catch false)
+                    and (($now | fromdateiso8601) - ($m.at | fromdateiso8601)) >= $thr' >/dev/null 2>&1; then
               echo "::warning::Epic #${EPIC}: the member set moved while this pass was deciding — not freezing a stale set; the next pass re-derives." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
               rc=2
@@ -634,12 +652,12 @@ runs:
 
             printf '%s' "$body" > "$bodyf"
             splice "$bodyf" "$regionf" > "$outf"
-            err=$(gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" 2>&1) || true
+            err=$(gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --body-file "$outf" 2>&1 >/dev/null) || true
             # Verify rather than trust the edit's exit code: a peer write can land after ours. Compare
             # the REGION semantically — grepping the whole body would also match an orphaned payload
             # line that splice's recovery path leaves behind as prose.
             if body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r') \
-              && same_marker "$(current_marker "$body")" "$payload"; then
+              && marker_settled "$(current_marker "$body")" "$payload"; then
               rc=0
               break
             fi

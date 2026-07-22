@@ -27,7 +27,7 @@ extract() { # $1 = function name — lift it out of the run: block and de-indent
     f && /^        \}$/ {exit}
   ' "$ACTION" | sed 's/^        //'
 }
-for fn in splice current_marker same_marker write_marker; do
+for fn in splice current_marker same_marker marker_settled write_marker; do
   out=$(extract "$fn")
   if [ -z "$out" ]; then
     echo "::error::could not extract $fn from $ACTION — did its definition move or change indent?"
@@ -41,6 +41,9 @@ if ! bash -n "$WORK/lib.sh"; then
 fi
 
 export ORG=a-novel-kit PLANNING_REPO=.github EPIC=900
+# The re-derive guard re-checks AGE, so the harness must supply the same clock the step does.
+export STABILIZE_SECONDS=120
+now=2026-07-22T10:00:00Z
 export GITHUB_STEP_SUMMARY="$WORK/summary.md"
 START='<!-- epic-membership:snapshot:start -->'
 END='<!-- epic-membership:snapshot:end -->'
@@ -72,6 +75,9 @@ gh() {
       printf 'x' >> "$WORK/writes"
       # A write that silently does not land — the API returned success but the body is unchanged.
       [ -s "$WORK/noop" ] || cp "$f" "$WORK/body"
+      # Real `gh issue edit` prints the issue URL on success. Without it, capturing the command's
+      # stdout into the error variable is invisible.
+      echo "https://github.com/${ORG}/${PLANNING_REPO}/issues/${EPIC}"
       # File-backed for the same reason as read_fails: the write runs inside $( ), so clearing a
       # shell variable here would never reach the parent and the peer would strike on every attempt.
       if [ -s "$WORK/steal" ]; then cp "$WORK/steal" "$WORK/body"; : > "$WORK/steal"; fi
@@ -209,7 +215,8 @@ orphan=$(frozen_json "$M2")
 # The body carries our exact payload as loose prose (what splice's recovery path leaves behind) plus
 # a region saying something else. The write does not land, so a correct verify must fail — a
 # whole-body grep would match the orphan and report success.
-printf 'Some prose.\n%s\n\n%s\n_note_\n%s\n%s\n' "$orphan" "$START" "$(pending_json "$M2")" "$END" > "$WORK/body"
+printf 'Some prose.\n%s\n\n%s\n%s\n%s\n%s\n' "$orphan" "$START" "$(note_of pending)" \
+  "$(pending_json "$M2" 2026-07-22T09:00:00Z)" "$END" > "$WORK/body"
 printf 'x' > "$WORK/noop"
 do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
 eq "a write that never landed is not masked by the orphan" "$(run)" 1
@@ -228,6 +235,18 @@ for bad in '"not-a-date"' 'null'; do
   marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null \
     && ok "and the marker can age again" || ko "the marker still cannot age"
 done
+
+echo
+echo "a freeze must not skip the stabilization window"
+# The decision step only says `frozen` once the marker has held still past STABILIZE_SECONDS. If the
+# guard does not re-check age, a peer's clock reset can be overtaken seconds later — freezing before
+# the lagging label index has had its window to surface a missing member.
+reset
+server_body "$(pending_json "$M2" 2026-07-22T09:59:30Z)"   # 30s old, threshold is 120s
+do=frozen; cur="$M2"; payload=$(frozen_json "$M2")
+eq "a freeze against a freshly reset clock abandons" "$(run)" 2
+eq "writing nothing" "$(writes)" 0
+eq "and the marker stays pending" "$(marker_now | jq -r .status)" pending
 
 echo
 echo "member order is not a reason to abandon"
@@ -304,6 +323,29 @@ eq "not the last" "$(marker_now | jq -r '.members | length')" 1
 
 echo
 
+echo "a clobbered repair is retried, not reported as done"
+# The entry check knows an unreadable `at` is not equivalent; the VERIFY must know it too. If it
+# falls back to a plain equivalence test, a repair that a peer immediately undid reads as landed —
+# the marker never ages, and the log says success.
+reset
+bad=$(jq -cn --argjson m "$M2" '{status:"pending", at:"not-a-date", members:$m}')
+server_body "$bad"
+printf 'Some prose.\n\n%s\n%s\n%s\n%s\n\nMore prose.\n' "$START" "$(note_of pending)" "$bad" "$END" > "$WORK/steal"
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+eq "the repair is retried until it sticks" "$(run)" 0
+eq "which takes two writes" "$(writes)" 2
+marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null \
+  && ok "and the marker can age at the end of it" || ko "the marker still cannot age"
+
+echo
+echo "a give-up message carries the error, not the success output"
+reset
+do=pending; cur="$M2"; payload=$(pending_json "$M2")
+printf 'x' > "$WORK/noop"          # every edit returns success but changes nothing
+eq "an unlandable write gives up" "$(run)" 1
+said 'https://' && ko "the edit's success output was captured as an error" \
+  || ok "the success URL is not mistaken for an error"
+
 echo
 echo "a failing edit"
 reset
@@ -335,7 +377,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -ne 52 ]; then
-  echo "::error::$ran assertion(s) ran, expected exactly 52 — the suite did not execute fully (or an assertion was added without raising this)"
+if [ "$ran" -ne 60 ]; then
+  echo "::error::$ran assertion(s) ran, expected exactly 60 — the suite did not execute fully (or an assertion was added without raising this)"
   exit 1
 fi
