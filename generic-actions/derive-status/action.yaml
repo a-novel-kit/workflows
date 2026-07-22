@@ -113,18 +113,22 @@ runs:
           exit 1
         fi
 
-        # A Task pairs with exactly one PR, so there is normally one closing ref. A PR that
-        # closes several resolves to the lowest-numbered one, which is deterministic across
-        # re-runs; the reconcile sweep derives the others from their own PRs.
+        # Every closing issue is derived, not just one. This used to take the lowest-numbered ref
+        # and leave the rest in whatever status they already held, on the stated grounds that "the
+        # reconcile sweep covers the rest" — but the sweep re-derives an issue from ITS OWN pull
+        # request, and an issue closed by a sibling's PR has none. So the others were never picked
+        # up by anything: not a race that resolves on the next pass, but a state nothing reaches.
+        # A Task left reading `Triage` while its fix is in review is invisible, because the run
+        # that stranded it succeeds.
         refs=$(echo "$pr" | jq '.data.repository.pullRequest.closingIssuesReferences.nodes')
         ref_count=$(echo "$refs" | jq 'length')
-        issue_id=$(echo "$refs" | jq -r 'sort_by(.number) | .[0].id // empty')
-        # Labels of the selected closing issue: a hotfix cleanup Task carries `hotfix-reconcile`,
-        # which makes Done its terminal MERGED status.
-        issue_labels=$(echo "$refs" | jq -c 'sort_by(.number) | (.[0].labels.nodes // []) | map(.name)')
-        if [ "$ref_count" -gt 1 ]; then
-          echo "::warning::PR #$PR closes $ref_count issues; deriving the lowest-numbered. The reconcile sweep covers the rest."
-        fi
+        # Newline-separated: board-write takes several ids and applies the same field and value to
+        # each, so the fan-out lives in the one privileged writer instead of here.
+        issue_ids=$(echo "$refs" | jq -r 'sort_by(.number) | .[].id')
+        # Labels drive one branch below — a hotfix cleanup Task carries `hotfix-reconcile`, which
+        # makes Done its terminal MERGED status — so they are collected across every closing issue
+        # and checked for agreement rather than sampled from one.
+        labelled=$(echo "$refs" | jq -c '[.[] | (.labels.nodes // []) | map(.name) | index("hotfix-reconcile") != null]')
 
         # A pure function of the PR's current state: the reconcile sweep re-runs it and has
         # to reach the same answer whatever event fired.
@@ -132,10 +136,17 @@ runs:
           MERGED)
             # A hotfix-reconcile cleanup Task is terminal on merge: the forward-port landed and a
             # hotfix cuts its own tag off the reconcile's baseline, so nothing else ships it.
-            if printf '%s' "$issue_labels" | jq -e 'index("hotfix-reconcile")' >/dev/null 2>&1; then
+            # One status is written to every closing issue, so they have to agree on this. A PR
+            # closing both a hotfix cleanup Task and an ordinary one has no single right answer —
+            # it fails rather than silently picking one, which is the mistake this change is about.
+            hotfix_count=$(printf '%s' "$labelled" | jq '[.[] | select(.)] | length')
+            if [ "$hotfix_count" = "0" ]; then
+              status="Awaiting release"
+            elif [ "$hotfix_count" = "$ref_count" ]; then
               status="Done"
             else
-              status="Awaiting release"
+              echo "::error::PR #$PR closes both hotfix-reconcile and ordinary Tasks, which derive different terminal statuses. Split the PR so each lands with its own."
+              exit 1
             fi
             ;;
           CLOSED) status="Ready" ;; # closed unmerged → the attempt was abandoned; back to actionable
@@ -154,7 +165,7 @@ runs:
             ;;
         esac
 
-        if [ -z "$issue_id" ]; then
+        if [ -z "$issue_ids" ]; then
           echo "PR #$PR closes no issue — nothing to derive." | tee -a "$GITHUB_STEP_SUMMARY"
           echo "has_issue=false" >> "$GITHUB_OUTPUT"
           exit 0
@@ -170,12 +181,15 @@ runs:
 
         {
           echo "has_issue=true"
-          echo "issue_id=$issue_id"
+          # Multi-line, so it needs the delimiter form; board-write splits on whitespace.
+          echo "issue_ids<<EOF_ISSUE_IDS"
+          printf '%s\n' "$issue_ids"
+          echo "EOF_ISSUE_IDS"
           echo "status=$status"
           echo "activated=$activated"
           echo "today=$(date -u +%Y-%m-%d)"
         } >> "$GITHUB_OUTPUT"
-        echo "PR #$PR ($state, draft=$draft, review=${review:-none}) → \"$status\" on issue $issue_id." \
+        echo "PR #$PR ($state, draft=$draft, review=${review:-none}) → \"$status\" on $ref_count issue(s)." \
           | tee -a "$GITHUB_STEP_SUMMARY"
 
     # Write the derived Status. board-write mints the [Agent] token, resolves the item,
@@ -190,7 +204,7 @@ runs:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
         project_id: ${{ inputs.project_id }}
-        content_id: ${{ steps.derive.outputs.issue_id }}
+        content_id: ${{ steps.derive.outputs.issue_ids }}
         field: Status
         value: ${{ steps.derive.outputs.status }}
         kill_switch: ${{ inputs.kill_switch }}
@@ -205,7 +219,7 @@ runs:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
         project_id: ${{ inputs.project_id }}
-        content_id: ${{ steps.derive.outputs.issue_id }}
+        content_id: ${{ steps.derive.outputs.issue_ids }}
         field: Start date
         value: ${{ steps.derive.outputs.today }}
         only_if_empty: "true"
