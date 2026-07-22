@@ -1,9 +1,10 @@
 name: epic-rollback (reusable)
 
-# The REUSABLE epic-rollback engine (workflow_call): every governed repo's thin `epic-rollback.yaml`
-# admin-dispatch caller (repocfg-provisioned) calls this with its org creds + the operator's dispatch
-# inputs. Runs in the CALLER's context; nested actions are remote-pinned (`./` would resolve to the
-# caller, not here). Destructive escape hatch — the admin gate + typed confirmation live in the job.
+# The reusable epic-rollback engine (workflow_call). Every governed repo's thin `epic-rollback.yaml`
+# admin-dispatch caller, provisioned by repocfg, calls this with its org creds and the operator's
+# dispatch inputs. It runs in the caller's context, where a `./` path resolves against the caller's
+# checkout, so nested actions are remote-pinned. This is a destructive escape hatch, and the admin
+# gate and typed confirmation live in the job below.
 on:
   workflow_call:
     inputs:
@@ -50,14 +51,14 @@ on:
 jobs:
   rollback:
     runs-on: ubuntu-latest
-    # The default token is used only for the admin check (Metadata:read, always present); the
-    # rollback action mints its own least-privilege [Agent] tokens for every read and write.
+    # The default token serves only the admin check, which needs Metadata:read; the rollback action
+    # mints its own least-privilege [Agent] tokens for every read and write.
     permissions:
       contents: read
     steps:
-      # Fail closed unless the dispatcher is a repo admin, AND the epic number is numeric, AND
-      # the typed confirmation matches exactly. workflow_dispatch is open to any write user, so
-      # this gate is what keeps a destructive rollback admin-only + fat-finger-proof.
+      # Fail closed unless the dispatcher is a repo admin, the Epic number is numeric, and the typed
+      # confirmation matches exactly. workflow_dispatch is open to any write user, so this gate is
+      # what keeps a destructive rollback admin-only and deliberate.
       - name: Require admin + numeric epic + typed confirmation
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,9 +69,8 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          # Admin gate (copied from a-novel-kit/workflows' generic-actions/approve-pr/action.yaml):
-          # `|| echo ""` keeps a failed lookup from tripping `set -e` — an empty permission falls
-          # through and fails closed.
+          # Admin gate: `|| echo ""` keeps a failed lookup from tripping `set -e`, and an empty
+          # permission falls through and fails closed.
           perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
           if [ "$perm" != "admin" ]; then
             echo "::error::epic-rollback is admin-only; @${ACTOR} has permission '${perm:-none}'."
@@ -81,7 +81,7 @@ jobs:
             echo "::error::epic_number must be an integer, got \"${EPIC:-}\"."
             exit 1
           fi
-          # Typed confirmation — defeats a fat-finger on a destructive op.
+          # Typed confirmation, so a destructive operation cannot be triggered by a slip.
           if [ "${CONFIRM:-}" != "revert-epic-${EPIC}" ]; then
             echo "::error::confirmation mismatch — type \"revert-epic-${EPIC}\" exactly to proceed."
             exit 1
@@ -95,12 +95,12 @@ jobs:
           epic_number: ${{ inputs.epic_number }}
           reason: ${{ inputs.reason }}
           dry_run: ${{ inputs.dry_run }}
-          # BLAST-CAP: abort before any revert if the ledger spans more than this many repos.
+          # Blast cap: abort before any revert if the ledger spans more repos than this.
           max_rollback_repos: ${{ inputs.max_rollback_repos }}
-          # Org-level HALT (FAIL-SAFE — RUNNING only for an explicit off-token: empty/unset, 0, off,
-          # false, no, disabled; ANYTHING ELSE, incl. a fat-fingered value, engages) → the action
-          # aborts loud as its first step, before any mint. Threaded from the org variable (a
-          # composite action can't read `vars` itself).
+          # Org-level halt. Fail-safe: running only for an explicit off-token (empty/unset, 0, off,
+          # false, no, disabled); any other value engages it and the action aborts loudly as its first
+          # step, before any mint. Threaded from the org variable, which a composite action cannot
+          # read itself.
           kill_switch: ${{ inputs.kill_switch }}
-          # The org "Tasks" board id, inlined per-org the same way derive-status passes it.
+          # The org "Tasks" board id, inlined per org as derive-status passes it.
           project_id: ${{ inputs.project_id }}

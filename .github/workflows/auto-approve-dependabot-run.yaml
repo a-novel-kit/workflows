@@ -1,8 +1,8 @@
 name: auto-approve-dependabot (reusable)
 
-# The REUSABLE auto-approve-dependabot engine (workflow_call): every governed repo's thin
-# `auto-approve-dependabot.yaml` caller (repocfg-provisioned) calls this with its org creds. Runs in
-# the CALLER's context — it approves + queues the caller repo's trusted dependency-bot PRs.
+# The reusable auto-approve-dependabot engine (workflow_call). Every governed repo's thin
+# `auto-approve-dependabot.yaml` caller, provisioned by repocfg, calls this with its org creds. It
+# runs in the caller's context, approving and queueing that repo's trusted dependency-bot PRs.
 on:
   workflow_call:
     inputs:
@@ -29,27 +29,24 @@ jobs:
     if: >-
       github.event.pull_request.user.login == inputs.dependency_bot_login ||
       github.event.pull_request.user.login == inputs.dependabot_security_login
-    # Every step runs on the minted App token; the default token is unused.
+    # Every step runs on the minted App token, so the default token is unused.
     permissions: {}
     steps:
-      # Approve as the App — a distinct identity from the bot author, and one whose
-      # review reliably counts toward the required-approval rule (a workflow's own
-      # token does not).
+      # Approve as the App: an identity distinct from the bot author, and one whose review
+      # counts toward the required-approval rule, where a workflow's own token does not.
       - name: Mint approval token
         id: token
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ inputs.client_id }}
           private-key: ${{ secrets.bot_private_key }}
-          # No `owner`: approving + merging this one PR needs nothing org-wide, so
-          # the token stays scoped to the current repository (omitting `owner` +
-          # `repositories` scopes it there). Contrast the Projects-scoped actions.
+          # Omitting `owner` and `repositories` scopes the token to the current repository,
+          # which is all approving and merging this one PR needs.
           permission-contents: write
           permission-pull-requests: write
 
-      # A human push to the branch means the change needs real review, so approve
-      # only when every commit is the bot's own. Unknown authors count as non-bot,
-      # so the guard fails closed.
+      # A human push to the branch means the change needs real review, so this approves only when
+      # every commit is the bot's own. An unknown author counts as non-bot, failing closed.
       - name: Confirm every commit is the bot's
         id: guard
         env:
@@ -80,11 +77,10 @@ jobs:
           pull_request: ${{ github.event.pull_request.html_url }}
           github_token: ${{ steps.token.outputs.token }}
 
-      # Put the approved PR in the merge queue so it merges hands-off. The queue
-      # re-validates the required checks on the group and owns the merge method;
-      # pass `--squash` (the org's only allowed method) so the command is explicit
-      # for any repo without a queue too — where there is a queue it just logs that
-      # the strategy is queue-controlled.
+      # Put the approved PR in the merge queue so it merges hands-off. The queue re-validates the
+      # required checks on the group and owns the merge method; `--squash` is the org's only allowed
+      # method and makes the command explicit in a repo with no queue. Where there is one, gh just
+      # logs that the strategy is queue-controlled.
       - name: Enable auto-merge
         if: ${{ steps.guard.outputs.skip != 'true' }}
         env:

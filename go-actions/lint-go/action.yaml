@@ -17,12 +17,11 @@ runs:
         # to the repo-root go.mod.
         go-version-file: ${{ inputs.working-directory && format('{0}/go.mod', inputs.working-directory) || 'go.mod' }}
     # Resolve the golangci-lint version from the repo's own tool modfile, so CI
-    # lints with the exact version developers run locally (`go tool -modfile=
-    # golangci-lint.mod golangci-lint`). This is the single source of truth:
-    # Renovate bumps golangci-lint.mod and CI follows on the next run, with no
-    # version literal to keep in sync here — the workflow and the repo cannot
-    # drift, and `latest`'s fleet-wide cache-busting on every upstream release
-    # is avoided.
+    # lints with the version developers run locally (`go tool -modfile=
+    # golangci-lint.mod golangci-lint`). That modfile is the single source of
+    # truth: Renovate bumps it and CI follows on the next run, with no version
+    # literal here to drift, and no fleet-wide cache-busting from `latest` on
+    # every upstream release.
     - id: golangci-version
       shell: bash
       run: |

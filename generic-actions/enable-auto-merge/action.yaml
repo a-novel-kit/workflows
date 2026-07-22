@@ -52,9 +52,8 @@ inputs:
 runs:
   using: composite
   steps:
-    # Scope the token to just the target repo (least privilege). The [Agent] App is
-    # installed org-wide, so a cross-repo caller can enable on any sibling's repo by
-    # passing its name here.
+    # Scope the token to the target repo. The [Agent] App is installed org-wide, so a
+    # cross-repo caller reaches any sibling by passing its name here.
     - name: Mint token
       id: token
       uses: actions/create-github-app-token@v3
@@ -64,8 +63,7 @@ runs:
         owner: ${{ github.repository_owner }}
         repositories: ${{ inputs.repo }}
         permission-pull-requests: write
-        # contents:write is granted alongside pull-requests:write because the proven
-        # `gh pr merge --auto` enqueue pattern mints both.
+        # `gh pr merge --auto` needs contents:write alongside pull-requests:write.
         permission-contents: write
 
     - name: Enable auto-merge
@@ -85,18 +83,11 @@ runs:
         fi
         target="${REPO_FULL}#${PR}"
 
-        # Org-level HALT (read FIRST): FAIL-SAFE — RUNNING only for an explicit off-token
-        # (empty/unset, 0, off, false, no, disabled); ANYTHING ELSE (a fat-fingered value or garbage)
-        # engages. When engaged, do NOT arm auto-merge (no-op + exit 0; guard and the enable share one
-        # step, so the exit is sufficient). merge-gate independently HOLDs while halted, so an armed
-        # request could not merge anyway; not arming keeps the [Agent] from mutating during a halt.
-        # NOTE: this does NOT disarm auto-merge ALREADY armed on an idle ready PR before the halt —
-        # merge-gate's red check still blocks it, but there is a brief latency window until the next
-        # event / reconcile sweep re-posts that hold.
-        # The repo-scoped pr+contents:write token is minted above, ahead of this guard, on purpose:
-        # nothing past the `exit 0` exercises it, so mint-vs-halt ordering is not blast radius here
-        # (token SCOPE, not mint timing, is the enforced bound) — and every action keeps one "mint per
-        # least-privilege, then halt-first" shape instead of duplicating this fail-safe parse pre-mint.
+        # Org-level halt, read before anything is armed. Fail-safe: running only for an explicit
+        # off-token (empty/unset, 0, off, false, no, disabled); any other value engages the halt and
+        # this step exits 0 having armed nothing. A halt does not disarm auto-merge already armed on
+        # an idle ready PR — merge-gate's red check still blocks the merge, with a latency window
+        # until the next event or reconcile sweep re-posts that hold.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
@@ -105,13 +96,12 @@ runs:
             ;;
         esac
 
-        # Idempotency by query, not by parsing an error string: is auto-merge already on?
+        # Idempotency is decided by querying the PR: is auto-merge already on?
         already=$(gh pr view "$PR" --repo "$REPO_FULL" --json autoMergeRequest \
           -q '.autoMergeRequest != null')
 
-        # DRY_RUN defaults on; only the literal "false" (any case) actually enables.
-        # Lowercase with tr, not ${VAR,,} — the latter is a Bash 4+ expansion that fails
-        # on Bash 3.x (e.g. macOS runners).
+        # DRY_RUN defaults on; only the literal "false" (any case) enables. `tr` lowercases
+        # because ${VAR,,} is a Bash 4+ expansion and macOS runners ship Bash 3.x.
         dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
         if [ "$dry" != "false" ]; then
           if [ "$already" = "true" ]; then

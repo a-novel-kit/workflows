@@ -73,9 +73,9 @@ outputs:
 runs:
   using: composite
   steps:
-    # Scoped to THIS repo: push the reconcile branch (contents) and open the PR (pull-requests).
-    # No kill-switch guard — the hotfix path (this included) is exempt (the emergency STOP must not
-    # disable the emergency PATH).
+    # Scoped to this repo: push the reconcile branch (contents) and open the PR (pull-requests).
+    # No kill-switch guard: the hotfix path is exempt, since the emergency stop must not disable
+    # the emergency path.
     - name: Mint reconcile token
       id: token
       uses: actions/create-github-app-token@v3
@@ -103,8 +103,8 @@ runs:
       run: |
         set -euo pipefail
 
-        # cleanup_task feeds `Closes #<n>` — must be a bare integer (a stray value could break the
-        # closing keyword or the PR body).
+        # cleanup_task feeds `Closes #<n>`, so a bare integer: a stray value breaks the closing
+        # keyword or the PR body.
         if ! printf '%s' "$CLEANUP_TASK" | grep -qE '^[0-9]+$'; then
           echo "::error::cleanup_task must be an integer, got \"$CLEANUP_TASK\"."
           exit 1
@@ -118,24 +118,23 @@ runs:
           } >> "$GITHUB_OUTPUT"
         }
 
-        # Clone the default branch (full history so baseline + fix commits are reachable), token in
-        # the throwaway clone's remote URL only (the epic-rollback / pull-bot pattern).
+        # Clone the default branch with full history, so the baseline and fix commits are reachable.
+        # The token lives only in this throwaway clone's remote URL.
         dir=$(mktemp -d)
         git clone --quiet --branch "$default_branch" \
           "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$dir"
         git -C "$dir" config user.name "${APP_SLUG}[bot]"
         git -C "$dir" config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
-        # Bring in the fix commits + the baseline tag so the range resolves.
+        # Bring in the fix commits and the baseline tag so the range resolves.
         git -C "$dir" fetch --quiet origin "$SOURCE_REF"
         git -C "$dir" fetch --quiet origin "refs/tags/${BASELINE}:refs/tags/${BASELINE}" 2>/dev/null || true
 
-        # Short-circuit: is the fix already on the default branch? `git cherry` marks each commit in
-        # baseline..fix_head '+' (not upstream) or '-' (already upstream, by patch-id). Zero '+' → the
-        # fix is already reconciled (e.g. a re-run after the PR merged, or the fix also went to master
-        # directly) → close the loop without a redundant PR.
-        # Capture git-cherry's output and check its EXIT explicitly — piping straight into grep would
-        # swallow a real error (unresolvable baseline/fix_head) as "0 pending" and skip the reconcile
-        # on a genuine failure (fails open on the emergency path).
+        # Is the fix already on the default branch? `git cherry` marks each commit in
+        # baseline..fix_head '+' when it is not upstream and '-' when it is, matching by patch-id.
+        # No '+' means the fix is already reconciled — a re-run after the PR merged, or a fix that
+        # also went to master directly — so close the loop without a redundant PR.
+        # git-cherry's output is captured and its exit checked explicitly: piped straight into grep,
+        # an unresolvable baseline or fix_head reads as "0 pending" and skips the reconcile.
         if ! cherry_out=$(git -C "$dir" cherry "origin/${default_branch}" "$FIX_HEAD" "$BASELINE" 2>&1); then
           echo "::error::git cherry failed (baseline/fix_head unresolvable?): ${cherry_out}"
           rm -rf "$dir"
@@ -152,22 +151,22 @@ runs:
         branch="hotfix-reconcile/v${LINE}-${CLEANUP_TASK}"
         git -C "$dir" switch -c "$branch" "origin/${default_branch}" >/dev/null 2>&1
 
-        # The full range, for the draft-PR body when we degrade (so the human knows EVERY commit to
-        # finish, not just the one that stopped it). Computed before the cherry-pick mutates the tree.
+        # The full range for the draft-PR body on the degraded path, so the human sees every commit
+        # still to finish. Computed before the cherry-pick mutates the tree.
         range_commits=$(git -C "$dir" log --oneline --reverse "${BASELINE}..${FIX_HEAD}" 2>/dev/null | sed 's/^/- /')
 
-        # Cherry-pick the fix range (fix diff only — the bump is excluded by construction, it is past
-        # fix_head). -x records "(cherry picked from …)" — one of the reached-master signals. On a
-        # conflict, DON'T abort: stage whatever's there and commit it so a human resolves in the PR.
+        # Cherry-pick the fix range. It carries the fix diff alone, since the version bump sits past
+        # fix_head. -x records "(cherry picked from …)", one of the reached-master signals. A conflict
+        # does not abort: stage what is there and commit it, so a human resolves it in the PR.
         conflicted=false
         if git -C "$dir" cherry-pick -x "${BASELINE}..${FIX_HEAD}" >/dev/null 2>&1; then
           conflicted=false
         else
           conflicted=true
           conflict_paths=$(git -C "$dir" diff --name-only --diff-filter=U | tr '\n' ' ')
-          # Commit whatever the cherry-pick left — conflict markers (unmerged paths) OR nothing (an
-          # already-applied intermediate commit stops it "empty"). --allow-empty so the empty case
-          # can't hard-fail under set -e. Then abandon the remaining range; the draft PR lists it all.
+          # Commit whatever the cherry-pick left: conflict markers on unmerged paths, or nothing when
+          # an already-applied intermediate commit stopped it empty. --allow-empty keeps the empty
+          # case from failing under set -e. The remaining range is abandoned and listed in the draft.
           git -C "$dir" add -A
           git -C "$dir" commit --quiet --allow-empty --no-edit \
             -m "hotfix reconcile v${LINE} (INCOMPLETE — resolve/finish before merge)" \

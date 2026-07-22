@@ -29,18 +29,18 @@ runs:
         GH_TOKEN: ${{ steps.app_token.outputs.token }}
     - name: run audit
       shell: bash
-      # --fix requires a mode since pnpm 11; "override" pins vulnerable
-      # transitive dependencies via pnpm-workspace.yaml overrides without moving direct ones.
+      # --fix takes a mode since pnpm 11; "override" pins vulnerable transitive
+      # dependencies through pnpm-workspace.yaml overrides, leaving direct ones alone.
       env:
-        # Defensive: unfreeze any install pnpm triggers here — under CI the
-        # lockfile is frozen by default, and the overrides audit --fix writes
-        # make that mismatch the committed lockfile.
+        # Unfreeze any install pnpm triggers here: CI freezes the lockfile by
+        # default, and the overrides `audit --fix` writes make it mismatch the
+        # committed one.
         npm_config_frozen_lockfile: "false"
       run: |
-        # `pnpm audit --fix` rewrites the overrides but leaves the lockfile stale.
-        # Reconcile it BEFORE `pnpm format`: pnpm 11 runs a verify-deps-before-run
-        # pre-hook on any `pnpm <script>`, which would otherwise spawn a *frozen*
-        # install and abort with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+        # `pnpm audit --fix` rewrites the overrides but leaves the lockfile stale, so
+        # reconcile it before `pnpm format`: pnpm 11 runs a verify-deps-before-run
+        # pre-hook on any `pnpm <script>`, which spawns a frozen install and aborts
+        # with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
         pnpm audit --fix=override
         pnpm i --no-frozen-lockfile
         pnpm format

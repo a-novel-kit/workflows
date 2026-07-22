@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # Regression tests for release-train's fail-closed reads.
 #
-# Same discipline as detect-partial-landing.sh: the functions under test are EXTRACTED verbatim from
-# the manifest and sourced, so what runs here is what ships. Only `gh` is stubbed, and it can fail on
-# demand — the whole point being that a read failure must not be readable as a benign outcome.
+# Same discipline as detect-partial-landing.sh: the functions under test are extracted verbatim from
+# the manifest and sourced. Only `gh` is stubbed, and it can fail on demand, since the point is that
+# a read failure must not read as a benign outcome.
 #
-# Two defects are covered, and they share a shape. derive_bump mapped a failed commit-range read onto
-# the same value as an empty range ("none"), so a transient API error skipped a repo, recorded it as
-# nochange, and left the run green — and since nothing marked a failure, a re-dispatch recomputed the
-# same skip forever. splice_body is the other end of it: fed the empty body a failed read produced, it
-# returns a body holding only the receipt block, which the PATCH would then write over the Epic's
-# prose and its frozen activation snapshot.
+# Two paths share that shape. derive_bump distinguishes a failed commit-range read from an empty
+# range: mapping both onto "none" skips a repo, records it as nochange, and leaves the run green,
+# and with nothing marking a failure a re-dispatch recomputes the same skip. splice_body is the other
+# end — fed the empty body a failed read produces, it returns a body holding only the receipt block,
+# and the PATCH then writes that over the Epic's prose and its frozen activation snapshot.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -34,8 +33,7 @@ for fn in commit_messages derive_bump splice_body; do
   fi
   printf '%s\n' "$out" >> "$WORK/lib.sh"
 done
-# Extraction stops at the first 8-space `}`. If that ever lands mid-function the result is invalid
-# bash, and without this check the suite fails later with a confusing unbound-variable abort.
+# Extraction stops at the first 8-space `}`; if that lands mid-function the result is invalid bash.
 if ! bash -n "$WORK/lib.sh"; then
   echo "::error::extracted functions do not parse — extraction truncated a definition"
   exit 1
@@ -44,7 +42,7 @@ fi
 sleep() { :; } # the retry loop's wall-clock delay is not useful here
 
 # ---- stubbed leaf -----------------------------------------------------------------------
-# GH_FAIL=1 makes every read fail, which is the condition both defects hid behind.
+# GH_FAIL=1 makes every read fail, the condition both paths turn on.
 # GH_SUBJECTS holds the commit messages a successful read returns.
 GH_FAIL=0
 GH_SUBJECTS=""
@@ -104,16 +102,15 @@ BLOCK='<!-- release-train:receipts:start -->
 ### receipts
 <!-- release-train:receipts:end -->'
 
-# This is what the PATCH used to write when the read failed. The assertion is not that splice_body is
-# wrong — given an empty body it can only produce this — but that the result is destructive, which is
-# why the caller has to refuse to reach it.
+# Given an empty body, splice_body can only return a block-only body. The assertion pins that result
+# as destructive, which is why the caller refuses to reach it.
 spliced=$(splice_body "" "$BLOCK")
 case "$spliced" in
   *"human prose"*) check "empty input keeps prose" "impossible" "kept" ;;
   *) echo "  ok   an empty body yields a block-only body (the destructive case the caller must avoid)" ;;
 esac
 
-# The healthy paths still behave: prose survives, and the region is replaced rather than appended.
+# The healthy paths: prose survives, and an existing region is replaced in place.
 BODY='Some human prose.
 
 <!-- release-train:receipts:start -->

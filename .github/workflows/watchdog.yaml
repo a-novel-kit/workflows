@@ -1,17 +1,17 @@
-# Reusable staleness watchdog — the fail-safe backstop for the exception path (a-novel-kit/.github#95).
-# The event-driven posters (merge-gate / epic-freeze) always TRY to post a terminal conclusion, and a
-# hotfix aborts its own lock wait — but an App outage, a hung step, or a dropped event can still leave a
-# required check stuck with no conclusion (a PR blocked forever, since a plain PR has no merge-queue
-# timeout) or a hotfix run hung holding its lock. This scheduled sweep NOTICES those and escalates each,
-# so a stuck automation always surfaces to a human instead of silently blocking work.
+# Reusable staleness watchdog: the fail-safe backstop for the exception path. The event-driven
+# posters, merge-gate and epic-freeze, always try to post a terminal conclusion, and a hotfix aborts
+# its own lock wait, but an App outage, a hung step or a dropped event can still leave a required
+# check with no conclusion — blocking a PR indefinitely, since a plain PR has no merge-queue timeout —
+# or a hotfix run hung holding its lock. This scheduled sweep notices those and escalates each, so a
+# stuck automation surfaces to a human.
 #
 # Two detections, org-wide:
 #   - stale check: an open PR whose required merge-gate / epic-freeze check has had no terminal
 #     conclusion for longer than the threshold (the check never posted, or is stuck pending).
-#   - stuck hotfix: a hotfix.yaml run in_progress longer than the threshold (a hung step holding the
-#     per-repo hotfix lock, blocking further hotfixes there).
-# Each finding fans out to the escalate action (one deduped ticket per condition). The `when`
-# (cron / concurrency) lives in the thin per-org caller, exactly like reconcile-board.
+#   - stuck hotfix: a hotfix.yaml run in_progress longer than the threshold, a hung step holding the
+#     per-repo hotfix lock and blocking further hotfixes there.
+# Each finding fans out to the escalate action, one deduped ticket per condition. The schedule and
+# concurrency live in the thin per-org caller, as they do for reconcile-board.
 name: watchdog
 
 on:
@@ -67,8 +67,8 @@ on:
         description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
 
 jobs:
-  # Scan the org for stale required checks + stuck hotfix runs → a findings list the escalate job
-  # matrices over. Read-only; the App token is scoped to reads.
+  # Scan the org for stale required checks and stuck hotfix runs, producing the findings list the
+  # escalate job matrices over. Read-only, on a reads-scoped App token.
   detect:
     runs-on: ubuntu-latest
     permissions: {}
@@ -104,10 +104,10 @@ jobs:
               '$f + [{severity:$s, summary:$m, dedup_key:$d, repo:$r, body:$b}]')
           }
 
-          # ---- STALE CHECKS: open PRs whose required merge-gate/epic-freeze has no terminal conclusion.
-          # A check should complete within seconds of the event; if the PR head is older than the
-          # threshold and the check still isn't COMPLETED, the poster never finished (App outage / dropped
-          # event) and the PR is blocked with no self-heal (a plain PR has no merge-queue timeout).
+          # ---- Stale checks: open PRs whose required merge-gate or epic-freeze has no terminal
+          # conclusion. A check completes within seconds of the event, so a PR head older than the
+          # threshold with the check still incomplete means the poster never finished, through an App
+          # outage or a dropped event, and the PR is blocked with no self-heal.
           q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:50, after:$cursor){
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number url repository{ nameWithOwner }
@@ -131,8 +131,8 @@ jobs:
               for chk in merge-gate epic-freeze; do
                 status=$(printf '%s' "$pr" | jq -r --arg n "$chk" \
                   '[.commits.nodes[0].commit.statusCheckRollup.contexts.nodes[]? | select(.__typename=="CheckRun" and .name==$n)][0].status // "ABSENT"')
-                # COMPLETED = a terminal conclusion posted (success/failure/etc.) → healthy. Anything
-                # else (QUEUED / IN_PROGRESS / ABSENT) after the threshold = stale.
+                # COMPLETED means a terminal conclusion was posted, which is healthy. QUEUED,
+                # IN_PROGRESS or ABSENT past the threshold is stale.
                 if [ "$status" != "COMPLETED" ]; then
                   add sev2 "Stale required check '${chk}' on ${repo}#${num}" \
                     "stale-check:${chk}:${repo}:${num}" "$repo" \
@@ -144,12 +144,12 @@ jobs:
             cursor=$(printf '%s' "$page" | jq -r '.data.search.pageInfo.endCursor')
           done
 
-          # ---- STUCK HOTFIX RUNS: a hotfix.yaml run in_progress past the threshold — a hung step holding
-          # the per-repo hotfix lock (the run's own 30-min lock cap only covers WAITING, not a hang).
+          # ---- Stuck hotfix runs: a hotfix.yaml run in_progress past the threshold, a hung step
+          # holding the per-repo hotfix lock. The run's own 30-minute lock cap covers only the wait.
           repos=$(gh api "orgs/${ORG}/repos" --paginate --jq '.[].name' 2>/dev/null || true)
           while IFS= read -r repo; do
             [ -n "$repo" ] || continue
-            # Repos without a hotfix.yaml error here → skip quietly.
+            # A repo with no hotfix.yaml errors here, and is skipped quietly.
             runs=$(gh run list --repo "${ORG}/${repo}" --workflow hotfix.yaml --status in_progress \
               --json databaseId,createdAt,url --limit 10 2>/dev/null || echo '[]')
             while IFS= read -r run; do
@@ -166,11 +166,11 @@ jobs:
             done < <(printf '%s' "$runs" | jq -c '.[]?')
           done < <(printf '%s\n' "$repos")
 
-          # ---- HEARTBEAT / dead-man's-switch: the scheduled fail-safes (this sweep + reconcile-board)
-          # must keep RUNNING. If a caller workflow in THIS repo hasn't run within the window, its cron
-          # is broken/disabled and the org has silently lost that backstop — page it (SEV1: nothing is
-          # watching). This run catches a fail-safe that stopped-and-resumed or a SIBLING fail-safe
-          # that's down; a fail-safe that's still down is caught by its sibling's own heartbeat.
+          # ---- Heartbeat, a dead-man's switch over the scheduled fail-safes: this sweep and
+          # reconcile-board. A caller workflow in this repo that has not run within the window has a
+          # broken or disabled cron, and the org has silently lost that backstop, which pages as SEV1.
+          # This run catches a fail-safe that stopped and resumed, or a sibling that is down; a
+          # fail-safe still down is caught by its sibling's own heartbeat.
           if [ -n "${HEARTBEAT_WORKFLOWS:-}" ]; then
             IFS=',' read -ra hbwf <<< "$HEARTBEAT_WORKFLOWS"
             for wf in "${hbwf[@]}"; do
@@ -194,7 +194,7 @@ jobs:
           count=$(printf '%s' "$findings" | jq 'length')
           echo "Watchdog scan complete — ${count} stale/stuck finding(s)." | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # One escalate per finding (deduped by its stable key, so a recurring condition updates one ticket).
+  # One escalate per finding, deduped by its stable key, so a recurring condition updates one ticket.
   escalate:
     needs: detect
     if: ${{ needs.detect.outputs.findings != '[]' && needs.detect.outputs.findings != '' }}

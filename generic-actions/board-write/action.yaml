@@ -76,9 +76,8 @@ outputs:
 runs:
   using: composite
   steps:
-    # Mint a token that can write the org's Projects v2 — and nothing else. The
-    # [Agent] App can do more (issues/PRs), but requesting only the org Projects scope
-    # bounds a leak of this step's token to board edits.
+    # Mint a token scoped to the org's Projects v2 alone, which bounds a leak of
+    # this step's token to board edits.
     - name: Mint org-Projects token
       id: token
       uses: actions/create-github-app-token@v3
@@ -104,15 +103,10 @@ runs:
       run: |
         set -euo pipefail
 
-        # Org-level HALT (read FIRST): FAIL-SAFE — RUNNING only for an explicit off-token
-        # (empty/unset, 0, off, false, no, disabled); ANYTHING ELSE (a fat-fingered value or garbage)
-        # engages. This is the single privileged board mutator, and its guard + the mutation live in
-        # THIS one step, so an `exit 0` here genuinely stops the write — every derived board write
-        # fails safe (no mutation, changed=false) while the org is halted.
-        # The org-Projects token is minted above, ahead of this guard, on purpose: nothing past the
-        # `exit 0` exercises it, so mint-vs-halt ordering is not blast radius here (token SCOPE, not
-        # mint timing, is the enforced bound) — and every action keeps one "mint per least-privilege,
-        # then halt-first" shape instead of duplicating this fail-safe parse pre-mint.
+        # Org-level halt, read before the write. Fail-safe: running only for an explicit off-token
+        # (empty/unset, 0, off, false, no, disabled); any other value engages the halt. This is the
+        # single privileged board mutator, and its guard and mutation share one step, so the `exit 0`
+        # here stops every derived board write (no mutation, changed=false) while the org is halted.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
@@ -149,9 +143,9 @@ runs:
         fi
 
         # Build the GraphQL value fragment to write, and the sub-selection that reads
-        # the item's current value of this field (for the compare-before-write). Both
-        # inlined values are safe to interpolate: a single-select option id is a GitHub
-        # node id, and a date is format-checked below.
+        # the item's current value for the compare-before-write. Both inlined values are
+        # safe to interpolate: a single-select option id is a GitHub node id, and a date
+        # is format-checked below.
         case "$data_type" in
           SINGLE_SELECT)
             opt_id=$(echo "$fresp" | jq -r --arg v "$VALUE" \
@@ -168,9 +162,9 @@ runs:
               echo "::error::date field \"$FIELD\" needs a YYYY-MM-DD value, got \"$VALUE\""
               exit 1
             fi
-            # Reject a well-formed but impossible date (e.g. 2026-02-30) here, with a
-            # clear message, instead of letting the GraphQL mutation fail obscurely.
-            # A real date round-trips through `date -d`; a bad one errors or normalizes.
+            # Reject a well-formed but impossible date (2026-02-30, say) with a clear
+            # message. A real date round-trips through `date -d`; a bad one errors or
+            # normalizes to a different day.
             if [ "$(date -d "$VALUE" +%Y-%m-%d 2>/dev/null)" != "$VALUE" ]; then
               echo "::error::\"$VALUE\" is not a real calendar date"
               exit 1
@@ -184,10 +178,10 @@ runs:
             ;;
         esac
 
-        # 2. Resolve the content's item in this project; add it if missing (a derived
-        #    write on an un-boarded Task should board it, not vanish). Page through
-        #    projectItems so a content that sits on many projects still matches —
-        #    idempotence must not hinge on the first page holding the target board.
+        # 2. Resolve the content's item in this project, adding it if missing so a derived
+        #    write on an un-boarded Task boards it. Page through projectItems so a content
+        #    sitting on many projects still matches when the target board is not on the
+        #    first page.
         item_q='query($c:ID!,$cursor:String){ node(id:$c){
           ... on Issue{ projectItems(first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } }
@@ -218,15 +212,15 @@ runs:
           echo "Added content to the board (item $item_id)." | tee -a "$GITHUB_STEP_SUMMARY"
         fi
 
-        # 3. Compare-before-write: read the item's current value for this field. Equal
-        #    means a re-run or overlapping trigger — no mutation, so no lost update.
+        # 3. Compare-before-write: read the item's current value for this field. An equal
+        #    value means a re-run or an overlapping trigger, so nothing is mutated.
         cur_q="query(\$item:ID!,\$field:String!){ node(id:\$item){ ... on ProjectV2Item{
           fieldValueByName(name:\$field){ $cur_frag } } } }"
         cur=$(gh api graphql -f query="$cur_q" -F item="$item_id" -F field="$FIELD" \
           | jq -r '.data.node.fieldValueByName.current // empty')
 
-        # A set-once field (Start date): if it already holds anything, leave it — don't
-        # let a re-run or the sweep overwrite the original stamp.
+        # A set-once field such as Start date keeps whatever it already holds, so a re-run
+        # or the sweep cannot overwrite the original stamp.
         if [ "$ONLY_IF_EMPTY" = "true" ] && [ -n "$cur" ]; then
           echo "No change — \"$FIELD\" already set (\"$cur\") and only_if_empty." | tee -a "$GITHUB_STEP_SUMMARY"
           {

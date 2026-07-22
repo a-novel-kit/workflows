@@ -40,9 +40,9 @@ outputs:
 runs:
   using: composite
   steps:
-    # Releases run from the default branch only — reject a dispatch (or a
-    # workflow_call) from any other ref before minting a token or mutating
-    # anything. Pushing the bump tag from a feature branch would be wrong.
+    # Releases run from the default branch only, so a dispatch or workflow_call
+    # from any other ref is rejected before a token is minted or anything is
+    # mutated: a bump tag pushed from a feature branch names the wrong commit.
     - name: Guard — default branch only
       shell: bash
       run: |
@@ -51,10 +51,10 @@ runs:
           exit 1
         fi
 
-    # Token that can push the bump commit + tag and create the release, scoped to this repo.
-    # `workflows` is required alongside `contents`: the self-pin sync rewrites the version in
-    # `.github/workflows/*` self-refs, and GitHub refuses an App push that touches workflow files
-    # without it (contents alone → GH013 "without workflows permission"). The [Agent] App has it.
+    # Token that can push the bump commit and tag and create the release, scoped to this repo.
+    # `workflows` is needed alongside `contents` because the self-pin sync rewrites the version in
+    # `.github/workflows/*` self-refs, and GitHub refuses an App push touching workflow files without
+    # it, answering GH013 "without workflows permission".
     - name: Mint push token
       id: token
       uses: actions/create-github-app-token@v3
@@ -66,8 +66,8 @@ runs:
         permission-contents: write
         permission-workflows: write
 
-    # Bot-authenticated checkout so the later push carries the bot's rights;
-    # full history + tags so the tag and release notes resolve correctly.
+    # Bot-authenticated checkout so the later push carries the bot's rights, with
+    # full history and tags so the tag and release notes resolve.
     - name: Checkout
       uses: actions/checkout@v7
       with:
@@ -84,7 +84,7 @@ runs:
       shell: bash
       run: corepack enable
 
-    # Only repos that stamp docs (a prepublish:doc script) need the a-novel CLI.
+    # Only repos that stamp docs, through a prepublish:doc script, need the a-novel CLI.
     - name: Detect prepublish:doc
       id: stamp
       shell: bash
@@ -99,7 +99,7 @@ runs:
       uses: actions/setup-go@v7.0.0
       with:
         go-version: stable
-        # Only `go install` the a-novel CLI here; no build, so skip the cache.
+        # This step only `go install`s the a-novel CLI, so there is nothing to cache.
         cache: false
     - name: Install a-novel CLI (for stamp)
       if: ${{ steps.stamp.outputs.needed == 'true' }}
@@ -129,11 +129,11 @@ runs:
         git config user.name "${APP_SLUG}[bot]"
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
-        # Version bump (package.json, root + workspace members). Plain Node, not
-        # `pnpm version`, to skip pnpm's cold-store supply-chain pass. See bump.cjs.
+        # Version bump across package.json at the root and in every workspace member.
+        # Plain Node runs it, which skips pnpm's cold-store supply-chain pass. See bump.cjs.
         node "$GITHUB_ACTION_PATH/bump.cjs"
 
-        # Refresh doc version refs (a-novel publish stamp) where that script exists.
+        # Refresh doc version refs through `a-novel publish stamp` where that script exists.
         # The env var skips pnpm's pre-run install, which would need npm-registry auth.
         if [ "$STAMP_NEEDED" = "true" ]; then
           PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm run prepublish:doc
@@ -141,8 +141,8 @@ runs:
 
         version=$(node -p "require('./package.json').version")
 
-        # Stamp in-repo version refs and compute the tags (root vX.Y.Z plus any
-        # sub-module tags). Add an ecosystem in plan.cjs, never here.
+        # Stamp in-repo version refs and compute the tags: the root vX.Y.Z plus any
+        # sub-module tags. A new ecosystem is added in plan.cjs.
         tags=$(node "$GITHUB_ACTION_PATH/plan.cjs")
         root_tag="v${version}"
 
@@ -158,12 +158,12 @@ runs:
           printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
         } | tee -a "$GITHUB_STEP_SUMMARY"
 
-        # Internal-consistency: rewrite every self-reference to THIS repo's own actions/workflows
-        # (owner/repo/...@vX.Y.Z) to the version being cut, so the released tag runs its OWN siblings —
-        # not whatever older tag the pins lagged at. A reusable workflow can't use a relative ref, so its
-        # sibling pins would otherwise always trail a release (Renovate bumps them, but each bump needs
-        # its own release, so the tag is forever one behind). Only self-refs are rewritten; cross-repo pins
-        # stay Renovate-managed. A no-op in a repo that doesn't self-reference. Discarded under dry-run.
+        # Rewrite every self-reference to this repo's own actions and workflows
+        # (owner/repo/...@vX.Y.Z) to the version being cut, so the released tag runs its own siblings.
+        # A reusable workflow cannot use a relative ref, so without this its sibling pins trail every
+        # release: Renovate bumps them, but each bump needs its own release, leaving the tag one
+        # behind. Only self-refs are rewritten; cross-repo pins stay Renovate-managed. This is a no-op
+        # in a repo that does not self-reference, and is discarded under dry-run.
         repo_esc=$(printf '%s' "$GITHUB_REPOSITORY" | sed 's/\./\\./g')
         selfpin_files=$(git ls-files '*.yaml' '*.yml' | xargs -r grep -lE "${repo_esc}/[A-Za-z0-9._/-]+@v[0-9]+\.[0-9]+\.[0-9]+" 2>/dev/null || true)
         if [ -n "$selfpin_files" ]; then

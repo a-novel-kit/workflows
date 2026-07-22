@@ -11,9 +11,9 @@ jobs:
       checks: write
       statuses: write
       contents: write
-      # generic-actions/renovate wires GITHUB_TOKEN as the npm.pkg.github.com
-      # token; an explicit permissions block drops packages to none, so grant
-      # read back or Renovate can't resolve private GitHub Packages deps.
+      # generic-actions/renovate wires GITHUB_TOKEN as the npm.pkg.github.com token, and an
+      # explicit permissions block drops packages to none, so read is granted back here or
+      # Renovate cannot resolve private GitHub Packages dependencies.
       packages: read
     steps:
       - uses: actions/checkout@v7

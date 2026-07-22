@@ -55,10 +55,9 @@ inputs:
 runs:
   using: composite
   steps:
-    # Read the PR and compute the target Status. Reads only (PR state + the closing
-    # issue), so this runs on the caller's default token — the caller grants
-    # contents:read + pull-requests:read; the [Agent] token is minted only for the
-    # write, inside board-write.
+    # Read the PR and compute the target Status. This step only reads, so it runs on the
+    # caller's default token with contents:read and pull-requests:read; the [Agent] token
+    # is minted for the write, inside board-write.
     - name: Compute Status + resolve the Task
       id: derive
       shell: bash
@@ -71,12 +70,11 @@ runs:
       run: |
         set -euo pipefail
 
-        # Org-level HALT (read FIRST): FAIL-SAFE — RUNNING only for an explicit off-token
-        # (empty/unset, 0, off, false, no, disabled); ANYTHING ELSE (a fat-fingered value or garbage)
-        # engages. When engaged, skip the derivation entirely (no PR read, no board write). A
-        # composite action has NO early return — an `exit 0` here does NOT stop the two board-write
-        # steps — so emit an explicit `halted` output and `if:`-gate EVERY subsequent mutating step on
-        # it. has_issue=false also skips them, but `halted` is the explicit, load-bearing gate.
+        # Org-level halt, read before the derivation. Fail-safe: running only for an explicit
+        # off-token (empty/unset, 0, off, false, no, disabled); any other value engages the halt and
+        # skips the derivation entirely. A composite action has no early return, so an `exit 0` here
+        # does not stop the two board-write steps: this emits a `halted` output and every later
+        # mutating step carries an `if:` on it.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
@@ -98,8 +96,8 @@ runs:
           pullRequest(number:$num){
             state isDraft reviewDecision
             closingIssuesReferences(first:5){ nodes{ id number labels(first:20){ nodes{ name } } } } } } }'
-        # A not-found / inaccessible PR makes the GraphQL call error; catch that here so
-        # it fails with a clear message rather than gh's raw error mid-pipeline.
+        # A missing or inaccessible PR makes the GraphQL call error; catch it here so the failure
+        # surfaces as one clear message.
         if ! pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR"); then
           echo "::error::could not query PR #$PR (not found, or the token lacks access)"
           exit 1
@@ -108,33 +106,32 @@ runs:
         draft=$(echo "$pr" | jq -r '.data.repository.pullRequest.isDraft')
         review=$(echo "$pr" | jq -r '.data.repository.pullRequest.reviewDecision // ""')
 
-        # A missing/inaccessible PR resolves to null — fail with that, not a downstream
-        # "unexpected state 'null'".
+        # A PR the query could not resolve comes back null; fail here so the message names
+        # the real problem.
         if [ -z "$state" ] || [ "$state" = "null" ]; then
           echo "::error::PR #$PR not found or inaccessible (check the number and token access)"
           exit 1
         fi
 
-        # A Task pairs with exactly one PR, so normally one closing ref. If a PR closes
-        # several, pick the lowest-numbered deterministically (not arbitrary node order)
-        # and warn — the reconcile sweep derives the others from their own PRs anyway.
+        # A Task pairs with exactly one PR, so there is normally one closing ref. A PR that
+        # closes several resolves to the lowest-numbered one, which is deterministic across
+        # re-runs; the reconcile sweep derives the others from their own PRs.
         refs=$(echo "$pr" | jq '.data.repository.pullRequest.closingIssuesReferences.nodes')
         ref_count=$(echo "$refs" | jq 'length')
         issue_id=$(echo "$refs" | jq -r 'sort_by(.number) | .[0].id // empty')
-        # Labels of the SELECTED closing issue — a hotfix cleanup Task carries `hotfix-reconcile`,
-        # which flips its terminal MERGED status from Awaiting-release to Done (see the MERGED case).
+        # Labels of the selected closing issue: a hotfix cleanup Task carries `hotfix-reconcile`,
+        # which makes Done its terminal MERGED status.
         issue_labels=$(echo "$refs" | jq -c 'sort_by(.number) | (.[0].labels.nodes // []) | map(.name)')
         if [ "$ref_count" -gt 1 ]; then
           echo "::warning::PR #$PR closes $ref_count issues; deriving the lowest-numbered. The reconcile sweep covers the rest."
         fi
 
-        # Pure function of the PR's current state — the reconcile sweep re-runs this
-        # identically, so it must not depend on which event fired.
+        # A pure function of the PR's current state: the reconcile sweep re-runs it and has
+        # to reach the same answer whatever event fired.
         case "$state" in
           MERGED)
-            # A hotfix-reconcile cleanup Task is TERMINAL on merge — the forward-port landed, so the
-            # Task is Done. It is NOT awaiting a release (a hotfix cuts its own tag off the reconcile's
-            # baseline, so nothing else ships it), so skip the default Awaiting-release for it.
+            # A hotfix-reconcile cleanup Task is terminal on merge: the forward-port landed and a
+            # hotfix cuts its own tag off the reconcile's baseline, so nothing else ships it.
             if printf '%s' "$issue_labels" | jq -e 'index("hotfix-reconcile")' >/dev/null 2>&1; then
               status="Done"
             else
@@ -163,9 +160,9 @@ runs:
           exit 0
         fi
 
-        # "activated" = the Task has genuinely started (any state past the pre-PR
-        # Backlog/Ready), which is when it earns a Start date. A reverted PR
-        # (closed-unmerged → Ready) is not activated, so it never back-stamps a date.
+        # A Task is "activated" once it moves past the pre-PR Backlog/Ready states, which is
+        # when it earns a Start date. A PR closed unmerged falls back to Ready and stamps
+        # nothing.
         activated=false
         case "$status" in
           "In progress" | "In review" | "Done" | "Awaiting release") activated=true ;;
@@ -181,12 +178,12 @@ runs:
         echo "PR #$PR ($state, draft=$draft, review=${review:-none}) → \"$status\" on issue $issue_id." \
           | tee -a "$GITHUB_STEP_SUMMARY"
 
-    # Write the derived Status. board-write mints the [Agent] token, resolves the item
-    # (adding it if absent), and compares before writing. This pins the external ref
-    # because a ./ path would resolve against the consumer repo's workspace, not this repo.
+    # Write the derived Status. board-write mints the [Agent] token, resolves the item,
+    # adding it if absent, and compares before writing. The ref is pinned externally, since a `./`
+    # path resolves against the consumer repo's workspace.
     - name: Write Status
-      # Gated on `halted` too: a composite action has no early return, so the guard step's exit 0
-      # does not stop this mutating step — it must be skipped explicitly when the org is halted.
+      # A composite action has no early return, so the guard step's exit 0 does not stop this
+      # mutating step; the `halted` gate does.
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.halted != 'true' }}
       uses: a-novel-kit/workflows/generic-actions/board-write@v1.20.2
       with:
@@ -201,7 +198,7 @@ runs:
     # Stamp Start date once, on first activity. only_if_empty keeps a re-run or the
     # sweep from moving an already-set start date.
     - name: Stamp Start date (once)
-      # Gated on `halted` too (see Write Status) — the guard's exit 0 cannot stop this later step.
+      # The `halted` gate again: the guard's exit 0 cannot stop this later step.
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.activated == 'true' && steps.derive.outputs.halted != 'true' }}
       uses: a-novel-kit/workflows/generic-actions/board-write@v1.20.2
       with:

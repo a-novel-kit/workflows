@@ -65,8 +65,8 @@ runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v7
-    # Derive vX.Y / vX from an explicit version (the dispatched release passes one
-    # because the workflow runs on the default branch, where the ref isn't a tag).
+    # Derive vX.Y and vX from an explicit version. The dispatched release passes one
+    # because the workflow runs on the default branch, where the ref is not a tag.
     - id: ver
       if: ${{ inputs.version != '' }}
       shell: bash
@@ -79,7 +79,7 @@ runs:
       with:
         images: ghcr.io/${{ inputs.image_name }}
         tags: |
-          # Ref-derived tags (legacy tag-push flow) — off when a version is passed.
+          # Ref-derived tags for the tag-push flow, off when a version is passed.
           type=schedule,pattern=nightly,enable=${{ inputs.version == '' }}
           type=ref,event=branch,enable=${{ inputs.version == '' }}
           type=ref,event=tag,enable=${{ inputs.version == '' }}
@@ -101,13 +101,11 @@ runs:
     - uses: docker/build-push-action@v7
       with:
         context: ${{ inputs.context }}
-        # Persist the module + go-build cache across runs so an image whose Go
-        # sources are unchanged (or only partly changed) reuses the previous
-        # run's compilation instead of building cold. mode=max caches the
-        # intermediate builder stage (where `go build` runs), not just the final
-        # layers. Scope is per-image: each service/job image builds in its own
-        # job, so a shared scope would let those parallel builds evict each
-        # other's cache — the image name keeps them isolated.
+        # Persist the module and go-build cache across runs, so an image whose Go
+        # sources are unchanged, or only partly changed, reuses the previous run's
+        # compilation. mode=max also caches the intermediate builder stage where
+        # `go build` runs. The scope is per image, so the parallel jobs building
+        # different images keep separate caches.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
         cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
         load: true
@@ -159,9 +157,8 @@ runs:
       id: build
       with:
         context: ${{ inputs.context }}
-        # Restore only: the push build shares this job's warm buildx cache from
-        # the load build above, so it re-tags/pushes the already-built layers
-        # rather than recompiling.
+        # Restore only: the push build shares this job's warm buildx cache from the
+        # load build above, so it re-tags and pushes the already-built layers.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
         push: true
         tags: ${{ steps.meta.outputs.tags }}

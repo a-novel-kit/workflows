@@ -153,10 +153,9 @@ outputs:
 runs:
   using: composite
   steps:
-    # Validate + normalize everything up front, before any token is minted, so a bad severity or a
-    # malformed dedup_key fails loudly with nothing half-done. Also decides routing (do_push /
-    # do_mention), the target board Status, and cleans free-text (summary/mention) that lands in a
-    # log line — so later steps stay dumb and injection-safe.
+    # Validate and normalize up front, before any token is minted, so a bad severity or a malformed
+    # dedup_key fails with nothing half-done. Also decides routing (do_push / do_mention), the target
+    # board Status, and cleans the free text that reaches a log line.
     - name: Resolve inputs and routing
       id: resolve
       shell: bash
@@ -189,8 +188,8 @@ runs:
         st=$(printf '%s' "${STATE:-open}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
         case "$st" in open | resolve) : ;; *) echo "::error::state must be open|resolve (got \"${STATE:-}\")"; exit 1 ;; esac
 
-        # dry_run is normalized here (severity/state are), so a "True"/" true " can't silently
-        # perform real mutations. Everything downstream reads this normalized value.
+        # Normalize dry_run here so a "True" or " true " cannot perform real mutations. Everything
+        # downstream reads this normalized value.
         dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
         case "$dry" in true | 1 | yes) dry=true ;; *) dry=false ;; esac
 
@@ -213,9 +212,9 @@ runs:
           echo "::error::planning_repo must be owner/name (got \"$PLANNING_REPO\")"; exit 1
         fi
 
-        # Collapse newlines in the free-text that reaches a title / a log line, so it can't inject a
-        # ::workflow-command:: or break the single-line title. Body keeps its newlines (it's Markdown
-        # detail, written only to a --body-file, never echoed to stdout).
+        # Collapse newlines in the free text that reaches a title or a log line, so it cannot inject
+        # a ::workflow-command:: or break the single-line title. The body keeps its newlines: it is
+        # Markdown detail, written only to a --body-file.
         clean_summary=$(printf '%s' "$SUMMARY" | tr -d '\r' | tr '\n' ' ')
         clean_mention=$(printf '%s' "${MENTION:-}" | tr -d '\r' | tr '\n' ' ')
 
@@ -223,8 +222,8 @@ runs:
         run_url="${RUN_URL:-}"
         [ -z "$run_url" ] && run_url="${SERVER_URL}/${REPO_FULL}/actions/runs/${RUN_ID}"
 
-        # Routing. Push only for a genuine SEV1 page that is being RAISED and only when a webhook is
-        # wired (empty webhook = channel off). @mention for SEV1/SEV2 raises; SEV3 stays silent.
+        # Routing. Push only for a SEV1 being raised, and only when a webhook is wired (an empty
+        # webhook turns the channel off). @mention for SEV1/SEV2 raises; SEV3 stays silent.
         do_push=false
         if [ "$sev" = "sev1" ] && [ "$st" = "open" ] && [ -n "${PUSH_WEBHOOK:-}" ]; then do_push=true; fi
         do_mention=false
@@ -247,8 +246,7 @@ runs:
           echo "clean_mention=$clean_mention"
         } >> "$GITHUB_OUTPUT"
 
-    # A token that can only touch issues (create/edit/close/comment/label) in the planning repo.
-    # The [Agent] App can do more; requesting only issues:write on the one repo bounds a leak.
+    # A token scoped to issues:write on the planning repo alone, which bounds a leak.
     - name: Mint issues token
       id: token
       uses: actions/create-github-app-token@v3
@@ -259,8 +257,8 @@ runs:
         repositories: ${{ steps.resolve.outputs.planning_name }}
         permission-issues: write
 
-    # The ticket channel: find the open escalation carrying this dedup marker (a strongly consistent
-    # list read, never the eventually-consistent search index), then create / update / close it. The
+    # The ticket channel: find the escalation carrying this dedup marker with a strongly consistent
+    # list read (the search index is eventually consistent), then create, update or close it. The
     # body is bot-owned and regenerated each occurrence.
     - name: File or update the ticket
       id: ticket
@@ -298,9 +296,9 @@ runs:
           esac
         fi
 
-        # Regenerate the whole (bot-owned) body. The marker is ALWAYS the first line — dedup matches
-        # it anchored there (not "contains" anywhere), so a marker pasted into prose can't false-match.
-        # first/count live in hidden markers so the next occurrence reads them back.
+        # Regenerate the whole bot-owned body. The marker is the first line and dedup matches it
+        # anchored there, so a marker pasted into prose cannot false-match. first/count live in
+        # hidden markers so the next occurrence reads them back.
         render_body() { # $1 = first-seen ISO, $2 = occurrence count
           local first="$1" count="$2"
           {
@@ -321,15 +319,14 @@ runs:
           } > "$RUNNER_TEMP/esc_body.md"
         }
 
-        # jq predicate: the marker must be the EXACT first body line (CRLF-tolerant — GitHub stores
-        # bodies with CRLF). Reused by both the open (first match) and resolve (all matches) paths.
+        # jq predicate: the marker is the exact first body line, tolerating the CRLF GitHub stores
+        # bodies with. Shared by the open (first match) and resolve (all matches) paths.
         pred='.[] | select(((.body // "") | split("\n")[0] | rtrimstr("\r")) == $m)'
 
-        # Strongly consistent dedup. FAIL CLOSED on a list error (do NOT default to []): swallowing
-        # an API hiccup — likeliest during the very incident being escalated — would either spawn a
-        # duplicate ticket (open) or falsely report nothing to resolve (leaving a zombie).
-        # open looks only at OPEN tickets (a closed one means resolved → open a fresh ticket); resolve
-        # looks at ALL (so a ticket whose board drive failed after close still gets re-driven).
+        # Strongly consistent dedup, failing closed on a list error: an API hiccup swallowed as an
+        # empty list spawns a duplicate ticket, or falsely reports nothing to resolve. `open`
+        # lists open tickets only, since a closed one means resolved; `resolve` lists all, so a
+        # ticket whose board drive failed after close is re-driven.
         list_state=open
         [ "$STATE" = "resolve" ] && list_state=all
         if ! existing_json=$(gh issue list --repo "$PLANNING_REPO" --label "$ESC_LABEL" \
@@ -345,8 +342,8 @@ runs:
           } >> "$GITHUB_OUTPUT"
         }
 
-        # ---- resolve: close ALL tickets carrying the key (self-heals a create race); drive the
-        #      first (most recent) terminal via the board step ----
+        # ---- resolve: close all tickets carrying the key (self-heals a create race); the board
+        #      step drives the first (most recent) to a terminal Status ----
         if [ "$STATE" = "resolve" ]; then
           matches=$(printf '%s' "$existing_json" | jq -c --arg m "$marker" "$pred")
           if [ -z "$matches" ]; then
@@ -390,8 +387,7 @@ runs:
             echo "[dry-run] would FILE \"$title\" in $PLANNING_REPO (label $ESC_LABEL) and drive board Status → \"$TARGET_STATUS\"." | tee -a "$GITHUB_STEP_SUMMARY"
             emit created false "" "" ""; exit 0
           fi
-          # Ensure the umbrella label exists (idempotent) so `--label` on create can't fail on a
-          # fresh repo; repocfg may also declare it for board-view consistency.
+          # Ensure the umbrella label exists so `--label` on create cannot fail on a fresh repo.
           gh label create "$ESC_LABEL" --repo "$PLANNING_REPO" --force \
             --color B60205 --description "Automated governance escalation (escalate action)." >/dev/null 2>&1 || true
           url=$(gh issue create --repo "$PLANNING_REPO" --title "$title" \
@@ -406,8 +402,8 @@ runs:
         num=$(printf '%s' "$match" | jq -r '.number')
         url=$(printf '%s' "$match" | jq -r '.url')
         ebody=$(printf '%s' "$match" | jq -r '.body // ""')
-        # Guard both parses with a fallback (|| ...): under set -e a grep-no-match returns non-zero
-        # and would abort the step, killing the intended default below.
+        # Guard both parses with a fallback: under set -e a grep that matches nothing returns
+        # non-zero and aborts the step before the default below applies.
         first=$(printf '%s' "$ebody" | grep -oE 'escalate:first=[^ ]+' | head -1 | sed 's/.*escalate:first=//') || first=""
         [ -n "$first" ] || first="$now"
         count=$(printf '%s' "$ebody" | grep -oE 'escalate:count=[0-9]+' | head -1 | grep -oE '[0-9]+' || echo 0)
@@ -425,8 +421,8 @@ runs:
         fi
 
         gh issue edit "$num" --repo "$PLANNING_REPO" --body-file "$RUNNER_TEMP/esc_body.md" >/dev/null
-        # Editing the body does NOT notify anyone — so re-notify SEV1/SEV2 with a comment. SEV3 stays
-        # silent (body edit only), which is the whole point of the silent tier.
+        # Editing the body notifies nobody, so SEV1/SEV2 re-notify with a comment. SEV3 stays a
+        # body edit alone.
         if [ "$DO_MENTION" = "true" ]; then
           ping=""
           [ -n "${MENTION:-}" ] && ping=" cc ${MENTION}"
@@ -437,12 +433,10 @@ runs:
         echo "Updated escalation #$num (occurrence $count)." | tee -a "$GITHUB_STEP_SUMMARY"
         emit updated true "$num" "$node" "$url"
 
-    # The push channel FIRST (before the board write): one loud SEV1 page is the most critical
-    # output. `always()` so a failed ticket/token step can't swallow the page — do_push is already
-    # false unless resolve succeeded and set it, so always() can't over-fire. A composite step also
-    # cannot continue-on-error, so running the board write earlier could suppress the page; it runs
-    # last instead. A failed page after the ticket is filed exits non-zero on purpose — a page that
-    # silently didn't deliver is exactly the failure mode this whole action guards against.
+    # The push channel runs before the board write: the SEV1 page is the most critical output, and a
+    # composite step cannot continue-on-error, so a board write ahead of it could suppress the page.
+    # `always()` keeps a failed ticket or token step from swallowing it; do_push is false unless
+    # resolve set it. A page that fails after the ticket is filed exits non-zero.
     - name: SEV1 push
       id: push
       if: ${{ always() && steps.resolve.outputs.do_push == 'true' }}
@@ -460,7 +454,7 @@ runs:
       run: |
         set -euo pipefail
 
-        # Build the message. Discord's `content` caps at 2000 CHARACTERS.
+        # Build the message. Discord's `content` caps at 2000 characters.
         content="🚨 **[SEV1] ${SUMMARY}**"
         content="${content}"$'\n'"repo: ${REPO}"
         [ -n "${EPIC:-}" ] && content="${content} · epic: ${EPIC}"
@@ -468,14 +462,15 @@ runs:
         [ -n "${RUNBOOK:-}" ] && content="${content}"$'\n'"runbook: ${RUNBOOK}"
         [ -n "${ISSUE_URL:-}" ] && content="${content}"$'\n'"ticket: ${ISSUE_URL}"
         [ -n "${MENTION:-}" ] && content="${content}"$'\n'"cc ${MENTION}"
-        # Cap the WHOLE message (head -c is total, not per-line) well under the limit, then iconv -c
-        # drops any multibyte char the byte-cut split in half (invalid UTF-8 → Discord would 400).
+        # Cap the whole message well under the limit (head -c counts bytes over the whole stream),
+        # then `iconv -c` drops any multibyte character the cut split in half — Discord 400s on
+        # invalid UTF-8.
         content=$(printf '%s' "$content" | head -c 1900)
         content=$(printf '%s' "$content" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
 
-        # jq builds the JSON so the message can hold any character without escaping bugs. allowed_mentions
-        # restricts pings to users/roles — an accidental @everyone/@here in `mention` can't mass-ping.
-        # The payload shape is Discord's — swapping channels (Slack/ntfy) is a localized edit here.
+        # jq builds the JSON so the message can hold any character. allowed_mentions restricts pings
+        # to users and roles, so an @everyone or @here in `mention` cannot mass-ping. The payload
+        # shape is Discord's, and swapping chat providers is a local edit here.
         payload=$(jq -n --arg c "$content" '{content: $c, allowed_mentions: {parse: ["users", "roles"]}}')
 
         if [ "$DRY_RUN" = "true" ]; then
@@ -487,14 +482,14 @@ runs:
           exit 0
         fi
 
-        # POST with a small retry + timeouts (a black-hole webhook must not hang the emergency page —
-        # composite steps can't set timeout-minutes). Discord returns 204 on success, 429 rate-limit,
-        # 5xx transient. curl doesn't --fail, so those codes are captured (not thrown) and retried.
+        # POST with a small retry and explicit timeouts: composite steps cannot set timeout-minutes,
+        # so a black-hole webhook hangs the page. Discord answers 204 on success, 429 when rate
+        # limited, 5xx transiently; curl runs without --fail so those codes are captured and retried.
         max=3
         code=000
         for attempt in $(seq 1 "$max"); do
-          # Fallback OUTSIDE the substitution so a failed connection overwrites the code (curl already
-          # prints "000" via -w on failure; `|| echo 000` inside would append → "000000").
+          # The fallback sits outside the substitution: curl already prints "000" via -w on failure,
+          # so `|| echo 000` inside appends to it and yields "000000".
           code=$(curl -sS --connect-timeout 5 --max-time 15 \
             -o "$RUNNER_TEMP/esc_push_resp" -w '%{http_code}' \
             -X POST -H 'Content-Type: application/json' --data "$payload" "$PUSH_WEBHOOK") || code=000
@@ -511,14 +506,12 @@ runs:
         echo "pushed=false" >> "$GITHUB_OUTPUT"
         exit 1
 
-    # Drive the ticket's board Status LAST, through the single privileged board writer (reused, not
-    # re-implemented — keeps the board single-writer). `always()` so it still runs when a SEV1 page
-    # failed above: a filed ticket must never be left without a Status. Runs whenever a ticket exists
-    # (all severities get a board card). NO kill_switch is threaded ON PURPOSE: escalation is the
-    # emergency path, exempt from the org-wide HALT — the STOP must not mute the channel that reports
-    # the automation is stuck. board-write defaults kill_switch to "" = running. The board-write pin
-    # is a REMOTE ref (not ./): a `./` path in a composite action resolves against the CONSUMER's
-    # checkout, not this repo. `publish stamp` re-stamps this version at release, so the two co-version.
+    # Drive the ticket's board Status last, through the single privileged board writer that keeps the
+    # board single-writer. `always()` so a filed ticket is never left without a Status when the SEV1
+    # page above failed; every severity gets a board card. No kill_switch is threaded: escalation is
+    # the emergency path, exempt from the org-wide halt, and board-write defaults kill_switch to ""
+    # (running). The pin is a remote ref because a `./` path in a composite action resolves against
+    # the consumer's checkout; `publish stamp` re-stamps it at release so the two co-version.
     - name: Drive the ticket's board Status
       id: board
       if: ${{ always() && steps.ticket.outputs.issue_node_id != '' }}

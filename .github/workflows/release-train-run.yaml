@@ -1,8 +1,9 @@
 name: release-train (reusable)
 
-# The REUSABLE release-train engine (workflow_call): every governed repo's thin `release-train.yaml`
-# dispatch caller (repocfg-provisioned) calls this with its org creds + admin dispatch inputs. Runs in
-# the CALLER's context. Nested actions are remote-pinned (`./` in a reusable resolves to the caller, not here).
+# The reusable release-train engine (workflow_call). Every governed repo's thin `release-train.yaml`
+# dispatch caller, provisioned by repocfg, calls this with its org creds and admin dispatch inputs. It
+# runs in the caller's context, so nested actions are remote-pinned: a `./` path in a reusable
+# workflow resolves against the caller.
 on:
   workflow_call:
     inputs:
@@ -14,8 +15,8 @@ on:
         description: "true (default) = rehearse every repo, cut nothing; false = actually cut the releases."
         required: false
         default: "true"
-        # Former `choice` dispatch input. workflow_call has no choice type, so the thin caller keeps the
-        # choice-typed UI/API guard and passes a validated string through here.
+        # workflow_call has no choice type, so the thin caller keeps the choice-typed UI and API
+        # guard and passes a validated string through here.
         type: string
       client_id:
         description: The [Agent] bot App client id.
@@ -36,12 +37,12 @@ on:
 jobs:
   release-train:
     runs-on: ubuntu-latest
-    # The default token is used only for the admin check (Metadata:read, always present); the
-    # release-train action mints its own least-privilege [Agent] tokens (dispatch + reads).
+    # The default token serves only the admin check, which needs Metadata:read; the release-train
+    # action mints its own least-privilege [Agent] tokens for the dispatch and the reads.
     permissions:
       contents: read
     steps:
-      # Fail closed unless the dispatcher is a repo admin, AND the epic number is numeric.
+      # Fail closed unless the dispatcher is a repo admin and the Epic number is numeric.
       # workflow_dispatch is open to any write user, so this gate is what keeps the release train
       # admin-only.
       - name: Require admin + numeric epic
@@ -53,9 +54,8 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          # Admin gate (copied from a-novel-kit/workflows' generic-actions/approve-pr/action.yaml):
-          # `|| echo ""` keeps a failed lookup from tripping `set -e` — an empty permission falls
-          # through and fails closed.
+          # Admin gate: `|| echo ""` keeps a failed lookup from tripping `set -e`, and an empty
+          # permission falls through and fails closed.
           perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
           if [ "$perm" != "admin" ]; then
             echo "::error::release-train is admin-only; @${ACTOR} has permission '${perm:-none}'."
@@ -74,8 +74,8 @@ jobs:
           app_private_key: ${{ secrets.app_private_key }}
           epic_number: ${{ inputs.epic_number }}
           dry_run: ${{ inputs.dry_run }}
-          # Org-level HALT (FAIL-SAFE — RUNNING only for an explicit off-token: empty/unset, 0, off,
-          # false, no, disabled; ANYTHING else, incl. a fat-fingered value, engages) → the action
-          # aborts loud as its first step, before any mint. Threaded from the org variable (a composite
-          # action can't read `vars` itself).
+          # Org-level halt. Fail-safe: running only for an explicit off-token (empty/unset, 0, off,
+          # false, no, disabled); any other value engages it and the action aborts loudly as its first
+          # step, before any mint. Threaded from the org variable, which a composite action cannot
+          # read itself.
           kill_switch: ${{ inputs.kill_switch }}
