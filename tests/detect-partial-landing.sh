@@ -30,7 +30,7 @@ extract() { # $1 = function name — lift it out of the run: block and de-indent
   ' "$ACTION" | sed 's/^        //'
 }
 
-for fn in extract_marker epic_issue epic_paused build_claim_index snapshot_buckets union_buckets evaluate_epic; do
+for fn in extract_marker epic_issue epic_paused build_claim_index epic_claiming snapshot_buckets union_buckets evaluate_epic per_pr_main; do
   out=$(extract "$fn")
   if [ -z "$out" ]; then
     echo "::error::could not extract $fn from $ACTION — did its definition move or change indent?"
@@ -921,6 +921,89 @@ eq "a frozen body yields its marker object" \
 eq "a body with no fences yields nothing" "$(extract_marker "just prose, no fences")" ""
 
 echo
+echo "the reverse index answers which Epic claims a pull request"
+# build_claim_index also fills CLAIM_MEMBERS, so a de-labeled member can be recognised without a live
+# label. epic_claiming reads it, case-folding the repo the way the writer stores it.
+reset_fixtures
+FX_ISSUE_LIST=$(jq -cs '.' <<EOF
+$(issue_obj 700 "$(marker frozen "$BC")")
+$(issue_obj 701 "$(marker pending "$BC")")
+EOF
+)
+epic_cache_clear; build_claim_index >/dev/null 2>&1
+eq "a frozen member resolves to its Epic" "$(epic_claiming a-novel-kit/repo-b 2)" 700
+eq "the repo match is case-insensitive" "$(epic_claiming A-Novel-Kit/Repo-C 3)" 700
+eq "a pull request in no frozen set resolves to nothing" "$(epic_claiming a-novel-kit/repo-z 9)" ""
+# The right repo but the wrong number is not a member; matching on repo alone would claim it wrongly.
+eq "the same repo at a number not in the set is not claimed" "$(epic_claiming a-novel-kit/repo-b 999)" ""
+# repo-b#2 sits in 700's FROZEN marker and 701's PENDING one; only the frozen claim is indexed.
+eq "a pending marker's members are not indexed" \
+  "$(printf '%s' "$CLAIM_MEMBERS" | jq -r 'map(select(.repo=="a-novel-kit/repo-b" and .number==2)) | length')" 1
+
+# A malformed member must not void the whole Epic's index nor crash it; the good sibling still indexes.
+reset_fixtures
+FX_ISSUE_LIST=$(jq -cs '.' <<EOF
+$(issue_obj 720 "$(marker frozen '[{"repo":"a-novel-kit/repo-a","number":1},{"number":5}]')")
+EOF
+)
+epic_cache_clear; build_claim_index >/dev/null 2>&1
+eq "a good member alongside a malformed one is still indexed" "$(epic_claiming a-novel-kit/repo-a 1)" 720
+eq "and the malformed member contributes nothing" \
+  "$(printf '%s' "$CLAIM_MEMBERS" | jq 'length')" 1
+
+echo
+echo "per-PR mode consults the claim index before passing standalone"
+# The #325 bug: a member de-labeled mid-landing takes the label-only standalone fast path and greens a
+# head the sweep froze. per_pr_main now asks the claim index first.
+# Stubs for the per-PR leaves. evaluate_epic is controlled so the test pins the branch taken, not the
+# Epic's real state; freeze_post records what was posted.
+freeze_post() { printf '%s\n' "$3|$4" >> "$WORK/posts"; }   # $1=repo $2=sha $3=conclusion $4=summary
+fetch_pr_labels() { [ "$FX_LABELS_FAIL" = true ] && return 1; printf '%s' "${FX_FETCH_LABELS:-[]}"; }
+evaluate_epic() { EV_DECISION="$FX_EV"; EV_MERGED_COUNT=1; EV_CLOSED_COUNT=1; EV_STRAY_COUNT=1; EV_OPEN_COUNT=0; }
+posted() { tail -1 "$WORK/posts" 2>/dev/null; }
+run_per_pr() { : > "$WORK/posts"; epic_cache_clear; per_pr_main >/dev/null 2>&1; }
+
+# A native pull_request event for repo-b#2, which carries NO label but sits in Epic 700's frozen set.
+setup_per_pr() {
+  export HEAD_SHA=deadbeef REPO_FULL=a-novel-kit/repo-b PR_NUMBER=2 EVENT_PR=2 EVENT_LABELS='[]'
+  unset IN_QUEUE MG_HEAD_REF
+  FX_EV=frozen
+  FX_ISSUE_LIST=$(jq -cs '.' <<EOF
+$(issue_obj 700 "$(marker frozen "$BC")")
+EOF
+)
+}
+
+reset_fixtures; setup_per_pr
+run_per_pr
+# Evaluated as a member: the post concerns Epic 700, never the standalone message. FX_EV=frozen, so
+# per_pr_main's frozen branch fired rather than the label-only fast path.
+printf '%s' "$(posted)" | grep -q 'standalone' \
+  && ko "a claimed unlabeled PR was passed standalone (the #325 bug)" \
+  || ok "a claimed unlabeled PR is evaluated as a member, not passed standalone"
+printf '%s' "$(posted)" | grep -q '700' && ok "and the post names the claiming Epic" || ko "the claiming Epic was not evaluated"
+
+reset_fixtures; setup_per_pr
+FX_ISSUE_LIST='[]'   # nothing claims it
+run_per_pr
+printf '%s' "$(posted)" | grep -q 'standalone' && ok "a genuinely unclaimed PR still passes standalone" || ko "an unclaimed PR was frozen"
+printf '%s' "$(posted)" | grep -q '^success' && ok "with a success conclusion" || ko "an unclaimed PR did not pass"
+
+reset_fixtures; setup_per_pr
+FX_ISSUE_LIST=FAIL   # the claim lookup errors
+run_per_pr
+printf '%s' "$(posted)" | grep -q '^success' && ok "a claim-index failure fails open (success)" || ko "a claim-index error froze the PR instead of failing open"
+
+reset_fixtures; setup_per_pr
+EVENT_LABELS='[{"name":"epic:700"}]'   # a LABELED member still takes the label path
+FX_EV=clear
+run_per_pr
+printf '%s' "$(posted)" | grep -q '^success' && ok "a labeled member still routes through the label path" || ko "the label path regressed"
+unset HEAD_SHA REPO_FULL PR_NUMBER EVENT_PR EVENT_LABELS
+# Restore the real evaluate_epic wrapper for any later assertions.
+evaluate_epic() { epic_cache_clear; uncached_evaluate_epic "$@"; }
+
+echo
 echo "enumeration is the union of labels and claims"
 # The exact line sweep_main runs, lifted from the manifest rather than restated, so a claim-derived and
 # a label-derived Epic both appear once and dropping the union is observable here.
@@ -942,7 +1025,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 155 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 155) — the suite did not execute fully"
+if [ "$ran" -lt 168 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 168) — the suite did not execute fully"
   exit 1
 fi
