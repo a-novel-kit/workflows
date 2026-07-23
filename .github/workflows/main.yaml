@@ -102,7 +102,9 @@ jobs:
             echo "::error::no shell files found to lint — the job would pass vacuously"
             exit 1
           fi
-          shellcheck -f gcc "${files[@]}" | tee "$RUNNER_TEMP/shellcheck.txt"
+          # GitHub runs `shell: bash` with -eo pipefail, so the non-zero shellcheck exit on findings
+          # would abort the step here; `|| true` keeps it advisory so the summary and exit 0 below run.
+          shellcheck -f gcc "${files[@]}" | tee "$RUNNER_TEMP/shellcheck.txt" || true
           total=$(grep -cE ': (error|warning|note|style):' "$RUNNER_TEMP/shellcheck.txt" || true)
           {
             echo "## shellcheck — advisory (#320)"
