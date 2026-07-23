@@ -32,7 +32,7 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.23.1
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.24.0
       id: app_token
       with:
         client_id: ${{ inputs.client_id }}
