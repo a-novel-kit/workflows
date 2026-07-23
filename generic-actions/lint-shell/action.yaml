@@ -1,0 +1,57 @@
+name: lint shell
+description: >
+  Run shellcheck over a repo's tracked shell scripts. A repo with no shell files is a clean
+  pass, so the job is safe to add anywhere. Advisory mode reports findings without failing,
+  for a repo clearing an existing backlog before the check gates.
+
+inputs:
+  paths:
+    required: false
+    description: >
+      Space- or newline-separated globs of shell files to lint. Empty (the default) lints
+      every tracked `*.sh` file (`git ls-files '*.sh'`), which excludes vendored and
+      gitignored trees. The caller must have checked the repo out for the default to see it.
+  advisory:
+    required: false
+    default: "false"
+    description: >
+      When "true", findings go to the run summary and the log but the check passes — for a
+      repo adopting the lint over an existing backlog. When "false" (the default), any
+      finding fails the check.
+
+runs:
+  using: composite
+  steps:
+    - name: shellcheck
+      shell: bash
+      env:
+        PATHS: ${{ inputs.paths }}
+        ADVISORY: ${{ inputs.advisory }}
+      run: |
+        # errexit is disabled deliberately: shellcheck exits non-zero on findings and this
+        # step decides gating from that code itself, rather than aborting on it.
+        set +e -u
+        shopt -s nullglob
+        if [ -n "${PATHS//[[:space:]]/}" ]; then
+          # Word-split the caller's globs into a file list on purpose.
+          # shellcheck disable=SC2206
+          files=($PATHS)
+        else
+          mapfile -t files < <(git ls-files '*.sh')
+        fi
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "No shell files to lint."
+          printf '## shellcheck\n\nNo shell files found — nothing to lint.\n' >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        shellcheck -f gcc "${files[@]}" > "$RUNNER_TEMP/shellcheck.txt" 2>&1
+        rc=$?
+        cat "$RUNNER_TEMP/shellcheck.txt"
+        total=$(grep -cE ': (error|warning|note|style):' "$RUNNER_TEMP/shellcheck.txt")
+        printf '## shellcheck\n\n**%s** finding(s) across %s shell file(s).\n' \
+          "${total:-0}" "${#files[@]}" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$ADVISORY" = "true" ]; then
+          echo "Advisory mode: findings reported without gating."
+          exit 0
+        fi
+        exit "$rc"
