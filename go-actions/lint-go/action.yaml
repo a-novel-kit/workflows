@@ -32,6 +32,22 @@ runs:
           exit 1
         fi
         echo "version=$version" >> "$GITHUB_OUTPUT"
+    # Prove the golangci-lint tool module actually resolves from its modfile, so
+    # golangci-lint.sum completeness is exercised by CI. The lint step below runs a
+    # prebuilt binary for speed and reads golangci-lint.mod only for a version
+    # string, so nothing here otherwise touches the .sum. Without this step it can
+    # rot until `pnpm lint:go` (go tool -modfile=golangci-lint.mod golangci-lint)
+    # breaks locally with `missing go.sum entry` while master stays green — the
+    # exact drift that sat unnoticed across three repos. Running the tool the same
+    # way developers do forces every module-content hash to be present.
+    - name: Verify the golangci-lint tool module resolves
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "${WORKING_DIRECTORY:-.}"
+        go tool -modfile=golangci-lint.mod golangci-lint version
     - uses: golangci/golangci-lint-action@v9
       with:
         version: ${{ steps.golangci-version.outputs.version }}
