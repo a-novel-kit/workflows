@@ -22,9 +22,10 @@ description: >
   added on top — added, never substituted, so a snapshot can only widen what the detector sees and
   never narrow it. That addition is what makes an abandoned member visible: a pull request de-labeled
   and closed mid-landing leaves no trace the live search can find, because GitHub indexes no "ever
-  carried label X", so on the live set alone the survivors read as a clean landing. The sweep still
-  REACHES an Epic through live labels, so an Epic whose last labeled open pull request is de-labeled
-  drops out of enumeration altogether — the snapshot rescues a forgotten member, not a forgotten Epic.
+  carried label X", so on the live set alone the survivors read as a clean landing. The sweep REACHES
+  an Epic through live labels UNION the frozen snapshots it enumerates from the planning repo, so an
+  Epic whose last labeled open pull request is de-labeled is still evaluated through its own marker —
+  the snapshot rescues both a forgotten member and a forgotten Epic.
 
   HISTORY is scoped to the WAVE, membership is not. A merged pull request keeps its `epic:<N>` label
   for good, so an unbounded `is:merged` search reports every wave the Epic has ever landed: `merged >= 1`
@@ -454,10 +455,25 @@ runs:
           return 1
         }
 
+        # The snapshot marker JSON carried by an issue body, or empty. The fence lines are matched as
+        # whole lines, so a pseudo-fence planted in prose cannot shadow the region, and `-s .[0]` takes
+        # the first JSON value if a hand-edit left several. The claim index and snapshot_buckets both
+        # ask "is there a marker" through this one reader, so neither can reach an Epic the other then
+        # refuses to parse. The fence literals match merge-gate's splice; a change to them lands in all
+        # three actions.
+        extract_marker() { # $1 = issue body (CRLF already stripped)
+          local s='<!-- epic-membership:snapshot:start -->' e='<!-- epic-membership:snapshot:end -->'
+          printf '%s\n' "$1" \
+            | awk -v s="$s" -v e="$e" '$0 == s {f=1;next} $0 == e {f=0} f' \
+            | sed -n '/^[[:space:]]*[{[]/,$p' \
+            | jq -s -c '.[0] // empty' 2>/dev/null || true
+        }
+
         # One read of an Epic issue per pass, shared by the pause check and the snapshot reader. Both
         # want a different part of the same response — `.labels` and `.body` — and reading it twice
         # costs a request per Epic per sweep and leaves a window in which the Epic is paused between
-        # them, so one pass acts on two views of one issue.
+        # them, so one pass acts on two views of one issue. The claim index primes this cache from its
+        # one list of the planning repo, so an enumerated Epic whose issue is open is never re-fetched.
         #
         # It caches the RESPONSE, not a verdict. The two callers hold opposite failure policies: a
         # pause that cannot be read fails open, so a real partial landing is still caught, while a
@@ -513,6 +529,62 @@ runs:
           printf '%s' "$resp" | jq -e 'any(.labels[]?.name; . == "automation:paused")' >/dev/null 2>&1
         }
 
+        # Epics reachable through their own frozen snapshot, independent of any live label. The sweep
+        # otherwise finds active Epics only through `epic:<N>` labels on open pull requests, so an Epic
+        # whose last labeled open pull request is de-labeled drops out of enumeration and its partial
+        # landing is never evaluated — the snapshot rescued a forgotten member, not a forgotten Epic.
+        # This lists the planning repo's open issues once, reads each body, and fills CLAIM_EPICS
+        # (newline-separated) with the numbers carrying a frozen marker.
+        #
+        # The list is a single call over a small set — planning issues, not pull requests — read
+        # directly rather than by an `in:body` marker search: GitHub tokenizes punctuation away, so a
+        # marker query is approximate, and its search index is documented to silently omit an item that
+        # genuinely matches, which is the exact failure this rescue exists to remove. It also primes the
+        # epic_issue cache with every issue it read, so the per-Epic pause and snapshot reads below reuse
+        # this list instead of re-fetching.
+        #
+        # It fails soft: the claim set is unioned with the label set and only ever widens it, so a list
+        # error costs the de-label rescue for one pass and never narrows what the sweep already sees.
+        # Enumeration is looser than snapshot_buckets' resolution on purpose — any body whose marker is a
+        # frozen object with a non-empty member array is reached, and snapshot_buckets then applies the
+        # strict per-member validation. Over-reaching is harmless (an Epic that resolves to nothing
+        # evaluates as a no-op clear with no member head to post on); under-reaching is the bug.
+        build_claim_index() { # no args
+          CLAIM_EPICS=''
+          local pages nodes n elem body marker total=0 added=0
+          if ! pages=$(gh api --paginate "repos/${ORG}/${PLANNING_REPO}/issues?state=open&per_page=100" 2>/dev/null); then
+            echo "::warning::could not list open issues in ${ORG}/${PLANNING_REPO} — reaching Epics through live labels only this pass; a de-labeled Epic is not rescued." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
+          # --paginate concatenates one JSON array per page; `-s add` merges them whether the reply was
+          # one page or several. A parse failure yields an empty index rather than aborting the sweep.
+          nodes=$(printf '%s' "$pages" | jq -s -c 'add // []' 2>/dev/null) || nodes='[]'
+          total=$(printf '%s' "$nodes" | jq '[.[] | select(has("pull_request") | not)] | length' 2>/dev/null || echo 0)
+          # fd 4 isolates this feed from the gh calls the loop body would otherwise consume; the body
+          # runs in this shell, so CLAIM_EPICS and the cache primes persist. The list endpoint returns
+          # pull requests too, filtered by the `pull_request` key an issue never carries.
+          while IFS= read -r n <&4; do
+            [ -n "$n" ] || continue
+            elem=$(printf '%s' "$nodes" | jq -c --argjson n "$n" 'map(select(.number == $n))[0] // empty' 2>/dev/null)
+            [ -n "$elem" ] || continue
+            # Prime epic_issue's cache: a later pause or snapshot read of this number reuses this body.
+            printf '%s' "$elem" > "${EPIC_CACHE}/$n.json"
+            : > "${EPIC_CACHE}/$n.err"
+            printf '0' > "${EPIC_CACHE}/$n.rc"
+            body=$(printf '%s' "$elem" | jq -r '.body // ""' | tr -d '\r')
+            marker=$(extract_marker "$body")
+            if printf '%s' "$marker" | jq -e \
+                 'type == "object" and .status == "frozen" and (.members | type == "array") and (.members | length > 0)' \
+                 >/dev/null 2>&1; then
+              CLAIM_EPICS="${CLAIM_EPICS}${n}"$'\n'
+              added=$((added + 1))
+            fi
+          done 4< <(printf '%s' "$nodes" | jq -r '.[] | select(has("pull_request") | not) | .number' 2>/dev/null)
+          echo "Claim index: ${total} open issue(s) in ${ORG}/${PLANNING_REPO}, ${added} carrying a frozen snapshot." \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+        }
+
         # Read an Epic's frozen activation-snapshot members and bucket them by their live state. Once
         # landing stabilizes, merge-gate captures the member set into a marker in the Epic body. That set
         # is what the live label search cannot reconstruct: GitHub indexes no "ever carried label X", so
@@ -537,9 +609,6 @@ runs:
         # membership readers select on `status` and `members` alone, so a marker carrying it resolves
         # there exactly as one without.
         snapshot_buckets() { # $1 = epic number
-          # The fence strings, matched as whole lines — the same match merge-gate's splice uses, so a
-          # pseudo-fence planted inside an HTML comment cannot shadow the real region.
-          local START_M='<!-- epic-membership:snapshot:start -->' END_M='<!-- epic-membership:snapshot:end -->'
           SNAP_MERGED='[]'
           SNAP_CLOSED='[]'
           SNAP_OPEN='[]'
@@ -563,15 +632,9 @@ runs:
           # as "no snapshot".
           body=$(printf '%s' "$resp" | jq -r '.body // ""' | tr -d '\r')
 
-          # The fenced region holds a human-readable note and then the JSON, so skip to the first line
-          # that opens a value before parsing: the note is not JSON, and the JSON may be pretty-printed
-          # across several lines. `-s .[0]` takes the first value if a hand-edit left several; trailing
-          # prose inside the region voids the whole marker, which fails safe. All three participants
-          # extract identically — see the contract note above.
-          marker=$(printf '%s\n' "$body" \
-            | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
-            | sed -n '/^[[:space:]]*[{[]/,$p' \
-            | jq -s -c '.[0] // empty' 2>/dev/null || true)
+          # The fenced region holds a human-readable note and then the JSON. extract_marker skips the
+          # note to the first value and voids the marker if trailing prose follows, which fails safe.
+          marker=$(extract_marker "$body")
 
           # The wave boundary, read from any well-formed marker whatever its `status`, and read ahead of
           # the frozen-only returns below because the paths that report no frozen set need it most. A
@@ -1126,7 +1189,7 @@ runs:
           # Blast-cap tripwire: set true by sweep_post_freeze when an Epic's freeze exceeds
           # max_freeze_repos. Checked at the end, so the whole sweep run ends red.
           blast_cap_tripped=false
-          echo "Enumerating active Epics (distinct epic:<N> labels on open PRs, org=${ORG})…" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Enumerating active Epics (epic:<N> labels on open PRs ∪ frozen snapshots, org=${ORG})…" | tee -a "$GITHUB_STEP_SUMMARY"
           if ! all_open=$(search_prs "org:${ORG} is:pr is:open"); then
             echo "::error::could not enumerate open PRs (GraphQL search failed after retries) — nothing done this sweep"
             exit 1
@@ -1134,10 +1197,17 @@ runs:
 
           # Distinct Epic numbers from the `epic:<N>` labels; the jq `test` is the injection guard, the
           # per-Epic loop re-checks numeric-ness.
-          local epics
-          epics=$(printf '%s' "$all_open" | jq -r '
+          local label_epics epics
+          label_epics=$(printf '%s' "$all_open" | jq -r '
             [ .[] | (.labels.nodes // [])[].name | select(test("^epic:[0-9]+$")) | ltrimstr("epic:") ]
             | unique | .[]')
+
+          # Union with Epics reached through their own frozen snapshot, so an Epic whose last labeled
+          # open pull request was de-labeled is still evaluated. build_claim_index also primes the
+          # per-issue cache the loop below reads from. The union only widens the set; the per-Epic loop
+          # re-validates each token as numeric.
+          build_claim_index
+          epics=$(printf '%s\n%s\n' "$label_epics" "$CLAIM_EPICS" | grep -E '^[0-9]+$' | sort -un || true)
 
           # Backstop first, so the epic pass posts last and wins on a head both touch, flipping a
           # contested head to fail-closed. Two things contest a head: a lagging label index, and a
@@ -1164,7 +1234,7 @@ runs:
               sweep_epic "$EPIC" || echo "::warning::epic #$EPIC aborted unexpectedly (fail-closed); next sweep re-derives"
             done 3< <(printf '%s\n' "$epics")
           else
-            echo "No active Epics (no open epic:<N> PRs)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No active Epics (no open epic:<N> PRs and no frozen snapshot)." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
           echo "Partial-landing sweep complete." | tee -a "$GITHUB_STEP_SUMMARY"

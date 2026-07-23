@@ -30,7 +30,7 @@ extract() { # $1 = function name — lift it out of the run: block and de-indent
   ' "$ACTION" | sed 's/^        //'
 }
 
-for fn in epic_issue epic_paused snapshot_buckets union_buckets evaluate_epic; do
+for fn in extract_marker epic_issue epic_paused build_claim_index snapshot_buckets union_buckets evaluate_epic; do
   out=$(extract "$fn")
   if [ -z "$out" ]; then
     echo "::error::could not extract $fn from $ACTION — did its definition move or change indent?"
@@ -71,6 +71,12 @@ gh() {
       fi
       [ "$FX_REHYDRATE" = "FAIL" ] && { echo "gh: Bad credentials" >&2; return 1; }
       printf '%s' "$FX_REHYDRATE" ;;
+    *"issues?state=open"*)
+      # The claim-index list. FX_ISSUE_LIST is a JSON array of issue objects the endpoint would return
+      # (each {number, body, labels?} plus {pull_request:{}} on a PR row). Ordered before the
+      # single-issue branch below, which its glob would otherwise also match.
+      [ "$FX_ISSUE_LIST" = FAIL ] && { echo "gh: HTTP 502" >&2; return 1; }
+      printf '%s' "${FX_ISSUE_LIST:-[]}" ;;
     *issues*)
       case "$FX_BODY" in
         FAIL404) echo "gh: Not Found (HTTP 404)" >&2; return 1 ;;
@@ -207,6 +213,9 @@ reset_fixtures() {
   FX_BODY=""
   # One response carries both the pause marker and the snapshot, so the fixture carries both.
   FX_LABELS='[]'
+  # The planning repo's open-issue list the claim index reads. Default empty so the per-Epic
+  # assertions, which drive evaluate_epic directly, see no claim additions.
+  FX_ISSUE_LIST='[]'
   FX_REHYDRATE=""
   printf 0 > "$WORK/rehydrate_fails"
   : > "$WORK/gh_calls"
@@ -838,6 +847,90 @@ epic_cache_clear
 epic_paused 900 && rc=0 || rc=$?
 eq "a label merely containing it is not a pause" "$rc" 1
 
+echo
+echo "the claim index reaches Epics through their own frozen snapshot"
+# The sweep otherwise finds active Epics only through epic:<N> labels on open pull requests, so an
+# Epic whose last labeled open pull request was de-labeled would vanish from enumeration. The claim
+# index lists the planning repo's open issues directly and returns the ones carrying a frozen marker.
+issue_obj() { jq -cn --argjson n "$1" --arg b "$2" '{number:$n, body:$b, labels:[]}'; }
+pr_obj() { jq -cn --argjson n "$1" '{number:$n, body:"", pull_request:{url:"x"}}'; }
+claim_of() { CLAIM_EPICS=''; epic_cache_clear; build_claim_index >/dev/null 2>&1; printf '%s' "$CLAIM_EPICS" | grep -c '^[0-9]' | tr -d ' '; }
+claims() { printf '%s' "$CLAIM_EPICS" | grep -E '^[0-9]+$' | sort -n | paste -sd, -; }
+
+# A PR row carrying a frozen-marker body would be claimed if the pull-request filter were dropped, so
+# the fixture makes the skip observable rather than incidental to an empty body.
+reset_fixtures
+FX_ISSUE_LIST=$(jq -cs '.' <<EOF
+$(issue_obj 700 "$(marker frozen "$BC")")
+$(issue_obj 701 "$(marker pending "$BC")")
+$(issue_obj 702 "$(marker retired '[]' "$AGO20")")
+$(issue_obj 703 "No marker here at all.")
+$(issue_obj 705 "$(marker frozen '[]')")
+$(jq -cn --argjson n 704 --arg b "$(marker frozen "$BC")" '{number:$n, body:$b, pull_request:{url:"x"}}')
+EOF
+)
+epic_cache_clear; build_claim_index >/dev/null 2>&1
+eq "a frozen snapshot is claimed" "$(claims)" 700
+grep -qx 701 <<< "$CLAIM_EPICS" && ko "a pending marker was claimed" || ok "a pending marker is not claimed (not authoritative yet)"
+grep -qx 702 <<< "$CLAIM_EPICS" && ko "a retired tombstone was claimed" || ok "a retired tombstone is not claimed (names no members)"
+grep -qx 703 <<< "$CLAIM_EPICS" && ko "an unmarked issue was claimed" || ok "an unmarked issue is not claimed"
+grep -qx 705 <<< "$CLAIM_EPICS" && ko "a frozen marker with no members was claimed" || ok "a frozen marker with an empty member set is not claimed"
+grep -qx 704 <<< "$CLAIM_EPICS" && ko "a pull request row was claimed" || ok "a pull request row is skipped even carrying a frozen body"
+
+echo
+echo "the claim index primes the per-issue cache"
+# It reads every open issue once; a later snapshot read of the same number must resolve from that
+# primed body, not spend a second request. The single-issue stub is armed with a DIFFERENT body, so a
+# read that reached the network would resolve the wrong set and the assertion would catch it.
+reset_fixtures
+FX_ISSUE_LIST=$(jq -cs '.' <<EOF
+$(issue_obj 700 "$(marker frozen "$BC")")
+EOF
+)
+# The single-issue stub is armed with a MARKERLESS body, so a read that reached the network would
+# find no frozen set and return 2 without ever attempting the member re-read. The primed body carries
+# a frozen marker, so snapshot_buckets attempts that re-read (a graphql call) — which is how the two
+# sources are told apart without arming the full rehydrate fixture.
+FX_BODY="No marker — this is the network answer, which priming must make unreachable."
+epic_cache_clear; build_claim_index >/dev/null 2>&1
+: > "$WORK/gh_calls"
+snapshot_buckets 700 >/dev/null 2>&1
+eq "no issue read was made after priming" "$(grep -c 'issues/700' "$WORK/gh_calls" | tr -d ' ')" 0
+[ "$(grep -c graphql "$WORK/gh_calls")" -gt 0 ] \
+  && ok "and the primed frozen marker drove a member re-read (the markerless network body would not)" \
+  || ko "no member re-read attempted — the markerless network body was used, not the primed one"
+grep -qx 700 <<< "$CLAIM_EPICS" && ok "and the primed frozen Epic is claimed" || ko "the frozen Epic was not claimed"
+
+echo
+echo "the claim index fails soft"
+# The claim set is unioned with the label set and only ever widens it, so a list failure must cost the
+# de-label rescue for one pass and never abort the sweep or narrow what labels already reach.
+reset_fixtures
+FX_ISSUE_LIST=FAIL
+CLAIM_EPICS='sentinel'
+build_claim_index >/dev/null 2>&1 && rc=0 || rc=$?
+eq "a list failure returns success (soft)" "$rc" 0
+eq "and claims nothing" "$(printf '%s' "$CLAIM_EPICS" | grep -c '^[0-9]' | tr -d ' ')" 0
+
+echo
+echo "extract_marker reads a marker, or nothing"
+# The one reader both the claim index and snapshot_buckets ask "is there a marker" through. A body
+# with no fences must yield empty, not a placeholder that later parses as present.
+eq "a frozen body yields its marker object" \
+  "$(extract_marker "$(marker frozen "$BC")" | jq -r '.status')" frozen
+eq "a body with no fences yields nothing" "$(extract_marker "just prose, no fences")" ""
+
+echo
+echo "enumeration is the union of labels and claims"
+# The exact line sweep_main runs, lifted from the manifest rather than restated, so a claim-derived and
+# a label-derived Epic both appear once and dropping the union is observable here.
+UNION_LINE=$(awk '/epics=\$\(printf .* "\$label_epics" "\$CLAIM_EPICS"/{sub(/^[[:space:]]*/,""); print; exit}' "$ACTION")
+[ -n "$UNION_LINE" ] || { echo "::error::could not read the enumeration union from $ACTION"; exit 1; }
+union() { local label_epics="$1" CLAIM_EPICS="$2" epics; eval "$UNION_LINE"; printf '%s' "$epics" | paste -sd, -; }
+eq "a claim-only Epic joins the label set" "$(union "$(printf '810\n')" "$(printf '700\n')")" 700,810
+eq "an Epic reached both ways appears once" "$(union "$(printf '700\n')" "$(printf '700\n')")" 700
+eq "a non-numeric token is dropped" "$(union "$(printf '700\nfoo\n')" "")" 700
+
 printf '%d passed, %d failed\n' "$pass" "$fail"
 # A floor on the count as well as on failures: a suite that runs no assertions exits 0 and reads as
 # green. Raise this when assertions are added; never lower it to make a run pass.
@@ -849,7 +942,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 139 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 139) — the suite did not execute fully"
+if [ "$ran" -lt 155 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 155) — the suite did not execute fully"
   exit 1
 fi
