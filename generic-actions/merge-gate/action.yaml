@@ -335,7 +335,7 @@ runs:
       id: membership
       if: ${{ steps.discover.outputs.epic_number != '' }}
       continue-on-error: true
-      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.23.0
+      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.23.1
       with:
         epic_number: ${{ steps.discover.outputs.epic_number }}
         # Threaded through because this gate writes the snapshot to planning_repo below and this

@@ -64,7 +64,7 @@ jobs:
     # default token, so this job needs no repository permissions.
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.23.0
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.23.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
@@ -96,7 +96,7 @@ jobs:
             echo "member=false" >> "$GITHUB_OUTPUT"
           fi
       - if: ${{ steps.member.outputs.member == 'true' }}
-        uses: a-novel-kit/workflows/generic-actions/enable-auto-merge@v1.23.0
+        uses: a-novel-kit/workflows/generic-actions/enable-auto-merge@v1.23.1
         with:
           pull_request_number: ${{ github.event.pull_request.number }}
           client_id: ${{ inputs.client_id }}
