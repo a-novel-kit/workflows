@@ -551,6 +551,10 @@ runs:
         # evaluates as a no-op clear with no member head to post on); under-reaching is the bug.
         build_claim_index() { # no args
           CLAIM_EPICS=''
+          # The reverse index: which frozen Epic claims a given member. Read by epic_claiming so a
+          # de-labeled pull request is still recognised as a member without a live label. Repos are
+          # case-folded to match GitHub's case-insensitive resolution, as the writer stores them.
+          CLAIM_MEMBERS='[]'
           local pages nodes n elem body marker total=0 added=0
           if ! pages=$(gh api --paginate "repos/${ORG}/${PLANNING_REPO}/issues?state=open&per_page=100" 2>/dev/null); then
             echo "::warning::could not list open issues in ${ORG}/${PLANNING_REPO} — reaching Epics through live labels only this pass; a de-labeled Epic is not rescued." \
@@ -579,10 +583,28 @@ runs:
                  >/dev/null 2>&1; then
               CLAIM_EPICS="${CLAIM_EPICS}${n}"$'\n'
               added=$((added + 1))
+              # Fold this Epic's well-formed members into the reverse index. A member missing a string
+              # repo or numeric number is skipped: it can match no real pull request, so it belongs in
+              # neither direction. The Epic number is the trusted issue number, never body content.
+              CLAIM_MEMBERS=$(jq -c -n --argjson idx "$CLAIM_MEMBERS" --argjson epic "$n" \
+                --argjson members "$(printf '%s' "$marker" | jq -c '.members')" '
+                $idx + [ $members[]
+                  | select((.repo | type) == "string" and (.number | type) == "number")
+                  | {epic: $epic, repo: (.repo | ascii_downcase), number} ]' 2>/dev/null || printf '%s' "$CLAIM_MEMBERS")
             fi
           done 4< <(printf '%s' "$nodes" | jq -r '.[] | select(has("pull_request") | not) | .number' 2>/dev/null)
           echo "Claim index: ${total} open issue(s) in ${ORG}/${PLANNING_REPO}, ${added} carrying a frozen snapshot." \
             | tee -a "$GITHUB_STEP_SUMMARY"
+        }
+
+        # The Epic whose frozen snapshot claims a given pull request, or empty. Answers "which Epic
+        # claims this pull request" without a live label, from the reverse index build_claim_index
+        # filled. The repo is case-folded to match how the index stores it. First match wins; a pull
+        # request is a member of at most one Epic, and a marker naming it twice is a writer bug the
+        # freeze it produces is harmless against.
+        epic_claiming() { # $1 = owner/repo  $2 = pull request number
+          printf '%s' "${CLAIM_MEMBERS:-[]}" | jq -r --arg r "$1" --argjson n "$2" \
+            'map(select(.repo == ($r | ascii_downcase) and .number == $n))[0].epic // empty' 2>/dev/null || true
         }
 
         # Read an Epic's frozen activation-snapshot members and bucket them by their live state. Once
@@ -1302,10 +1324,26 @@ runs:
           epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty' | grep -oE '[0-9]+' || true)
 
           if [ -z "$epic" ]; then
-            # Standalone fast-path → success.
-            freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
-              "PR #${classify_pr} has no epic:<N> label — standalone, no partial-landing coordination. epic-freeze clear."
-            return 0
+            # No label — but a frozen snapshot may still claim this pull request as a member whose label
+            # was removed mid-landing. The sweep already resolves membership as labels ∪ frozen set and
+            # holds such a member; per-PR mode classified by label alone, so a non-head-changing event
+            # (a review, a ready_for_review, the unlabel itself) reran this path and posted success on a
+            # head the sweep had frozen — green until the next sweep, ≤15 minutes. Consulting the claim
+            # index closes that window.
+            #
+            # Fail open, like every other uncertainty on this path: a claim-index error posts standalone
+            # success, because merge-gate holds the member independently and the sweep re-derives. Only a
+            # pull request the index positively claims is treated as a member; an ordinary pull request
+            # is never in any frozen set, so the flood still passes without a per-Epic evaluation.
+            build_claim_index >/dev/null 2>&1 || true
+            epic=$(epic_claiming "$REPO_FULL" "$classify_pr")
+            if [ -z "$epic" ]; then
+              freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
+                "PR #${classify_pr} has no epic:<N> label and no frozen snapshot claims it — standalone, no partial-landing coordination. epic-freeze clear."
+              return 0
+            fi
+            echo "PR #${classify_pr} carries no label but Epic #${epic}'s frozen snapshot claims it (de-labeled mid-landing) — evaluating for a partial landing." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
           # Per-Epic pause: `automation:paused` on the Epic issue leaves partial-landing unevaluated.
