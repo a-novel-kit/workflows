@@ -1,9 +1,0 @@
-name: go report card
-description: Refresh the repository's goreportcard.com report.
-
-runs:
-  using: "composite"
-  steps:
-    - name: update report card
-      shell: bash
-      run: curl -X POST -F "repo=github.com/${{ github.repository }}" https://goreportcard.com/checks

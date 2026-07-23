@@ -74,11 +74,10 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `go-actions`
 
-| Action           | Purpose                                                        |
-| ---------------- | -------------------------------------------------------------- |
-| `go-report-card` | Refresh the repo's [Go Report Card](https://goreportcard.com). |
-| `lint-go`        | Run `golangci-lint` (supports a non-root module dir).          |
-| `test-go`        | Run the workspace's Go tests with coverage via `gotestsum`.    |
+| Action    | Purpose                                                     |
+| --------- | ----------------------------------------------------------- |
+| `lint-go` | Run `golangci-lint` (supports a non-root module dir).       |
+| `test-go` | Run the workspace's Go tests with coverage via `gotestsum`. |
 
 ### `node-actions`
 
