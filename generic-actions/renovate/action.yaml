@@ -99,6 +99,16 @@ runs:
               "groupName": "go toolchain"
             },
             {
+              "description": "Complete an incomplete go.sum after a main-module bump. Renovate's built-in gomodTidy aborts intermittently when a vanity-import host (gonum.org has done this) resets the direct-mode fetch, committing a go.sum that has the /go.mod hashes but none of the module-content (h1:) hashes — every compile then fails with `missing go.sum entry` while lint-only jobs stay green, and it has needed a hand-pushed tidy several times in a week. This postUpgradeTask runs `go mod download all` after the update: it re-fetches the module graph (through proxy.golang.org first, per GOPROXY above) and writes the missing h1: hashes, so a complete go.sum ships in the same PR. It is additive and idempotent — a no-op when gomodTidy already succeeded, and it never prunes, so it cannot corrupt the file. Scoped to a repo-root go.mod so it never touches the tool modfiles (golangci-lint.mod, gotestsum.mod, mockery.mod), whose canonical state comes from `go get -tool` and which tidy would prune; `go mod download` is already in every Go consumer's allowed_commands. Renovate swallows a failing postUpgradeTask (renovatebot/renovate#8856), so this heals rather than gates — its success is the fix, and the rare download-still-fails residual surfaces as a red PR through consumer CI exactly as before. A non-root main module (stack's cli/go.mod) is out of scope here and carries its own rule.",
+              "matchManagers": ["gomod"],
+              "matchFileNames": ["go.mod"],
+              "postUpgradeTasks": {
+                "commands": ["go mod download all"],
+                "fileFilters": ["go.sum"],
+                "executionMode": "branch"
+              }
+            },
+            {
               "matchPackageNames": ["/.*a-novel-kit\\/nodelib.*/"],
               "groupName": "nodelib"
             },
