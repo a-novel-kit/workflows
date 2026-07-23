@@ -79,39 +79,19 @@ jobs:
           fi
           echo "✓ ${#suites[@]} action test suite(s) passed."
 
-  # Shellcheck the repo's bash. The tests/ suites embed each action's shipped functions verbatim
-  # (see test-actions above), so linting them lints the saga logic itself — the errexit-under-`||`,
-  # pipefail and `local`-scoping semantics the landing decisions turn on. Advisory for now: the step
-  # exits 0, so findings are surfaced (count in the run summary, full output in the log) without
-  # gating — the suites carry a backlog (dominated by intentional `A && B || C` guards, SC2015) too
-  # large to clear in one pass. Phase 2 clears the backlog and swaps `exit 0` for `exit $rc`, so the
-  # check fails on findings and becomes required. Tracked in #320.
+  # Shellcheck the repo's bash via the shared generic-actions/lint-shell action (dogfooded here
+  # with a relative path). The tests/ suites embed each action's shipped functions verbatim (see
+  # test-actions above), so linting them lints the saga logic itself — the errexit-under-`||`,
+  # pipefail and `local`-scoping semantics the landing decisions turn on. Advisory for now: this
+  # repo carries a backlog (dominated by intentional `A && B || C` guards, SC2015) too large to
+  # clear in one pass, so it passes `advisory: "true"` — findings are reported but do not gate.
+  # Phase 2 clears the backlog and drops the input so the check fails on findings. Tracked in #320.
   lint-shell:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - name: shellcheck
-        shell: bash
-        run: |
-          set -uo pipefail
-          shopt -s nullglob
-          files=(tests/*.sh .github/scripts/*.sh)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::no shell files found to lint — the job would pass vacuously"
-            exit 1
-          fi
-          # GitHub runs `shell: bash` with -eo pipefail, so the non-zero shellcheck exit on findings
-          # would abort the step here; `|| true` keeps it advisory so the summary and exit 0 below run.
-          shellcheck -f gcc "${files[@]}" | tee "$RUNNER_TEMP/shellcheck.txt" || true
-          total=$(grep -cE ': (error|warning|note|style):' "$RUNNER_TEMP/shellcheck.txt" || true)
-          {
-            echo "## shellcheck — advisory (#320)"
-            echo ""
-            echo "**${total}** finding(s) across ${#files[@]} shell file(s), reported but non-gating."
-            echo "Phase 2 clears the backlog and swaps the \`exit 0\` below for \`exit \$rc\`, so the"
-            echo "check fails on findings and becomes required."
-          } >> "$GITHUB_STEP_SUMMARY"
-          # Advisory: surface findings without failing the check (see the job comment and #320).
-          exit 0
+      - uses: ./generic-actions/lint-shell
+        with:
+          advisory: "true"

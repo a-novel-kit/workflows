@@ -60,6 +60,7 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                           |
 | `epic-membership`        | Resolve an Epic's authorized member set — open PRs labeled `epic:<N>`.                                            |
 | `escalate`               | File/update a deduped escalation ticket (+ drive its board Status); page SEV1 via a push webhook.                 |
+| `lint-shell`             | Run shellcheck over the repo's tracked shell scripts (advisory or gating; a no-shell repo passes).                |
 | `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                              |
 | `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
