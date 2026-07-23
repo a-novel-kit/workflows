@@ -1,0 +1,73 @@
+name: lint dockerfile
+description: >
+  Run hadolint over a repo's Dockerfiles. A repo with no Dockerfiles is a clean pass, so the
+  job is safe to add anywhere. Advisory mode reports findings without failing, for a repo
+  clearing an existing backlog before the check gates. hadolint also shellchecks each RUN block.
+
+inputs:
+  paths:
+    required: false
+    description: >
+      Space- or newline-separated globs of Dockerfiles to lint. Empty (the default) lints every
+      tracked file named `Dockerfile`, `Dockerfile.<x>` or `<x>.Dockerfile` (case-insensitive),
+      which excludes vendored and gitignored trees. The caller must have checked the repo out for
+      the default to see it.
+  advisory:
+    required: false
+    default: "false"
+    description: >
+      When "true", findings go to the run summary and the log but the check passes — for a repo
+      adopting the lint over an existing backlog. When "false" (the default), any finding fails.
+  version:
+    required: false
+    default: "v2.12.0"
+    description: >
+      The hadolint release to pin — a `hadolint/hadolint` git tag. The binary is fetched from that
+      release; it is not preinstalled on the runner as shellcheck is.
+
+runs:
+  using: composite
+  steps:
+    - name: hadolint
+      shell: bash
+      env:
+        PATHS: ${{ inputs.paths }}
+        ADVISORY: ${{ inputs.advisory }}
+        HADOLINT_VERSION: ${{ inputs.version }}
+      run: |
+        # errexit is disabled deliberately: hadolint exits non-zero on findings and this step
+        # decides gating from that code itself, rather than aborting on it.
+        set +e -u
+        shopt -s nullglob
+        if [ -n "${PATHS//[[:space:]]/}" ]; then
+          # Word-split the caller's globs into a file list on purpose.
+          # shellcheck disable=SC2206
+          files=($PATHS)
+        else
+          # Match `Dockerfile`, `Dockerfile.<x>` and the fleet's `<x>.Dockerfile` convention.
+          mapfile -t files < <(git ls-files | grep -iE '\.dockerfile$|(^|/)dockerfile(\.[^/]+)?$')
+        fi
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "No Dockerfiles to lint."
+          printf '## hadolint\n\nNo Dockerfiles found — nothing to lint.\n' >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        bin="$RUNNER_TEMP/hadolint"
+        if ! curl -fsSL \
+          "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
+          -o "$bin"; then
+          echo "::error::failed to download hadolint ${HADOLINT_VERSION}"
+          exit 1
+        fi
+        chmod +x "$bin"
+        "$bin" "${files[@]}" > "$RUNNER_TEMP/hadolint.txt" 2>&1
+        rc=$?
+        cat "$RUNNER_TEMP/hadolint.txt"
+        total=$(grep -cE 'DL[0-9]+|SC[0-9]+' "$RUNNER_TEMP/hadolint.txt")
+        printf '## hadolint\n\n**%s** finding(s) across %s Dockerfile(s).\n' \
+          "${total:-0}" "${#files[@]}" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$ADVISORY" = "true" ]; then
+          echo "Advisory mode: findings reported without gating."
+          exit 0
+        fi
+        exit "$rc"
