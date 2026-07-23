@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Regression tests for test-go's package discovery.
+# shellcheck disable=SC2016
+# ^ the suite matches literal `${{ … }}` GitHub template strings, which must not expand.
 #
-# Same discipline as release-train.sh: discover_modules is extracted verbatim from the manifest and
-# sourced, with only `go` stubbed. The caller-supplied filter expressions are the one thing that
-# cannot survive extraction — they are `${{ }}` expressions GitHub resolves at load time — so they
-# are substituted with their declared defaults, and the substitution is asserted rather than assumed.
-#
-# What is under test is that discovery cannot come back empty and still report success. gotestsum
-# reads MODULES as its package arguments; with none it falls back to `.`, prints `DONE 0 tests` and
-# exits 0, and the coverage step reports 0.0% off a `mode: set` header and exits 0 too. Every read
-# here has to fail loudly instead, because this action is the only place these tests run.
+# Regression tests for test-go's package discovery: discover_modules is extracted from the manifest
+# and sourced with `go` stubbed. Guards that discovery can never come back empty yet report success
+# (gotestsum with no packages falls back to `.` and exits 0 — every empty read must fail loudly).
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -31,9 +26,8 @@ if [ -z "$out" ]; then
   exit 1
 fi
 
-# Resolve the two caller expressions to the defaults the manifest declares. Both substitutions have
-# to bite: a renamed input would otherwise leave a `${{ … }}` in the sourced text, and the suite
-# would then cover something the action no longer contains.
+# Resolve the two `${{ }}` inputs to their manifest defaults; both must bite (a renamed input would
+# leave a `${{ … }}` behind), so the substitution is asserted below.
 filters="| grep -v /mocks | grep -v /test | grep -v /proto"
 resolved=${out//'${{ inputs.filter_patterns }}'/$filters}
 resolved=${resolved//'${{ inputs.filter_extra_patterns }}'/}
@@ -122,9 +116,8 @@ echo "== an empty package set is a failure however it arises =="
 GO_PACKAGES=""
 check "a module listing no packages fails the step" "1" "$(run)"
 
-# Without the emptiness guard this is the shape that slips through: printf on an empty capture writes
-# a blank line, which survives every grep and makes modules.txt non-empty by size while naming no
-# package at all.
+# The shape that slips past a size check: a blank line survives every grep, making modules.txt
+# non-empty while naming no package.
 check "the blank line a no-package module would emit does not count as content" \
   "" "$(tr -d '[:space:]' <modules.txt)"
 

@@ -2,20 +2,15 @@
 # Regression tests for merge-gate's activation-snapshot write path.
 #
 # Same approach as tests/detect-partial-landing.sh: the functions under test are extracted verbatim
-# from the action manifest and sourced. Only `gh` is stubbed.
+# from the action manifest and sourced, and only `gh` is stubbed. It drives `write_marker` and its
+# helpers plus the decision and payload the step builds before calling it — all lifted from the
+# manifest rather than restated, so a fixture cannot encode a belief about the format.
 #
-# What this covers is the lost-update race. The reconcile sweep runs merge-gate as a matrix over
-# every open member pull request with no concurrency bound, and render-epic-status edits the same
-# issue body from a job that does not wait for it, so writers overlap by design against an API with
-# no conditional update.
-#
-# The write acts on a decision made earlier: `$do` and `$payload` are computed from a body read
-# before the loop, so a writer that re-reads without re-deriving freezes a member set the world has
-# already moved past, and a retry loop makes it win. Several cases below exist to pin that.
-#
-# Scope: this drives `write_marker` and its helpers, plus the decision the step makes before calling
-# it and the payload it assembles. Both are lifted out of the manifest rather than restated, so a
-# fixture cannot encode a belief about the format in place of observing it.
+# What it covers is the lost-update race: the reconcile sweep runs merge-gate as an unbounded matrix
+# over every open member pull request while render-epic-status edits the same issue body, against an
+# API with no conditional update. The write also acts on a decision made earlier — `$do` and
+# `$payload` come from a body read before the loop — so a writer that re-reads without re-deriving
+# freezes a set the world has moved past, and a retry loop makes it win.
 set -euo pipefail
 
 TOP_PID=$$
@@ -57,7 +52,7 @@ export GITHUB_STEP_SUMMARY="$WORK/summary.md"
 # note and `current_marker` reads every marker as absent.
 START=$(sed -n "s/^ *START='\(.*\)'\$/\1/p" "$ACTION" | head -1)
 END=$(sed -n "s/^ *END='\(.*\)'\$/\1/p" "$ACTION" | head -1)
-[ -n "$START" ] && [ -n "$END" ] || die "could not read the fence literals from $ACTION"
+if [ -z "$START" ] || [ -z "$END" ]; then die "could not read the fence literals from $ACTION"; fi
 # Matched without regard to indentation, so wrapping the block in a conditional does not silently
 # stop the anchor from matching.
 REGION_BLOCK=$(awk '
@@ -135,11 +130,13 @@ note_of() { # frozen|pending|retire
   sed -n "s/^ *note=\"\(_Epic membership, $key.*\)\"$/\1/p" "$ACTION" | head -1
 }
 region_file() { # $1 = payload json, $2 = frozen|pending -> the region the action itself would build
-  local f note payload regionf
+  local f note payload
   note=$(note_of "${2:-pending}")
   [ -n "$note" ] || die "could not read the note text from $ACTION"
   payload="$1"
-  f=$(mktemp -p "$WORK"); regionf="$f"
+  f=$(mktemp -p "$WORK")
+  # shellcheck disable=SC2034  # REGION_BLOCK, lifted from the manifest, redirects into regionf.
+  local regionf="$f"
   # Run the manifest's own assembly. `$( )` strips the trailing newline, so the closing brace needs
   # its own separator or bash reads it as an argument to the last command.
   eval "{ $REGION_BLOCK
@@ -163,7 +160,7 @@ pass=0
 fail=0
 ok() { printf '  ✓ %s\n' "$1"; pass=$((pass + 1)); }
 ko() { printf '  ✗ %s\n' "$1"; fail=$((fail + 1)); }
-eq() { [ "$2" = "$3" ] && ok "$1" || ko "$1 (got '$2', want '$3')"; }
+eq() { if [ "$2" = "$3" ]; then ok "$1"; else ko "$1 (got '$2', want '$3')"; fi; }
 
 reset() {
   printf 0 > "$WORK/read_fails"; : > "$WORK/writes"; : > "$WORK/steal"; : > "$WORK/noop"
@@ -171,8 +168,9 @@ reset() {
   : > "$GITHUB_STEP_SUMMARY"; server_body ""
 }
 # Capture the function's output so it cannot be mistaken for the exit code, and so tee'd and plain
-# log lines are asserted from one place.
-run() { write_marker "$(region_file "$payload" "$do")" > "$WORK/out" 2>&1 && echo 0 || echo $?; }
+# log lines are asserted from one place. write_marker re-derives against `cur` out of the
+# environment, so name it here — a case that forgets it then fails by name, not inside the extraction.
+run() { : "${cur:?}"; write_marker "$(region_file "$payload" "$do")" > "$WORK/out" 2>&1 && echo 0 || echo $?; }
 said() { grep -q "$1" "$WORK/out"; }
 
 # The member normalization, lifted from the manifest. It decides what `$cur` is, so the
@@ -211,8 +209,9 @@ PAYLOAD_BLOCK=$(awk '/if \[ "\$do" = "retire" \]; then/{f=1} f{print} f&&/^[[:sp
 BAIL_BLOCK=$(awk '/RETIRE_ONLY:-/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
 [ -n "$BAIL_BLOCK" ] || die "could not read the retire-only bail from $ACTION"
 bails() { # $1 = RETIRE_ONLY, $2 = do -> "bailed" (the step returned) or "went-on"
-  local out
-  out=$( RETIRE_ONLY="$1"; do="$2"; eval "$BAIL_BLOCK" >/dev/null 2>&1; printf 'went-on' )
+  # shellcheck disable=SC2034  # BAIL_BLOCK, lifted from the manifest, reads both out of the scope.
+  local out RETIRE_ONLY="$1" "do"="$2"
+  out=$( eval "$BAIL_BLOCK" >/dev/null 2>&1; printf 'went-on' )
   [ -n "$out" ] && echo went-on || echo bailed
 }
 
@@ -221,14 +220,15 @@ bails() { # $1 = RETIRE_ONLY, $2 = do -> "bailed" (the step returned) or "went-o
 DRY_BLOCK=$(awk '/SNAPSHOT_DRY_RUN:-/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
 [ -n "$DRY_BLOCK" ] || die "could not read the rehearsal branch from $ACTION"
 rehearses() { # $1 = SNAPSHOT_DRY_RUN, $2 = do, $3 = cur, $4 = payload -> the log, or "went-on"
-  local out
-  out=$( SNAPSHOT_DRY_RUN="$1"; do="$2"; cur="$3"; payload="$4"
-         eval "$DRY_BLOCK" 2>/dev/null; printf 'went-on' )
+  # Local, so a rehearsal cannot disturb the case in progress; DRY_BLOCK reads all four by name.
+  # shellcheck disable=SC2034
+  local out SNAPSHOT_DRY_RUN="$1" "do"="$2" cur="$3" payload="$4"
+  out=$( eval "$DRY_BLOCK" 2>/dev/null; printf 'went-on' )
   printf '%s' "$out"
 }
 
 payload_for() { # $1 = do, $2 = cur, $3 = inherited since -> echoes the payload, sets NOTE_OUT
-  local do cur inherited_since payload note
+  local "do" cur inherited_since payload note
   do="$1"; cur="$2"; inherited_since="${3:-}"
   eval "$PAYLOAD_BLOCK"
   NOTE_OUT="$note"
@@ -267,7 +267,7 @@ reset
 do=pending; cur="$M2"; payload=$(pending_json "$M2")
 eq "a fresh pending marker is written" "$(run)" 0
 eq "and the server carries it" "$(marker_now | jq -r .status)" pending
-grep -q 'Some prose' "$WORK/body" && ok "human prose either side survives" || ko "prose was dropped"
+if grep -q 'Some prose' "$WORK/body"; then ok "human prose either side survives"; else ko "prose was dropped"; fi
 
 echo
 echo "a peer that writes after us"
@@ -279,9 +279,11 @@ do=pending; cur="$M2"; payload=$(pending_json "$M2")
 eq "we retry until our write survives" "$(run)" 0
 eq "and our marker is what finally stands" "$(marker_now | jq -r '.members | length')" 2
 eq "which took two writes, not one" "$(writes)" 2
-grep -q 'rendered by the peer' "$WORK/body" \
-  && ok "and the peer's own edit outside our region survives" \
-  || ko "LOST UPDATE: we overwrote the peer's edit"
+if grep -q 'rendered by the peer' "$WORK/body"; then
+  ok "and the peer's own edit outside our region survives"
+else
+  ko "LOST UPDATE: we overwrote the peer's edit"
+fi
 
 echo
 echo "a wiped marker invalidates a freeze in flight"
@@ -302,7 +304,7 @@ eq "a pending writer yields rather than resetting it" "$(run)" 2
 eq "the frozen marker is left intact" "$(marker_now | jq -r .status)" frozen
 eq "with its member set untouched" "$(marker_now | jq -r '.members | length')" 2
 eq "and nothing was written" "$(writes)" 0
-said 'already frozen' && ok "and it says so in the run log" || ko "the yield is silent"
+if said 'already frozen'; then ok "and it says so in the run log"; else ko "the yield is silent"; fi
 
 echo
 echo "a stale freeze must not become permanent"
@@ -316,7 +318,7 @@ eq "the writer abandons instead of freezing a superseded set" "$(run)" 2
 eq "the peer's pending marker stands" "$(marker_now | jq -r .status)" pending
 eq "with the peer's member set" "$(marker_now | jq -r '.members | length')" 1
 eq "and nothing was written" "$(writes)" 0
-said 'member set moved' && ok "and the abandonment is explained" || ko "abandoning is silent"
+if said 'member set moved'; then ok "and the abandonment is explained"; else ko "abandoning is silent"; fi
 
 echo
 echo "equivalent writers agree instead of fighting"
@@ -352,8 +354,11 @@ for bad in '"not-a-date"' 'null'; do
   do=pending; cur="$M2"; payload=$(pending_json "$M2")
   eq "an unreadable at ($bad) is rewritten" "$(run)" 0
   eq "which takes exactly one write" "$(writes)" 1
-  marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null \
-    && ok "and the marker can age again" || ko "the marker still cannot age"
+  if marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null; then
+    ok "and the marker can age again"
+  else
+    ko "the marker still cannot age"
+  fi
 done
 
 echo
@@ -401,9 +406,16 @@ eq "the tombstone is written" "$(run)" 0
 eq "leaving a retired marker" "$(marker_now | jq -r .status)" retired
 eq "carrying the boundary it drew" "$(marker_now | jq -r .since)" "$now"
 eq "and naming no members" "$(marker_now | jq -r '.members // "none"')" none
-grep -q 'Some prose' "$WORK/body" && ok "with the human prose untouched" || ko "prose was dropped retiring"
-grep -qF -- "$START" "$WORK/body" && ok "and the region still standing" \
-  || ko "the fences went with it, so the boundary has nowhere to live"
+if grep -q 'Some prose' "$WORK/body"; then
+  ok "with the human prose untouched"
+else
+  ko "prose was dropped retiring"
+fi
+if grep -qF -- "$START" "$WORK/body"; then
+  ok "and the region still standing"
+else
+  ko "the fences went with it, so the boundary has nowhere to live"
+fi
 
 echo
 echo "retirement re-derives like every other write"
@@ -487,13 +499,21 @@ echo
 echo "a terminal marker is settled by equality alone"
 # frozen and retired carry no aging clock, so equality settles them. A tombstone asked for a
 # parseable `at` is never settled, and the retirement retries to exhaustion.
-marker_settled "$(retired_json "$W")" "$(retired_json "$W")" \
-  && ok "a tombstone matching our payload counts as settled" \
-  || ko "a tombstone can never settle, so retirement never converges"
-marker_settled "$(frozen_json "$M2")" "$(frozen_json "$M2")" \
-  && ok "and so does a frozen marker" || ko "a frozen marker cannot settle"
-marker_settled "$(retired_json "$W")" "$(retired_json 2026-07-01T00:00:00Z)" \
-  && ko "two different boundaries read as one marker" || ok "but two boundaries apart do not"
+if marker_settled "$(retired_json "$W")" "$(retired_json "$W")"; then
+  ok "a tombstone matching our payload counts as settled"
+else
+  ko "a tombstone can never settle, so retirement never converges"
+fi
+if marker_settled "$(frozen_json "$M2")" "$(frozen_json "$M2")"; then
+  ok "and so does a frozen marker"
+else
+  ko "a frozen marker cannot settle"
+fi
+if marker_settled "$(retired_json "$W")" "$(retired_json 2026-07-01T00:00:00Z)"; then
+  ko "two different boundaries read as one marker"
+else
+  ok "but two boundaries apart do not"
+fi
 
 echo
 echo "what counts as a landed wave"
@@ -536,9 +556,11 @@ echo "and it is reachable from that hold"
 # only path by which a completed wave is retired, so assert it structurally, as the fence agreement
 # above is.
 hold_block=$(awk '/is not in the member set/{f=1} f{print} f&&/^[[:space:]]*fi$/{exit}' "$ACTION")
-grep -q 'retire_only=true' <<< "$hold_block" \
-  && ok "the not-in-set hold enables the capture step before it returns" \
-  || ko "the hold returns without enabling retirement — a pull request held there is held forever"
+if grep -q 'retire_only=true' <<< "$hold_block"; then
+  ok "the not-in-set hold enables the capture step before it returns"
+else
+  ko "the hold returns without enabling retirement — a pull request held there is held forever"
+fi
 for step in "Mint snapshot-write token" "Capture activation snapshot"; do
   if awk -v s="$step" '$0 ~ "name: " s {f=1;next} f && /^ *if:/ {print; exit}' "$ACTION" \
     | grep -q 'retire_only'; then
@@ -554,27 +576,48 @@ echo "the capture can be rehearsed"
 # capture bug was found by discovering a wrong marker on a real Epic.
 P=$(payload_for frozen "$M2")
 out=$(rehearses true frozen "$M2" "$P")
-grep -q 'went-on' <<< "$out" && ko "a rehearsal fell through to the write" || ok "a rehearsal stops before the write"
-grep -q 'dry run' <<< "$out" && ok "and says so" || ko "the rehearsal is silent about being one"
-grep -q 'frozen' <<< "$out" && ok "naming the transition it would make" || ko "the transition is not reported"
-grep -qF -- "$P" <<< "$out" && ok "and the exact payload it would splice" || ko "the payload is not reported"
+if grep -q 'went-on' <<< "$out"; then
+  ko "a rehearsal fell through to the write"
+else
+  ok "a rehearsal stops before the write"
+fi
+if grep -q 'dry run' <<< "$out"; then ok "and says so"; else ko "the rehearsal is silent about being one"; fi
+if grep -q 'frozen' <<< "$out"; then
+  ok "naming the transition it would make"
+else
+  ko "the transition is not reported"
+fi
+if grep -qF -- "$P" <<< "$out"; then
+  ok "and the exact payload it would splice"
+else
+  ko "the payload is not reported"
+fi
 for m in 'a-novel-kit/repo-a#5' 'a-novel-kit/repo-b#2'; do
-  grep -qF -- "$m" <<< "$out" && ok "listing member $m" || ko "member $m is not named, so the set cannot be eyeballed"
+  if grep -qF -- "$m" <<< "$out"; then
+    ok "listing member $m"
+  else
+    ko "member $m is not named, so the set cannot be eyeballed"
+  fi
 done
 eq "an off switch writes as before" "$(rehearses false frozen "$M2" "$P")" went-on
 eq "and so does an unset one" "$(rehearses "" frozen "$M2" "$P")" went-on
-grep -q 'retired' <<< "$(rehearses TRUE retire "$M2" "$(payload_for retire "$M2")")" \
-  && ok "a retirement rehearses too, whatever the casing" || ko "retirement cannot be rehearsed"
+if grep -q 'retired' <<< "$(rehearses TRUE retire "$M2" "$(payload_for retire "$M2")")"; then
+  ok "a retirement rehearses too, whatever the casing"
+else
+  ko "retirement cannot be rehearsed"
+fi
 
 echo
 echo "a rehearsal cannot write even if the branch fails"
 # The token is minted read-only for a dry run, so the capability is withheld rather than the write
 # merely skipped. GitHub compares strings case-insensitively, so any casing of "true" reaches it.
 perm=$(awk '/name: Mint snapshot-write token/{f=1} f&&/permission-issues:/{print; exit}' "$ACTION")
-grep -q 'snapshot_dry_run' <<< "$perm" \
-  && ok "the snapshot-write token is scoped by the rehearsal flag" \
-  || ko "a rehearsal still mints an issues:write token"
-grep -qE "'read'" <<< "$perm" && ok "down to read" || ko "the dry branch does not drop to read"
+if grep -q 'snapshot_dry_run' <<< "$perm"; then
+  ok "the snapshot-write token is scoped by the rehearsal flag"
+else
+  ko "a rehearsal still mints an issues:write token"
+fi
+if grep -qE "'read'" <<< "$perm"; then ok "down to read"; else ko "the dry branch does not drop to read"; fi
 
 echo
 echo "the payload the step builds"
@@ -604,35 +647,53 @@ inner() { awk -v s="$START" -v e="$END" '$0==s{f=1;next} $0==e{f=0} f' <<< "$1" 
 P=$(frozen_json "$M2")
 out=$(sp "$(printf 'top\n\n%s\n_note_\n%s\n%s\n\nbottom\n' "$START" "$(pending_json "$M1")" "$END")" "$P")
 eq "an existing region is replaced in place" "$(inner "$out" | jq -r .status)" frozen
-one_region "$out" && ok "leaving exactly one region" || ko "region count wrong"
-grep -q '^top$' <<< "$out" && grep -q '^bottom$' <<< "$out" \
-  && ok "with the prose either side intact" || ko "prose was dropped by the in-place branch"
+if one_region "$out"; then ok "leaving exactly one region"; else ko "region count wrong"; fi
+if grep -q '^top$' <<< "$out" && grep -q '^bottom$' <<< "$out"; then
+  ok "with the prose either side intact"
+else
+  ko "prose was dropped by the in-place branch"
+fi
 # The replaced payload leaves the body entirely: a stale copy left loose in it is what lets a
 # whole-body match report a marker that is not there.
-grep -qF -- "$(pending_json "$M1")" <<< "$out" \
-  && ko "the replaced payload is still in the body" \
-  || ok "and the payload it replaced is gone entirely"
+if grep -qF -- "$(pending_json "$M1")" <<< "$out"; then
+  ko "the replaced payload is still in the body"
+else
+  ok "and the payload it replaced is gone entirely"
+fi
 
 out=$(sp "$(printf 'only prose\n')" "$P")
 eq "a body with no region gains one" "$(inner "$out" | jq -r .status)" frozen
-grep -q '^only prose$' <<< "$out" && ok "and keeps the prose" || ko "prose lost on append"
+if grep -q '^only prose$' <<< "$out"; then ok "and keeps the prose"; else ko "prose lost on append"; fi
 
 out=$(sp "$(printf 'HUMAN-A\n%s\nA\n%s\ntext\n%s\nB\n%s\nHUMAN-B\n' "$START" "$END" "$START" "$END")" "$P")
-one_region "$out" && ok "duplicate fences are healed to one region" || ko "duplicate fences survived"
-grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out" \
-  && ok "without dropping the prose around them" || ko "prose was destroyed healing duplicate fences"
+if one_region "$out"; then ok "duplicate fences are healed to one region"; else ko "duplicate fences survived"; fi
+if grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out"; then
+  ok "without dropping the prose around them"
+else
+  ko "prose was destroyed healing duplicate fences"
+fi
 
 # Prose between a stray fence and the end discriminates the two branches: an in-place replace spans
 # from the first START to the END and discards everything inside, while the recovery path strips the
 # fence lines and keeps it. A malformed region takes the recovery path.
 out=$(sp "$(printf '%s\nHUMAN-A\n%s\nHUMAN-B\n%s\n' "$START" "$START" "$END")" "$P")
-one_region "$out" && ok "an unbalanced fence pair is healed to one region" || ko "unbalanced fences survived"
-grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out" \
-  && ok "keeping prose that was trapped inside it" || ko "prose between stray fences was destroyed"
+if one_region "$out"; then
+  ok "an unbalanced fence pair is healed to one region"
+else
+  ko "unbalanced fences survived"
+fi
+if grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out"; then
+  ok "keeping prose that was trapped inside it"
+else
+  ko "prose between stray fences was destroyed"
+fi
 out=$(sp "$(printf 'HUMAN-A\n%s\nstray end first\n%s\nHUMAN-B\n' "$END" "$START")" "$P")
-one_region "$out" && ok "inverted fences are healed to one region" || ko "inverted fences survived"
-grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out" \
-  && ok "keeping the prose around those too" || ko "prose was destroyed healing inverted fences"
+if one_region "$out"; then ok "inverted fences are healed to one region"; else ko "inverted fences survived"; fi
+if grep -q '^HUMAN-A$' <<< "$out" && grep -q '^HUMAN-B$' <<< "$out"; then
+  ok "keeping the prose around those too"
+else
+  ko "prose was destroyed healing inverted fences"
+fi
 
 echo
 echo "same status, different members of the same size"
@@ -682,8 +743,11 @@ printf 'Some prose.\n\n%s\n%s\n%s\n%s\n\nMore prose.\n' "$START" "$(note_of pend
 do=pending; cur="$M2"; payload=$(pending_json "$M2")
 eq "the repair is retried until it sticks" "$(run)" 0
 eq "which takes two writes" "$(writes)" 2
-marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null \
-  && ok "and the marker can age at the end of it" || ko "the marker still cannot age"
+if marker_now | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null; then
+  ok "and the marker can age at the end of it"
+else
+  ko "the marker still cannot age"
+fi
 
 echo
 echo "a give-up message carries the error, not the success output"
@@ -691,8 +755,11 @@ reset
 do=pending; cur="$M2"; payload=$(pending_json "$M2")
 printf 'x' > "$WORK/noop"          # every edit returns success but changes nothing
 eq "an unlandable write gives up" "$(run)" 1
-said 'https://' && ko "the edit's success output was captured as an error" \
-  || ok "the success URL is not mistaken for an error"
+if said 'https://'; then
+  ko "the edit's success output was captured as an error"
+else
+  ok "the success URL is not mistaken for an error"
+fi
 
 echo
 echo "a failing edit"
@@ -701,7 +768,11 @@ do=pending; cur="$M2"; payload=$(pending_json "$M2")
 printf 'x' > "$WORK/edit_fails"
 eq "an edit that errors is retried, then given up on" "$(run)" 1
 eq "after three attempts" "$(writes)" 3
-said 'HTTP 422' && ok "and the API's own error text is surfaced, not swallowed" || ko "the edit error was discarded"
+if said 'HTTP 422'; then
+  ok "and the API's own error text is surfaced, not swallowed"
+else
+  ko "the edit error was discarded"
+fi
 
 echo
 echo "a give-up after mixed failures names a real cause"
@@ -712,8 +783,11 @@ do=pending; cur="$M2"; payload=$(pending_json "$M2")
 printf 'x' > "$WORK/edit_fails"
 printf 2 > "$WORK/read_fail_from"   # attempt 1 reads, edits, fails; every later read fails too
 eq "the pass gives up" "$(run)" 1
-said 'could not read' && ok "and names the failure that actually ended it" \
-  || ko "the give-up quotes a stale error from an earlier attempt"
+if said 'could not read'; then
+  ok "and names the failure that actually ended it"
+else
+  ko "the give-up quotes a stale error from an earlier attempt"
+fi
 
 echo
 echo "read failures"
@@ -727,8 +801,11 @@ printf 'Important human prose.\n\nA hand-written plan.\n' > "$WORK/body"
 printf 99 > "$WORK/read_fails"
 eq "a total read failure gives up rather than claiming success" "$(run)" 1
 eq "and writes nothing at all" "$(writes)" 0
-grep -q 'A hand-written plan' "$WORK/body" \
-  && ok "leaving the Epic body untouched" || ko "the body was written blind after a failed read"
+if grep -q 'A hand-written plan' "$WORK/body"; then
+  ok "leaving the Epic body untouched"
+else
+  ko "the body was written blind after a failed read"
+fi
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

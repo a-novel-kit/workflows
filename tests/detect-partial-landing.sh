@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
 # Regression tests for detect-partial-landing's membership sourcing.
 #
-# These actions are bash inside a composite manifest, so there is nothing to import: the harness
-# extracts the functions under test verbatim from the manifest and sources them, which keeps the
-# shipped code the code that runs here. Only the network leaves are stubbed (gh, and the three read
-# helpers evaluate_epic calls), so every decision below is the real predicate running on fixture truth.
-# Offline and deterministic.
+# The functions under test are extracted verbatim from the composite manifest and sourced, so the
+# shipped code is the code that runs here; only the network leaves are stubbed. Offline, deterministic.
 #
 # The central case is a member de-labeled and closed mid-landing. Live label truth has forgotten it —
 # GitHub indexes no "ever carried label X" — so the detector reads the survivors as a clean landing
 # and clears. The frozen activation snapshot is what keeps it a member.
 #
-# The fixtures model the real capture shape. merge-gate captures the set from open pull requests and
-# freezes it once the set holds still, while auto-merge is armed earlier, so a real frozen set omits
-# the members that already merged. The snapshot is added to the live set: `A` merged is visible only
-# live, `B` abandoned only in the snapshot, and the freeze depends on both.
+# The fixtures model the real capture shape: merge-gate freezes from open pull requests while
+# auto-merge is armed earlier, so a frozen set omits members that already merged. `A` is visible only
+# live, `B` only in the snapshot, and the freeze depends on both.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -47,10 +43,11 @@ fi
 
 export ORG=a-novel-kit PLANNING_REPO=.github GRACE_MINUTES=30
 export GITHUB_STEP_SUMMARY="$WORK/summary.md"
-now_epoch=$(date -u +%s)
-# The action computes these outside any extracted function, so the harness reimplements them. A change
-# to the action's own arithmetic escapes this suite; keep the two in sync by hand.
-grace_seconds=$((GRACE_MINUTES * 60))
+# The action computes these outside any extracted function, so the harness reimplements them and the
+# extracted code reads both by name. A change to the action's arithmetic escapes this suite; keep the
+# two in sync by hand.
+# shellcheck disable=SC2034
+now_epoch=$(date -u +%s) grace_seconds=$((GRACE_MINUTES * 60))
 sleep() { :; } # retries are driven by the rehydrate_fails countdown; wall-clock delay is not useful here
 
 # ---- stubbed leaves ---------------------------------------------------------------------
@@ -106,12 +103,10 @@ search_prs() {
     *is:open*) bucket="$FX_LIVE_OPEN" ;;
     *) echo "unexpected search: $1" >&2; return 1 ;;
   esac
-  # Apply the time qualifier the way GitHub does. A bad qualifier silently returns zero rows, so
-  # filtering here is what lets the wave-boundary assertions below run the real predicate against real
-  # truth.
-  # ISO-8601 UTC sorts chronologically, so a string compare is the date compare; the action's own grace
-  # clock leans on the same property. A node with no terminal timestamp is kept: GitHub always has one,
-  # so an undated fixture means "not what this assertion is about".
+  # Apply the time qualifier the way GitHub does, so the wave-boundary assertions run the real
+  # predicate. ISO-8601 UTC sorts chronologically, so a string compare is the date compare. A node
+  # with no terminal timestamp is kept — GitHub always has one, so an undated fixture means "not what
+  # this assertion is about".
   floor=$(printf '%s' "$1" | sed -n 's/.*\(merged\|closed\):>=\([^ ]*\).*/\2/p')
   [ -n "$floor" ] && bucket=$(printf '%s' "$bucket" | jq -c --arg f "$floor" \
     '[.[] | select((.mergedAt // .closedAt // "9999") >= $f)]')
@@ -141,12 +136,21 @@ EPIC_CACHE="$WORK/epic-cache"
 mkdir -p "$EPIC_CACHE"
 epic_cache_clear() { rm -f "$EPIC_CACHE"/*; }
 
-# A pass reads an Epic issue once and both readers share it, so the cache survives for the life of
-# the step. Each case below is its own pass with its own fixture body, so it is cleared per call —
-# otherwise the first case's response would answer every later one. The read-once behavior is
-# asserted directly further down, against an uncleared cache.
+# A pass reads the Epic issue once and both readers share it, so the cache is cleared per call —
+# otherwise the first case's response would answer every later one. (The read-once behavior is
+# asserted further down, against an uncleared cache.) FX_EV pins the verdict for the per-PR section,
+# which needs the branch per_pr_main takes rather than a real evaluation.
 eval "uncached_evaluate_epic() $(declare -f evaluate_epic | tail -n +2)"
-evaluate_epic() { epic_cache_clear; uncached_evaluate_epic "$@"; }
+evaluate_epic() {
+  if [ -n "$FX_EV" ]; then
+    EV_DECISION="$FX_EV"; EV_MERGED_COUNT=1; EV_CLOSED_COUNT=1; EV_OPEN_COUNT=0
+    # shellcheck disable=SC2034  # per_pr_main reads EV_STRAY_COUNT; nothing in this harness does.
+    EV_STRAY_COUNT=1
+    return 0
+  fi
+  epic_cache_clear
+  uncached_evaluate_epic "$@"
+}
 
 # ---- fixtures ---------------------------------------------------------------------------
 # A member node as the re-read returns it. `prov` is how the node proves it belongs to the Epic:
@@ -154,13 +158,10 @@ evaluate_epic() { epic_cache_clear; uncached_evaluate_epic "$@"; }
 #   label    = still carries the label
 #   none     = neither — a pull request named by the marker that was never a member
 node() { # repo number state [terminalAt] [prov: timeline|label|none] [labelAt]
-  # `terminalAt` is when the pull request reached its terminal state: it fills `mergedAt` for a MERGED
-  # one and `closedAt` otherwise, which is how GitHub reports them (a merged PR carries both, equal).
-  # `closedAt` sits outside the action's search-node shape and the action never reads it; it is there
-  # so the stub above can apply a `closed:>=` floor, which the real search applies server-side.
-  # `labelAt` is the LabeledEvent's createdAt, defaulting to AGO5 — recent, so a timeline-proven member
-  # reads as labeled during the current wave under the boundary floor. A previous-wave member is given
-  # an older labelAt explicitly.
+  # `terminalAt` fills `mergedAt` for a MERGED node and `closedAt` otherwise, the way GitHub reports
+  # them. `closedAt` is outside the action's node shape and unread by it; it is here so the stub above
+  # can apply a `closed:>=` floor the real search applies server-side. `labelAt` is the LabeledEvent's
+  # createdAt, defaulting to a recent AGO5 so a timeline-proven member reads as this wave's.
   jq -cn --arg r "$1" --argjson n "$2" --arg s "$3" --arg m "${4:-}" --arg p "${5:-timeline}" \
     --arg la "${6:-$AGO5}" --arg e "epic:900" \
     '{number:$n, headRefOid:("sha"+($n|tostring)),
@@ -230,6 +231,7 @@ reset_fixtures() {
   FX_REST_FAIL=false
   FX_REST_FAIL_ON=none
   FX_QUEUE_FAIL=false
+  FX_EV="" # empty = evaluate_epic really evaluates; the per-PR section pins a verdict instead
 }
 reset_fixtures
 
@@ -239,7 +241,7 @@ fail=0
 note() { printf '  %s %s\n' "$1" "$2"; }
 ok() { note ✓ "$1"; pass=$((pass + 1)); }
 ko() { note ✗ "$1"; fail=$((fail + 1)); }
-eq() { [ "$2" = "$3" ] && ok "$1" || ko "$1 (got '$2', want '$3')"; }
+eq() { if [ "$2" = "$3" ]; then ok "$1"; else ko "$1 (got '$2', want '$3')"; fi; }
 
 check() { # name expected-decision [expected-membership] [expected merged/closed/open counts]
   local name="$1" want="$2" wantsrc="${3:-}" wantcounts="${4:-}" src counts detail=""
@@ -264,8 +266,11 @@ check "on the live set alone, the abandonment is invisible" clear live 1/0/1
 FX_BODY=$(marker frozen "$BC")
 FX_REHYDRATE=$(rehydrate "$B" "$C")
 check "the snapshot supplies it, and the Epic freezes" frozen live+snapshot 1/1/1
-[ "$EV_REASON" = "a member was closed without merging" ] \
-  && ok "and for the right reason" || ko "wrong reason: $EV_REASON"
+if [ "$EV_REASON" = "a member was closed without merging" ]; then
+  ok "and for the right reason"
+else
+  ko "wrong reason: $EV_REASON"
+fi
 
 echo
 echo "the snapshot is ADDED to the live set, never swapped for it"
@@ -281,16 +286,27 @@ FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 OPEN)" "$C")
 FX_REST='{"a-novel-kit/repo-a#1":"closed true","a-novel-kit/repo-b#2":"open false","a-novel-kit/repo-c#3":"open false"}'
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-b" and .number == 2)' >/dev/null \
-  && ok "a de-labeled open member is in EV_OPEN, so it gets a check" \
-  || ko "the de-labeled open member is missing from EV_OPEN"
-printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-b" and (.liveMember | not))' >/dev/null \
-  && ok "and is tagged as no longer live-labeled" || ko "liveMember tag missing or wrong"
-printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-c" and .liveMember)' >/dev/null \
-  && ok "while a still-labeled member is tagged live" || ko "a live member was mis-tagged"
+if printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-b" and .number == 2)' >/dev/null; then
+  ok "a de-labeled open member is in EV_OPEN, so it gets a check"
+else
+  ko "the de-labeled open member is missing from EV_OPEN"
+fi
+if printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-b" and (.liveMember | not))' >/dev/null; then
+  ok "and is tagged as no longer live-labeled"
+else
+  ko "liveMember tag missing or wrong"
+fi
+if printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/repo-c" and .liveMember)' >/dev/null; then
+  ok "while a still-labeled member is tagged live"
+else
+  ko "a live member was mis-tagged"
+fi
 # The roll-forward reads exactly this filter; a de-labeled member must not be re-armed.
-printf '%s' "$EV_OPEN" | jq -e '[.[] | select((.isDraft | not) and .liveMember)] | length == 1' >/dev/null \
-  && ok "EV_OPEN offers exactly one roll-forward candidate" || ko "EV_OPEN would offer a de-labeled member to roll-forward"
+if printf '%s' "$EV_OPEN" | jq -e '[.[] | select((.isDraft | not) and .liveMember)] | length == 1' >/dev/null; then
+  ok "EV_OPEN offers exactly one roll-forward candidate"
+else
+  ko "EV_OPEN would offer a de-labeled member to roll-forward"
+fi
 reset_fixtures
 
 echo
@@ -311,9 +327,11 @@ check "an intruder carrying an unrelated label is still rejected" error
 FX_REHYDRATE=$(rehydrate "$B" "$(jq -cn --argjson v "$(node a-novel-kit/VICTIM 4242 OPEN '' none)" \
   '$v | .timelineItems.nodes = [{label:{name:"epic:901"}}]')")
 check "an intruder labeled for a DIFFERENT Epic is rejected" error
-printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/VICTIM")' >/dev/null \
-  && ko "the planted pull request reached the freeze target set" \
-  || ok "and it never reaches the freeze target set"
+if printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/VICTIM")' >/dev/null; then
+  ko "the planted pull request reached the freeze target set"
+else
+  ok "and it never reaches the freeze target set"
+fi
 # A repository outside the org can never be a member: the live label search is org-scoped, and naming
 # one lets the marker's author corroborate in a repository they control.
 FX_BODY=$(marker frozen '[{"repo":"a-novel-kit/repo-b","number":2},{"repo":"attacker/anything","number":1}]')
@@ -372,9 +390,11 @@ FX_REHYDRATE=$(rehydrate "$B" "$C")
 : > "$WORK/gh_calls"
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-grep -q 'createdAt' "$WORK/gh_calls" \
-  && ok "the member re-read fetches each LabeledEvent's createdAt" \
-  || ko "the re-read never asks for createdAt, so the boundary floor has no data to act on"
+if grep -q 'createdAt' "$WORK/gh_calls"; then
+  ok "the member re-read fetches each LabeledEvent's createdAt"
+else
+  ko "the re-read never asks for createdAt, so the boundary floor has no data to act on"
+fi
 reset_fixtures
 reset_fixtures
 
@@ -388,12 +408,16 @@ FX_QUEUE='[]' # repo-c left its queue: a stray, still labeled, within grace
 FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO5")]"
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-[ "$(printf '%s' "$EV_STRAYS" | jq '[.[] | select((.isDraft | not) and .liveMember)] | length')" = 1 ] \
-  && ok "no snapshot: EV_STRAYS still offers a roll-forward candidate" \
-  || ko "no snapshot: the roll-forward selected nothing (untagged nodes)"
-[ "$(printf '%s' "$EV_STRAYS" | jq '[.[] | select((.isDraft | not) and (.liveMember | not))] | length')" = 0 ] \
-  && ok "no snapshot: EV_STRAYS reports nothing as de-labeled" \
-  || ko "no snapshot: a labeled stray was warned about as de-labeled"
+if [ "$(printf '%s' "$EV_STRAYS" | jq '[.[] | select((.isDraft | not) and .liveMember)] | length')" = 1 ]; then
+  ok "no snapshot: EV_STRAYS still offers a roll-forward candidate"
+else
+  ko "no snapshot: the roll-forward selected nothing (untagged nodes)"
+fi
+if [ "$(printf '%s' "$EV_STRAYS" | jq '[.[] | select((.isDraft | not) and (.liveMember | not))] | length')" = 0 ]; then
+  ok "no snapshot: EV_STRAYS reports nothing as de-labeled"
+else
+  ko "no snapshot: a labeled stray was warned about as de-labeled"
+fi
 reset_fixtures
 
 echo
@@ -461,11 +485,16 @@ FX_BODY=$(marker frozen "$BC")
 FX_REHYDRATE=$(rehydrate "$B" "$(jq -cn --argjson c "$C" '$c | .headRefOid = "sha3-FRESH"')")
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-printf '%s' "$EV_OPEN" | jq -e 'any(.number == 3 and .headRefOid == "sha3-FRESH")' >/dev/null \
-  && ok "EV_OPEN carries the snapshot's head, not the index's" \
-  || ko "the freeze would be posted on the stale head"
-[ "$(printf '%s' "$EV_OPEN" | jq '[.[] | select(.number == 3)] | length')" = 1 ] \
-  && ok "and the member appears exactly once" || ko "the member was double-counted across sources"
+if printf '%s' "$EV_OPEN" | jq -e 'any(.number == 3 and .headRefOid == "sha3-FRESH")' >/dev/null; then
+  ok "EV_OPEN carries the snapshot's head, not the index's"
+else
+  ko "the freeze would be posted on the stale head"
+fi
+if [ "$(printf '%s' "$EV_OPEN" | jq '[.[] | select(.number == 3)] | length')" = 1 ]; then
+  ok "and the member appears exactly once"
+else
+  ko "the member was double-counted across sources"
+fi
 
 echo
 echo "membership is bounded by the label and the org"
@@ -474,15 +503,20 @@ evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
 for want in 'label:"epic:900"' 'org:a-novel-kit'; do
   # All three searches: a grep over the whole file passes while two of them run unscoped.
-  [ "$(grep -cF -- "$want" "$WORK/searches")" = 3 ] \
-    && ok "all three member searches are scoped by $want" \
-    || ko "a member search is missing $want — the set would be every open pull request"
+  if [ "$(grep -cF -- "$want" "$WORK/searches")" = 3 ]; then
+    ok "all three member searches are scoped by $want"
+  else
+    ko "a member search is missing $want — the set would be every open pull request"
+  fi
 done
 : > "$WORK/searches"
 evaluate_epic 901 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-[ "$(grep -cF 'label:"epic:901"' "$WORK/searches")" = 3 ] \
-  && ok "and the label follows the Epic being evaluated" || ko "the Epic label is not interpolated"
+if [ "$(grep -cF 'label:"epic:901"' "$WORK/searches")" = 3 ]; then
+  ok "and the label follows the Epic being evaluated"
+else
+  ko "the Epic label is not interpolated"
+fi
 
 echo
 echo "the merge queue is read per (repo, base), and only members are dequeued"
@@ -491,9 +525,12 @@ reset_fixtures
 FX_QUEUE='[{"number":3,"state":"QUEUED","headOid":"sha3"},{"number":999,"state":"QUEUED","headOid":"sha999"}]'
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-[ "$(printf '%s' "$EV_QUEUE" | jq 'length')" = 1 ] \
-  && ok "an unrelated queue entry is not treated as a member" \
-  || ko "a non-member queue entry leaked into EV_QUEUE (it would be dequeued)"
+# shellcheck disable=SC2153  # EV_QUEUE is evaluate_epic's output, not a typo of the FX_QUEUE fixture.
+if [ "$(printf '%s' "$EV_QUEUE" | jq 'length')" = 1 ]; then
+  ok "an unrelated queue entry is not treated as a member"
+else
+  ko "a non-member queue entry leaked into EV_QUEUE (it would be dequeued)"
+fi
 reset_fixtures
 FX_QUEUE='[{"number":3,"state":"QUEUED","headOid":"sha3","repo":"a-novel-kit/repo-c","base":"master"}]'
 check "the queue is read with the member's own repo and base" clear live 1/0/1
@@ -545,8 +582,11 @@ FX_BODY=$(marker retired '[]' "$AGO20")
 FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO5")]"
 FX_LIVE_CLOSED="[$(node a-novel-kit/repo-b 2 CLOSED "$AGO5")]"
 check "a member closed after the boundary is this wave's abandonment" frozen live 1/1/1
-[ "$EV_REASON" = "a member was closed without merging" ] \
-  && ok "and for the right reason" || ko "wrong reason: $EV_REASON"
+if [ "$EV_REASON" = "a member was closed without merging" ]; then
+  ok "and for the right reason"
+else
+  ko "wrong reason: $EV_REASON"
+fi
 # The closed bucket carries the same hazard and is scoped identically: an abandonment a human has
 # already dealt with must not re-freeze every wave that follows it.
 FX_LIVE_CLOSED="[$(node a-novel-kit/repo-b 2 CLOSED "$AGO40")]"
@@ -598,22 +638,29 @@ FX_BODY=$(marker retired '[]' "$AGO20")
 : > "$WORK/searches"
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-[ "$(grep -cF "merged:>=$AGO20" "$WORK/searches")" = 1 ] \
-  && ok "the merged search is bounded" || ko "the merged search is not bounded by the boundary"
-[ "$(grep -cF "closed:>=$AGO20" "$WORK/searches")" = 1 ] \
-  && ok "the closed-unmerged search is bounded" || ko "the closed-unmerged search is not bounded"
-grep 'is:open' "$WORK/searches" | grep -q ':>=' \
-  && ko "the open search is bounded — but an open pull request is not history" \
-  || ok "and the open search is left unbounded"
+if [ "$(grep -cF "merged:>=$AGO20" "$WORK/searches")" = 1 ]; then
+  ok "the merged search is bounded"
+else
+  ko "the merged search is not bounded by the boundary"
+fi
+if [ "$(grep -cF "closed:>=$AGO20" "$WORK/searches")" = 1 ]; then
+  ok "the closed-unmerged search is bounded"
+else
+  ko "the closed-unmerged search is not bounded"
+fi
+if grep 'is:open' "$WORK/searches" | grep -q ':>='; then
+  ko "the open search is bounded — but an open pull request is not history"
+else
+  ok "and the open search is left unbounded"
+fi
 reset_fixtures
 
 echo
 echo "an unusable boundary is ignored, and never reaches a query"
-# GitHub answers a malformed time qualifier — and a well-shaped impossible date — with zero rows and no
-# errors array, indistinguishable from a genuinely empty bucket. That bucket gates every decision, and
-# an empty one reads as "nothing has landed" → `clear`, which posts success and lifts a standing freeze.
-# Falling back to unbounded history errs toward freezing. fd 6 keeps this loop's input clear of
-# evaluate_epic's own.
+# GitHub answers a malformed — or well-shaped but impossible — time qualifier with zero rows and no
+# errors array, indistinguishable from an empty bucket. An empty merged bucket reads as "nothing has
+# landed" → `clear`, which posts success and lifts a standing freeze, so an unusable boundary falls
+# back to unbounded history instead. fd 6 keeps this loop's input clear of evaluate_epic's own.
 FX_QUEUE='[]'
 FX_LIVE_MERGED="[$(node a-novel-kit/repo-a 1 MERGED "$AGO40")]"
 while IFS='|' read -r why bad <&6; do
@@ -621,8 +668,11 @@ while IFS='|' read -r why bad <&6; do
   FX_BODY=$(marker retired '[]' "$bad")
   : > "$WORK/searches"
   check "$why" frozen live 1/0/1
-  grep -q ':>=' "$WORK/searches" \
-    && ko "  …but it reached a query anyway" || ok "  …with no floor in any query"
+  if grep -q ':>=' "$WORK/searches"; then
+    ko "  …but it reached a query anyway"
+  else
+    ok "  …with no floor in any query"
+  fi
 done 6<<EOF
 not a timestamp at all|garbage
 a relative date the calendar happily accepts|yesterday
@@ -638,9 +688,11 @@ FX_BODY=$(marker retired '[]' '2026-07-01T00:00:00Z org:attacker')
 : > "$WORK/searches"
 evaluate_epic 900 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-grep -q 'attacker' "$WORK/searches" \
-  && ko "an injected qualifier reached the search grammar" \
-  || ok "an injected qualifier never reaches the search grammar"
+if grep -q 'attacker' "$WORK/searches"; then
+  ko "an injected qualifier reached the search grammar"
+else
+  ok "an injected qualifier never reaches the search grammar"
+fi
 # Reporting a rejected value is itself a vector. The marker lives in an issue body, jq -r turns an
 # embedded \n into a real newline, and GitHub reads workflow commands line by line, so an unsanitized
 # warning lets the boundary forge a command on the path that rejects it.
@@ -649,9 +701,11 @@ FX_BODY=$(marker retired '[]' "$(printf '2026-07-01T00:00:00Z\n::error::forged')
 check "a boundary carrying a newline is rejected" frozen live 1/0/1
 out=$(evaluate_epic 900 2>&1)
 : > "$GITHUB_STEP_SUMMARY"
-printf '%s\n' "$out" | grep -q '^::error::forged' \
-  && ko "a newline in the boundary forged a workflow command" \
-  || ok "and reporting it cannot forge a workflow command"
+if printf '%s\n' "$out" | grep -q '^::error::forged'; then
+  ko "a newline in the boundary forged a workflow command"
+else
+  ok "and reporting it cannot forge a workflow command"
+fi
 reset_fixtures
 
 echo
@@ -676,10 +730,12 @@ FX_BODY="" # the next Epic in the same sweep has no marker at all
 : > "$WORK/searches"
 evaluate_epic 901 >/dev/null 2>&1
 : > "$GITHUB_STEP_SUMMARY"
-[ -z "$SNAP_SINCE" ] && ok "the next Epic starts with no boundary" || ko "SNAP_SINCE leaked: $SNAP_SINCE"
-grep -q ':>=' "$WORK/searches" \
-  && ko "the previous Epic's boundary bounded this one's searches" \
-  || ok "and its searches are unbounded"
+if [ -z "$SNAP_SINCE" ]; then ok "the next Epic starts with no boundary"; else ko "SNAP_SINCE leaked: $SNAP_SINCE"; fi
+if grep -q ':>=' "$WORK/searches"; then
+  ko "the previous Epic's boundary bounded this one's searches"
+else
+  ok "and its searches are unbounded"
+fi
 reset_fixtures
 
 echo
@@ -757,8 +813,11 @@ FX_BODY=$(printf '%s\n%s\n%s\n\n%s' \
   "$(marker frozen "$BC")")
 FX_REHYDRATE=$(rehydrate "$B" "$C")
 check "a decoy fence in an HTML comment is ignored" frozen live+snapshot 1/1/1
-printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/DECOY")' >/dev/null \
-  && ko "the decoy marker was used" || ok "and the real marker is the one that was read"
+if printf '%s' "$EV_OPEN" | jq -e 'any(.repository.nameWithOwner == "a-novel-kit/DECOY")' >/dev/null; then
+  ko "the decoy marker was used"
+else
+  ok "and the real marker is the one that was read"
+fi
 reset_fixtures
 
 echo
@@ -785,8 +844,11 @@ FX_BODY=$(marker frozen "$BC")
 FX_REHYDRATE=FAIL
 check "re-hydration fails outright" error
 # evaluate_epic returns before it logs anything on this path, so stderr is the only diagnosis.
-evaluate_epic 900 2>&1 >/dev/null | grep -q 'could not re-read all 2 frozen member' \
-  && ok "the reason reaches the run log" || ko "the fail-closed pass is silent"
+if evaluate_epic 900 2>&1 >/dev/null | grep -q 'could not re-read all 2 frozen member'; then
+  ok "the reason reaches the run log"
+else
+  ko "the fail-closed pass is silent"
+fi
 : > "$GITHUB_STEP_SUMMARY"
 FX_REHYDRATE=$(jq -cn '{data:{m0:null,m1:null}, errors:[{message:"NOT_FOUND"}]}')
 check "every alias nulled (data has keys, but no members)" error
@@ -925,11 +987,31 @@ EOF
 )
 epic_cache_clear; build_claim_index >/dev/null 2>&1
 eq "a frozen snapshot is claimed" "$(claims)" 700
-grep -qx 701 <<< "$CLAIM_EPICS" && ko "a pending marker was claimed" || ok "a pending marker is not claimed (not authoritative yet)"
-grep -qx 702 <<< "$CLAIM_EPICS" && ko "a retired tombstone was claimed" || ok "a retired tombstone is not claimed (names no members)"
-grep -qx 703 <<< "$CLAIM_EPICS" && ko "an unmarked issue was claimed" || ok "an unmarked issue is not claimed"
-grep -qx 705 <<< "$CLAIM_EPICS" && ko "a frozen marker with no members was claimed" || ok "a frozen marker with an empty member set is not claimed"
-grep -qx 704 <<< "$CLAIM_EPICS" && ko "a pull request row was claimed" || ok "a pull request row is skipped even carrying a frozen body"
+if grep -qx 701 <<< "$CLAIM_EPICS"; then
+  ko "a pending marker was claimed"
+else
+  ok "a pending marker is not claimed (not authoritative yet)"
+fi
+if grep -qx 702 <<< "$CLAIM_EPICS"; then
+  ko "a retired tombstone was claimed"
+else
+  ok "a retired tombstone is not claimed (names no members)"
+fi
+if grep -qx 703 <<< "$CLAIM_EPICS"; then
+  ko "an unmarked issue was claimed"
+else
+  ok "an unmarked issue is not claimed"
+fi
+if grep -qx 705 <<< "$CLAIM_EPICS"; then
+  ko "a frozen marker with no members was claimed"
+else
+  ok "a frozen marker with an empty member set is not claimed"
+fi
+if grep -qx 704 <<< "$CLAIM_EPICS"; then
+  ko "a pull request row was claimed"
+else
+  ok "a pull request row is skipped even carrying a frozen body"
+fi
 
 echo
 echo "the claim index primes the per-issue cache"
@@ -950,10 +1032,16 @@ epic_cache_clear; build_claim_index >/dev/null 2>&1
 : > "$WORK/gh_calls"
 snapshot_buckets 700 >/dev/null 2>&1
 eq "no issue read was made after priming" "$(grep -c 'issues/700' "$WORK/gh_calls" | tr -d ' ')" 0
-[ "$(grep -c graphql "$WORK/gh_calls")" -gt 0 ] \
-  && ok "and the primed frozen marker drove a member re-read (the markerless network body would not)" \
-  || ko "no member re-read attempted — the markerless network body was used, not the primed one"
-grep -qx 700 <<< "$CLAIM_EPICS" && ok "and the primed frozen Epic is claimed" || ko "the frozen Epic was not claimed"
+if [ "$(grep -c graphql "$WORK/gh_calls")" -gt 0 ]; then
+  ok "and the primed frozen marker drove a member re-read (the markerless network body would not)"
+else
+  ko "no member re-read attempted — the markerless network body was used, not the primed one"
+fi
+if grep -qx 700 <<< "$CLAIM_EPICS"; then
+  ok "and the primed frozen Epic is claimed"
+else
+  ko "the frozen Epic was not claimed"
+fi
 
 echo
 echo "the claim index fails soft"
@@ -1009,11 +1097,10 @@ echo
 echo "per-PR mode consults the claim index before passing standalone"
 # The #325 bug: a member de-labeled mid-landing takes the label-only standalone fast path and greens a
 # head the sweep froze. per_pr_main now asks the claim index first.
-# Stubs for the per-PR leaves. evaluate_epic is controlled so the test pins the branch taken, not the
-# Epic's real state; freeze_post records what was posted.
+# Stubs for the per-PR leaves. FX_EV pins the branch taken rather than the Epic's real state;
+# freeze_post records what was posted.
 freeze_post() { printf '%s\n' "$3|$4" >> "$WORK/posts"; }   # $1=repo $2=sha $3=conclusion $4=summary
 fetch_pr_labels() { [ "$FX_LABELS_FAIL" = true ] && return 1; printf '%s' "${FX_FETCH_LABELS:-[]}"; }
-evaluate_epic() { EV_DECISION="$FX_EV"; EV_MERGED_COUNT=1; EV_CLOSED_COUNT=1; EV_STRAY_COUNT=1; EV_OPEN_COUNT=0; }
 posted() { tail -1 "$WORK/posts" 2>/dev/null; }
 run_per_pr() { : > "$WORK/posts"; epic_cache_clear; per_pr_main >/dev/null 2>&1; }
 
@@ -1032,30 +1119,51 @@ reset_fixtures; setup_per_pr
 run_per_pr
 # Evaluated as a member: the post concerns Epic 700, never the standalone message. FX_EV=frozen, so
 # per_pr_main's frozen branch fired rather than the label-only fast path.
-printf '%s' "$(posted)" | grep -q 'standalone' \
-  && ko "a claimed unlabeled PR was passed standalone (the #325 bug)" \
-  || ok "a claimed unlabeled PR is evaluated as a member, not passed standalone"
-printf '%s' "$(posted)" | grep -q '700' && ok "and the post names the claiming Epic" || ko "the claiming Epic was not evaluated"
+if printf '%s' "$(posted)" | grep -q 'standalone'; then
+  ko "a claimed unlabeled PR was passed standalone (the #325 bug)"
+else
+  ok "a claimed unlabeled PR is evaluated as a member, not passed standalone"
+fi
+if printf '%s' "$(posted)" | grep -q '700'; then
+  ok "and the post names the claiming Epic"
+else
+  ko "the claiming Epic was not evaluated"
+fi
 
 reset_fixtures; setup_per_pr
 FX_ISSUE_LIST='[]'   # nothing claims it
 run_per_pr
-printf '%s' "$(posted)" | grep -q 'standalone' && ok "a genuinely unclaimed PR still passes standalone" || ko "an unclaimed PR was frozen"
-printf '%s' "$(posted)" | grep -q '^success' && ok "with a success conclusion" || ko "an unclaimed PR did not pass"
+if printf '%s' "$(posted)" | grep -q 'standalone'; then
+  ok "a genuinely unclaimed PR still passes standalone"
+else
+  ko "an unclaimed PR was frozen"
+fi
+if printf '%s' "$(posted)" | grep -q '^success'; then
+  ok "with a success conclusion"
+else
+  ko "an unclaimed PR did not pass"
+fi
 
 reset_fixtures; setup_per_pr
 FX_ISSUE_LIST=FAIL   # the claim lookup errors
 run_per_pr
-printf '%s' "$(posted)" | grep -q '^success' && ok "a claim-index failure fails open (success)" || ko "a claim-index error froze the PR instead of failing open"
+if printf '%s' "$(posted)" | grep -q '^success'; then
+  ok "a claim-index failure fails open (success)"
+else
+  ko "a claim-index error froze the PR instead of failing open"
+fi
 
 reset_fixtures; setup_per_pr
 EVENT_LABELS='[{"name":"epic:700"}]'   # a LABELED member still takes the label path
 FX_EV=clear
 run_per_pr
-printf '%s' "$(posted)" | grep -q '^success' && ok "a labeled member still routes through the label path" || ko "the label path regressed"
+if printf '%s' "$(posted)" | grep -q '^success'; then
+  ok "a labeled member still routes through the label path"
+else
+  ko "the label path regressed"
+fi
 unset HEAD_SHA REPO_FULL PR_NUMBER EVENT_PR EVENT_LABELS
-# Restore the real evaluate_epic wrapper for any later assertions.
-evaluate_epic() { epic_cache_clear; uncached_evaluate_epic "$@"; }
+FX_EV="" # back to real evaluations for anything added below
 
 echo
 echo "enumeration is the union of labels and claims"
@@ -1063,6 +1171,7 @@ echo "enumeration is the union of labels and claims"
 # a label-derived Epic both appear once and dropping the union is observable here.
 UNION_LINE=$(awk '/epics=\$\(printf .* "\$label_epics" "\$CLAIM_EPICS"/{sub(/^[[:space:]]*/,""); print; exit}' "$ACTION")
 [ -n "$UNION_LINE" ] || { echo "::error::could not read the enumeration union from $ACTION"; exit 1; }
+# shellcheck disable=SC2034  # UNION_LINE, lifted from the manifest, reads label_epics by name.
 union() { local label_epics="$1" CLAIM_EPICS="$2" epics; eval "$UNION_LINE"; printf '%s' "$epics" | paste -sd, -; }
 eq "a claim-only Epic joins the label set" "$(union "$(printf '810\n')" "$(printf '700\n')")" 700,810
 eq "an Epic reached both ways appears once" "$(union "$(printf '700\n')" "$(printf '700\n')")" 700
@@ -1070,10 +1179,8 @@ eq "a non-numeric token is dropped" "$(union "$(printf '700\nfoo\n')" "")" 700
 
 printf '%d passed, %d failed\n' "$pass" "$fail"
 # A floor on the count as well as on failures: a suite that runs no assertions exits 0 and reads as
-# green. Raise this when assertions are added; never lower it to make a run pass.
-# Failures are reported first, since they are the useful diagnosis. The floor covers assertions that
-# never ran, so it counts executions (pass + fail); counting passes alone turns an ordinary failure
-# into a truncated-suite report.
+# green. It counts executions (pass + fail), so an ordinary failure is not reported as a truncated
+# suite. Raise it when assertions are added; never lower it to make a run pass.
 ran=$((pass + fail))
 if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
