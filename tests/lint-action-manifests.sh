@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Regression tests for the composite-manifest context lint.
+# shellcheck disable=SC2016
+# ^ fixtures carry literal `${{ … }}` GitHub expressions that must not expand.
 #
-# A gate with no negative case is a gate nobody has proven catches anything. Every case below is a
-# manifest the linter runs against for real, and both halves carry weight: the violations have to
-# fail, and the plain-text prose the manifests document caller syntax with has to pass.
+# Regression tests for the composite-manifest context lint: each case is a manifest the linter runs
+# against for real. Both halves matter — the violations must fail, and the plain-text prose that
+# documents caller syntax must pass.
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
