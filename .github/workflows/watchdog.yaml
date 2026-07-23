@@ -205,7 +205,7 @@ jobs:
       matrix:
         finding: ${{ fromJSON(needs.detect.outputs.findings) }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/escalate@v1.24.0
+      - uses: a-novel-kit/workflows/generic-actions/escalate@v1.24.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
