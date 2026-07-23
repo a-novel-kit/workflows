@@ -153,18 +153,22 @@ evaluate_epic() { epic_cache_clear; uncached_evaluate_epic "$@"; }
 #   timeline = de-labeled now, but its timeline records having been labeled (the regression case)
 #   label    = still carries the label
 #   none     = neither — a pull request named by the marker that was never a member
-node() { # repo number state [terminalAt] [prov: timeline|label|none]
+node() { # repo number state [terminalAt] [prov: timeline|label|none] [labelAt]
   # `terminalAt` is when the pull request reached its terminal state: it fills `mergedAt` for a MERGED
   # one and `closedAt` otherwise, which is how GitHub reports them (a merged PR carries both, equal).
   # `closedAt` sits outside the action's search-node shape and the action never reads it; it is there
   # so the stub above can apply a `closed:>=` floor, which the real search applies server-side.
-  jq -cn --arg r "$1" --argjson n "$2" --arg s "$3" --arg m "${4:-}" --arg p "${5:-timeline}" --arg e "epic:900" \
+  # `labelAt` is the LabeledEvent's createdAt, defaulting to AGO5 — recent, so a timeline-proven member
+  # reads as labeled during the current wave under the boundary floor. A previous-wave member is given
+  # an older labelAt explicitly.
+  jq -cn --arg r "$1" --argjson n "$2" --arg s "$3" --arg m "${4:-}" --arg p "${5:-timeline}" \
+    --arg la "${6:-$AGO5}" --arg e "epic:900" \
     '{number:$n, headRefOid:("sha"+($n|tostring)),
       mergedAt:(if $m=="" or $s!="MERGED" then null else $m end),
       closedAt:(if $m=="" or $s=="OPEN" then null else $m end),
       baseRefName:"master", isDraft:false, state:$s, repository:{nameWithOwner:$r},
       labels:{nodes:(if $p=="label" then [{name:$e}] else [] end)},
-      timelineItems:{nodes:(if $p=="timeline" then [{label:{name:$e}}] else [] end)}}'
+      timelineItems:{nodes:(if $p=="timeline" then [{label:{name:$e}, createdAt:$la}] else [] end)}}'
 }
 rehydrate() { # the aliased re-read response, one alias per member
   jq -s -c '{data: ([.[] | {pullRequest: .}] | to_entries
@@ -325,6 +329,53 @@ check "a de-labeled member is corroborated by its timeline" frozen live+snapshot
 FX_REST=$(printf '%s' "$FX_REST" | jq -c '. + {"a-novel-kit/repo-b-renamed#2":"closed false"}')
 FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b-renamed 2 CLOSED)" "$C")
 check "a member whose repository was renamed still resolves" frozen live+snapshot 1/1/1
+
+echo
+echo "timeline corroboration is scoped to the current wave"
+# The #329 fix. A merged pull request keeps its label and its LabeledEvent for good, so an un-scoped
+# timeline proves only "ever carried epic:<N>". A member whose label event predates the wave boundary
+# belongs to a retired wave and must not corroborate for this one; a timeline event at or after the
+# boundary is this wave's evidence.
+reset_fixtures
+FX_BODY=$(marker frozen "$BC" "$AGO20")
+# repo-b#2: de-labeled, its only LabeledEvent at AGO40 — before the AGO20 boundary (a previous wave).
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 CLOSED "$AGO40" timeline "$AGO40")" "$C")
+check "a member labeled only before the boundary does not corroborate" error
+reset_fixtures
+FX_BODY=$(marker frozen "$BC" "$AGO20")
+# Same member, LabeledEvent at AGO5 — after the boundary, this wave's evidence. It corroborates
+# (membership resolves to live+snapshot, not the error a failed corroboration leaves); the decision is
+# clear only because the sole live-merged member sits before the boundary and is scoped out.
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 CLOSED "$AGO5" timeline "$AGO5")" "$C")
+check "a member labeled after the boundary corroborates" clear live+snapshot 0/1/1
+reset_fixtures
+FX_BODY=$(marker frozen "$BC" "$AGO20")
+# A present label is membership now, not historical evidence, so the boundary never floors it out even
+# with an old label event.
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 CLOSED "$AGO40" label "$AGO40")" "$C")
+check "a member still carrying the label corroborates despite the boundary" clear live+snapshot 0/1/1
+reset_fixtures
+FX_BODY=$(marker frozen "$BC" "$AGO20")
+# A label event exactly at the boundary belongs to the new wave: the floor is inclusive (>=).
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 CLOSED "$AGO20" timeline "$AGO20")" "$C")
+check "a label event exactly at the boundary corroborates" clear live+snapshot 0/1/1
+reset_fixtures
+# With no boundary — the Epic's first wave — the whole history is one wave and an old event still counts.
+FX_BODY=$(marker frozen "$BC")
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 CLOSED "$AGO40" timeline "$AGO40")" "$C")
+check "with no boundary an old timeline event still corroborates" frozen live+snapshot 1/1/1
+reset_fixtures
+# The scoping is only real if the query fetches the event time. Assert the re-read document asks for it,
+# since the stub supplies createdAt regardless of what the query requested.
+FX_BODY=$(marker frozen "$BC" "$AGO20")
+FX_REHYDRATE=$(rehydrate "$B" "$C")
+: > "$WORK/gh_calls"
+evaluate_epic 900 >/dev/null 2>&1
+: > "$GITHUB_STEP_SUMMARY"
+grep -q 'createdAt' "$WORK/gh_calls" \
+  && ok "the member re-read fetches each LabeledEvent's createdAt" \
+  || ko "the re-read never asks for createdAt, so the boundary floor has no data to act on"
+reset_fixtures
 reset_fixtures
 
 echo
@@ -534,7 +585,10 @@ echo "the boundary bounds HISTORY, never the frozen set"
 # member the snapshot is kept for.
 FX_LIVE_MERGED='[]'
 FX_BODY=$(marker frozen "$BC" "$AGO20")
-FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 MERGED "$AGO40")" "$C")
+# The member still carries the label, so it corroborates by its present label rather than a timeline
+# event — a merged pull request keeps its labels. Its old mergedAt makes a wrongly time-filtered frozen
+# set observable: only the frozen bucket, never scoped, still counts it.
+FX_REHYDRATE=$(rehydrate "$(node a-novel-kit/repo-b 2 MERGED "$AGO40" label)" "$C")
 check "a frozen member that merged before the boundary still counts" clear live+snapshot 1/0/1
 reset_fixtures
 
@@ -1025,7 +1079,7 @@ if [ "$fail" -gt 0 ]; then
   echo "::error::$fail assertion(s) failed"
   exit 1
 fi
-if [ "$ran" -lt 168 ]; then
-  echo "::error::only $ran assertion(s) ran (expected at least 168) — the suite did not execute fully"
+if [ "$ran" -lt 174 ]; then
+  echo "::error::only $ran assertion(s) ran (expected at least 174) — the suite did not execute fully"
   exit 1
 fi

@@ -729,7 +729,7 @@ runs:
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
               + "{pullRequest(number:\(.value.number|floor)){number headRefOid mergedAt baseRefName isDraft state repository{nameWithOwner}"
               + " labels(first:100){nodes{name}}"
-              + " timelineItems(last:250, itemTypes:[LABELED_EVENT]){nodes{... on LabeledEvent{label{name}}}}}}"
+              + " timelineItems(last:250, itemTypes:[LABELED_EVENT]){nodes{... on LabeledEvent{label{name} createdAt}}}}}"
             ) | join("\n")')
           rh=""
           for attempt in 1 2 3; do
@@ -763,14 +763,26 @@ runs:
           # Dropping the failing member alone leaves an attacker-chosen subset, and the live floor is the
           # blind spot the snapshot exists to cover; a `clear` from either posts success, lifting a
           # standing freeze and letting the partial landing finish.
+          #
+          # The timeline evidence is scoped to THIS wave. A merged pull request keeps its label and its
+          # LabeledEvent for good, so an un-scoped timeline proves only "ever carried `epic:<N>`" — a pull
+          # request from a completed earlier wave under the same Epic would corroborate forever and re-enter
+          # this wave's membership. The label event must therefore land at or after the wave boundary the
+          # marker carries (SNAP_SINCE). A still-present label is not scoped: it is membership now, not
+          # historical evidence of it. With no boundary — the Epic's first wave — the whole history is one
+          # wave and every event counts, which is the pre-boundary behavior. A member labeled and unlabeled
+          # inside this wave still corroborates: bounding to who may label is a permission read this does
+          # not make, since planning-repo write is the trust boundary and already lets that author name any
+          # member directly.
           local unverified
-          unverified=$(printf '%s' "$rh" | jq -r --arg lbl "epic:$1" '
+          unverified=$(printf '%s' "$rh" | jq -r --arg lbl "epic:$1" --arg since "${SNAP_SINCE:-}" '
             [ (.data // {}) | to_entries[] | .value.pullRequest | select(. != null)
               | select((([(.labels.nodes // [])[].name]
-                  + [(.timelineItems.nodes // [])[] | .label.name // empty]) | index($lbl)) | not)
+                  + [(.timelineItems.nodes // [])[]
+                       | select($since == "" or (.createdAt // "") >= $since) | .label.name // empty]) | index($lbl)) | not)
               | "\(.repository.nameWithOwner)#\(.number)" ] | join(", ")' 2>/dev/null || printf 'PARSE_FAILURE')
           if [ -n "$unverified" ]; then
-            echo "::error::epic #$1: the activation snapshot names pull request(s) that never carried the \`epic:$1\` label (${unverified}) — refusing to decide anything for this Epic until it is corrected. Check who edited ${ORG}/${PLANNING_REPO}#$1."
+            echo "::error::epic #$1: the activation snapshot names pull request(s) not labeled \`epic:$1\` during this wave (${unverified}) — refusing to decide anything for this Epic until it is corrected. Check who edited ${ORG}/${PLANNING_REPO}#$1."
             return 1
           fi
 
