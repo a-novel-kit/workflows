@@ -9,9 +9,10 @@ inputs:
     required: false
     description: >
       Space- or newline-separated globs of Dockerfiles to lint. Empty (the default) lints every
-      tracked file named `Dockerfile`, `Dockerfile.<x>` or `<x>.Dockerfile` (case-insensitive),
-      which excludes vendored and gitignored trees. The caller must have checked the repo out for
-      the default to see it.
+      tracked file named `Dockerfile`, `<x>.Dockerfile` (the fleet's convention, either casing)
+      or `Dockerfile.<x>` — the last capital-D only, because a lowercase `dockerfile.<x>` is far
+      more likely to be source (`dockerfile.go`) than a Dockerfile variant. Discovery excludes
+      vendored and gitignored trees. The caller must have checked the repo out for it to see them.
   advisory:
     required: false
     default: "false"
@@ -44,8 +45,11 @@ runs:
           # shellcheck disable=SC2206
           files=($PATHS)
         else
-          # Match `Dockerfile`, `Dockerfile.<x>` and the fleet's `<x>.Dockerfile` convention.
-          mapfile -t files < <(git ls-files | grep -iE '\.dockerfile$|(^|/)dockerfile(\.[^/]+)?$')
+          # Match a bare `Dockerfile` and the fleet's `<x>.Dockerfile` in either casing, but the
+          # `Dockerfile.<x>` variant form only with a capital D: a case-insensitive dotted match
+          # also claims ordinary source, and `dockerfile.go` is not a Dockerfile.
+          mapfile -t files < <(git ls-files \
+            | grep -E '(^|/)[Dd]ockerfile$|\.[Dd]ockerfile$|(^|/)Dockerfile\.[^/]+$')
         fi
         if [ ${#files[@]} -eq 0 ]; then
           echo "No Dockerfiles to lint."
