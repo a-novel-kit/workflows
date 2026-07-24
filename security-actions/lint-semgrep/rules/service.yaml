@@ -80,24 +80,17 @@ rules:
           func $M(...) context.Context {
             ...
           }
-      # A function handed a trace.Span does not own one — its caller opened the
-      # span and passes it down, which is the point of the parameter.
-      - pattern-not: |
-          func $M(..., $S trace.Span, ...) {
-            ...
-          }
-      - pattern-not: |
-          func $M(..., $S trace.Span, ...) $R {
-            ...
-          }
-      - pattern-not: |
-          func $M(..., $S trace.Span, ...) ($R1, $R2) {
-            ...
-          }
-      - pattern-not: |
-          func ($RC $T) $M(..., $S trace.Span, ...) ($R1, $R2) {
-            ...
-          }
+      # An unexported method is an implementation detail of the exported
+      # operation that calls it, and that operation already opened the span. A
+      # span per private branch fragments one operation into several.
+      #
+      # Note this does NOT bless taking a `span trace.Span` parameter: the span
+      # is already in ctx and `trace.SpanFromContext(ctx)` retrieves it, so a
+      # second parameter is duplicate plumbing. The exemption is the helper's
+      # privacy, not how it got the span.
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^[A-Z]
       # A background loop is not a request operation: one span would cover the
       # process lifetime. It takes only a context and returns nothing.
       - pattern-not: |
@@ -309,7 +302,25 @@ rules:
                 $R.$FIELD = $VAL
                 ...
               }
-      - pattern-not-inside: |
-          $R.$MU.Lock()
-          ...
-          $R.$MU.Unlock()
+      # A method that takes a lock is synchronising deliberately, which is the
+      # premise this rule denies. pattern-not-inside cannot express "the
+      # assignment sits between Lock and Unlock" because the match is the whole
+      # function, so key on the method locking at all.
+      - pattern-not: |
+          func ($R $T) $M(...) {
+            ...
+            $R.$MU.Lock()
+            ...
+          }
+      - pattern-not: |
+          func ($R $T) $M(...) $RET {
+            ...
+            $R.$MU.Lock()
+            ...
+          }
+      - pattern-not: |
+          func ($R $T) $M(...) ($RET1, $RET2) {
+            ...
+            $R.$MU.Lock()
+            ...
+          }
