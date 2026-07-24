@@ -1,33 +1,16 @@
-# Conventions specific to the clean-architecture SERVICES (`cmd/` +
-# `internal/{config,lib,dao,core,handlers,models}`).
+# Structural conventions for the clean-architecture services: a call that must be
+# present, a pairing that must hold.
 #
-# There is no companion generic ruleset. Every rule that survived the audit turned
-# out to be service-shaped: tracing is a service concern (a library repo emits no
-# spans — golib only provides the helpers), and the conventions that do hold
-# everywhere are already covered by golangci-lint. Libraries get the linters and
-# nothing here. If a genuinely repo-shape-agnostic rule ever appears, it earns its
-# own file then, rather than an empty one kept warm now.
+# Not duplicated here — golangci-lint owns them: span lifecycle and error
+# reporting (spancheck), layer import direction (depguard), context in a struct
+# (containedctx).
 #
-# What is deliberately NOT here, because golangci-lint already owns it:
-#   - `defer span.End()`          -> spancheck (on by default)
-#   - error recorded on the span  -> spancheck `record-error` + `set-status`
-#   - layer import direction      -> depguard
-#   - context stored in a struct  -> containedctx
-# Adding a second checker for any of those buys nothing and doubles the places a
-# false positive must be silenced.
-#
-# Two Semgrep limits shape what can live here:
-#   - Go patterns must enumerate return arity; there is no wildcard for it, so
-#     every signature match is repeated for no-return, one return, two returns.
-#   - Test files are skipped by Semgrep's built-in .semgrepignore, so NO rule can
-#     target *_test.go without replacing that default wholesale. Test conventions
-#     (sub-test naming, mock.Anything for ctx, AssertExpectations) therefore stay
-#     with review and the write-go-tests skill.
-
+# Two Semgrep limits to know before adding a rule: Go has no return-arity
+# wildcard, so signature matches repeat per arity; and *_test.go is skipped by
+# its built-in ignore list, so no rule can target tests.
 rules:
-  # Every layer that carries a context is traced: core, dao, handlers and lib all
-  # open spans today. An unspanned method folds its latency into the caller and
-  # surfaces errors with no operation name.
+  # An unspanned method folds its latency into the caller and surfaces errors
+  # with no operation name.
   - id: agora-must-open-span
     languages: [go]
     severity: ERROR
