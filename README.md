@@ -105,7 +105,8 @@ off-repo can stall them, which is the property a required check needs.
 Each takes `advisory: "true"` to report without failing, for a repo adopting the check over an
 existing backlog.
 
-`version` is **required** on all three. The pin lives in the calling repo so Renovate sees it there
+`version` is **required** on all three, and on `generic-actions/lint-shell` and
+`generic-actions/lint-dockerfile`. The pin lives in the calling repo so Renovate sees it there
 and bumps each repo on its own cadence, instead of every tool upgrade waiting on a workflows
 release. Annotate it so Renovate can resolve the datasource:
 

@@ -20,11 +20,11 @@ inputs:
       When "true", findings go to the run summary and the log but the check passes — for a repo
       adopting the lint over an existing backlog. When "false" (the default), any finding fails.
   version:
-    required: false
-    default: "2.12.0"
+    required: true
     description: >
-      The hadolint release to pin — a `hadolint/hadolint` git tag. The binary is fetched from that
-      release; it is not preinstalled on the runner as shellcheck is.
+      hadolint release tag, with or without the leading v. Pinned by the caller so Renovate bumps
+      it per repo. Annotate it:
+      `# renovate: datasource=github-releases depName=hadolint/hadolint`.
 
 runs:
   using: composite
