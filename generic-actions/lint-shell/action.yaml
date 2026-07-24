@@ -41,9 +41,21 @@ runs:
         # archives drop it. Normalise so either spelling of the input works.
         v="v${SHELLCHECK_VERSION#v}"
         tmp=$(mktemp -d)
-        curl -sSfL --retry 3 --retry-delay 2 \
+        # Downloaded to a file, then extracted, rather than piped into tar — and the retry flag
+        # alone fixes neither half. `--retry-all-errors` is what retries a transport-level reset
+        # (curl exit 35); plain `--retry` covers only transient HTTP statuses and timeouts, so the
+        # reset failed the job on the first attempt. And retrying *into a pipe* is unsound anyway:
+        # curl restarts the transfer while tar has already consumed the partial bytes, leaving its
+        # stream corrupt. Both were observed on one run — `curl: (35) Recv failure` followed by
+        # `xz: (stdin): File format not recognized` — reddening a PR that only bumped prettier.
+        # generic-actions/lint-dockerfile already downloads this way for the same reason.
+        if ! curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors \
           "https://github.com/koalaman/shellcheck/releases/download/${v}/shellcheck-${v}.linux.x86_64.tar.xz" \
-          | tar -xJ -C "$tmp" --strip-components=1
+          -o "$tmp/shellcheck.tar.xz"; then
+          echo "::error::failed to download shellcheck ${v} after 3 retries"
+          exit 1
+        fi
+        tar -xJ -C "$tmp" --strip-components=1 -f "$tmp/shellcheck.tar.xz"
         install -m 0755 "$tmp/shellcheck" /usr/local/bin/shellcheck
         rm -rf "$tmp"
         shellcheck --version
