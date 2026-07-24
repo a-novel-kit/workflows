@@ -1,0 +1,85 @@
+name: lint semgrep
+description: >
+  Enforce the Agora structural conventions golangci-lint cannot express — a call that must be
+  present, a pairing that must hold. The ruleset ships with this action, so a consuming repo
+  carries no semgrep config of its own; the version it runs is the workflows tag it pins.
+  Rules are read from disk only, so the scan makes no network call and cannot be stalled by a
+  third-party service — the failure that took GitGuardian off the merge path.
+
+inputs:
+  ruleset:
+    required: false
+    default: "service"
+    description: >
+      Which bundled ruleset to run. "service" is the clean-architecture set for repos shaped as
+      cmd/ + internal/{config,lib,dao,core,handlers}. Libraries pass "none": their conventions are
+      covered by golangci-lint, and every rule here assumes the service layout.
+  advisory:
+    required: false
+    default: "false"
+    description: >
+      When "true", findings go to the run summary and the log but the check passes — for a repo
+      adopting the rules over an existing backlog. When "false" (the default), any finding fails.
+  version:
+    required: false
+    default: "1.171.0"
+    description: >
+      The semgrep image tag to pin. Run as a container step rather than a `container:` job,
+      because a job container makes GitHub inject its Node runtime into the image and
+      actions/checkout cannot start in one that lacks libstdc++.
+
+runs:
+  using: composite
+  steps:
+    - name: semgrep
+      shell: bash
+      env:
+        RULESET: ${{ inputs.ruleset }}
+        ADVISORY: ${{ inputs.advisory }}
+        SEMGREP_VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        if [ "$RULESET" = "none" ]; then
+          echo "ruleset=none — nothing to enforce for this repo kind."
+          exit 0
+        fi
+
+        rules="$ACTION_PATH/rules/$RULESET.yaml"
+        if [ ! -f "$rules" ]; then
+          echo "::error::unknown ruleset '$RULESET'; expected one of: none, $(cd "$ACTION_PATH/rules" && ls *.yaml | sed 's/\.yaml$//' | tr '\n' ' ')"
+          exit 1
+        fi
+
+        # errexit is disabled around the scan deliberately: semgrep exits non-zero
+        # on findings and this step decides gating from that code itself.
+        set +e
+        docker run --rm \
+          -v "$PWD:/src:ro" -v "$ACTION_PATH/rules:/rules:ro" \
+          "semgrep/semgrep:$SEMGREP_VERSION" \
+          semgrep --config="/rules/$RULESET.yaml" --metrics=off --error /src \
+          | tee /tmp/semgrep.out
+        code=${PIPESTATUS[0]}
+        set -e
+
+        if [ "$code" = "0" ]; then
+          echo "semgrep: clean" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        {
+          echo "### semgrep findings"
+          echo ""
+          echo '```'
+          cat /tmp/semgrep.out
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$ADVISORY" = "true" ]; then
+          echo "::warning::semgrep reported findings; advisory mode, not failing the check."
+          exit 0
+        fi
+
+        echo "::error::semgrep reported findings."
+        exit "$code"
