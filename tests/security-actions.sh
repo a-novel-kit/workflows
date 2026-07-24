@@ -100,15 +100,13 @@ check "gitleaks: findings fail when gating" 1 $?
 run_step "$TMP/secrets.sh" "CONFIG=" "ADVISORY=true" "ACTION_PATH=$SECRETS_DIR"
 check "gitleaks: findings pass in advisory mode" 0 $?
 
-# A repo config that does not extend the baseline replaces it silently; the action must say so.
+# A repo config replaces the baseline; gitleaks cannot layer two configs, so the
+# action must not leave a stale .gitleaks-base.toml in the workspace pretending otherwise.
 stub gitleaks 0
 printf '[extend]\nuseDefault = true\n' >"$TMP/work/own.toml"
 run_step "$TMP/secrets.sh" "CONFIG=own.toml" "ADVISORY=false" "ACTION_PATH=$SECRETS_DIR"
-check "gitleaks: config not extending the baseline warns" 1 "$(grep -c '::warning::.*REPLACES' "$TMP/out")"
-
-printf '[extend]\npath = ".gitleaks-base.toml"\n' >"$TMP/work/ext.toml"
-run_step "$TMP/secrets.sh" "CONFIG=ext.toml" "ADVISORY=false" "ACTION_PATH=$SECRETS_DIR"
-check "gitleaks: config extending the baseline is quiet" 0 "$(grep -c '::warning::.*REPLACES' "$TMP/out")"
+check "gitleaks: a repo config is used as-is" 0 $?
+check "gitleaks: no phantom base file is written" 0 "$(ls "$TMP/work/.gitleaks-base.toml" 2>/dev/null | wc -l)"
 
 # --- lint-workflows ----------------------------------------------------------
 ZIZMOR_ACTION="$ROOT/security-actions/lint-workflows/action.yaml"
