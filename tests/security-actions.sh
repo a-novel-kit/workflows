@@ -106,7 +106,7 @@ stub gitleaks 0
 printf '[extend]\nuseDefault = true\n' >"$TMP/work/own.toml"
 run_step "$TMP/secrets.sh" "CONFIG=own.toml" "ADVISORY=false" "ACTION_PATH=$SECRETS_DIR"
 check "gitleaks: a repo config is used as-is" 0 $?
-check "gitleaks: no phantom base file is written" 0 "$(ls "$TMP/work/.gitleaks-base.toml" 2>/dev/null | wc -l)"
+check "gitleaks: no phantom base file is written" 0 "$([ -e "$TMP/work/.gitleaks-base.toml" ] && echo 1 || echo 0)"
 
 # --- lint-workflows ----------------------------------------------------------
 ZIZMOR_ACTION="$ROOT/security-actions/lint-workflows/action.yaml"
