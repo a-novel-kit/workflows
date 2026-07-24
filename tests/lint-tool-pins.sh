@@ -27,7 +27,7 @@ print('required' if v.get('required') and 'default' not in v else 'optional')
   check "${a#*/}: version required, no default" required "$got"
 done
 
-# shellcheck must not fall through to whatever the runner ships.
+# The action must install its own shellcheck, not fall through to the runner's.
 installs=$(grep -c 'koalaman/shellcheck/releases/download' "$ROOT/generic-actions/lint-shell/action.yaml")
 check "lint-shell: installs a pinned shellcheck" 1 "$installs"
 
