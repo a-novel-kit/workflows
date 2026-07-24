@@ -121,6 +121,10 @@ it — `scan-secrets` writes the baseline to `.gitleaks-base.toml` in the worksp
 `.gitleaks.toml` opens with `[extend] path = ".gitleaks-base.toml"`. Allowlists from both layers
 apply; a config that omits the block replaces the baseline and the action warns.
 
+Call the three as separate jobs, not through one reusable workflow. A reusable-workflow caller's
+checks are named `<caller-job>/<inner-job>`, but required-check discovery reads the caller's job id
+verbatim — so the required context would be one GitHub never posts, and the PR could never merge.
+
 ### `publish-actions`
 
 | Action                | Purpose                                                                                        |
