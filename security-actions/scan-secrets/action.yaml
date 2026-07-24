@@ -16,10 +16,10 @@ inputs:
     description: >
       Repo-local gitleaks config, relative to the workspace. Empty uses the shipped baseline.
 
-      To ADD to the baseline rather than replace it, open the file with
-      `[extend] path = ".gitleaks-base.toml"` — the action writes the baseline there before
-      scanning, because its own path under _actions/<tag>/ is not knowable when the repo file is
-      authored. Omitting the block replaces the baseline, and the action warns.
+      A repo config REPLACES the baseline rather than adding to it. gitleaks rejects
+      `extend.path` together with `extend.useDefault`, and an extending config's allowlists
+      replace the base's rather than merging — so a repo needing one entry restates the rest.
+      Copy the shipped gitleaks.toml as the starting point.
   advisory:
     required: false
     default: "false"
@@ -58,20 +58,12 @@ runs:
       run: |
         set -euo pipefail
 
-        # Materialise the baseline where a repo config can name it. gitleaks
-        # resolves `[extend] path` against its own working directory, which is
-        # the workspace here — not against the config file's location.
-        cp "$ACTION_PATH/gitleaks.toml" .gitleaks-base.toml
-        trap 'rm -f .gitleaks-base.toml' EXIT
-
         config="${CONFIG:-}"
         if [ -z "$config" ]; then
-          config=".gitleaks-base.toml"
+          config="$ACTION_PATH/gitleaks.toml"
         elif [ ! -f "$config" ]; then
           echo "::error::config '$config' not found in the workspace."
           exit 1
-        elif ! grep -q 'gitleaks-base\.toml' "$config"; then
-          echo "::warning::$config does not extend .gitleaks-base.toml, so it REPLACES the shared baseline. Add [extend] path = \".gitleaks-base.toml\" unless that is deliberate."
         fi
 
         # errexit is disabled around the scan deliberately: gitleaks exits

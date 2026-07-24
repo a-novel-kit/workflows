@@ -15,22 +15,25 @@ rules:
     languages: [go]
     severity: ERROR
     message: >-
-      $M takes a context but never opens an otel span, so its work is invisible
-      in traces. Open one with
+      $M takes a context but never opens an otel span. Every function in the
+      internal layers that receives an explicit context is a step in the trace;
+      one that skips the span makes its work invisible and folds its latency
+      into the caller. Open one with
       `ctx, span := otel.Tracer().Start(ctx, "<layer>.<Operation>")`.
     paths:
       # internal/ only: pkg/go is a generated client and its mocks are not ours
       # to instrument.
       include:
-        - "internal/"
+        - "**/internal/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
         - "**/protogen/"
     patterns:
-      # Both forms matter: core/dao/handlers expose methods, while internal/lib
-      # exposes plain functions (EncryptMasterKey, MasterKeyContext). Matching
-      # only the receiver form left the whole lib layer unchecked.
+      # Taking a context as the first parameter IS the criterion. There are no
+      # exemptions: not unexported helpers, not delegators, not context
+      # wrappers. A function that should not be traced is one that does not
+      # take a context, and that is the only way to opt out.
       - pattern-either:
           - pattern: "func ($R $T) $M(ctx context.Context, ...) { ... }"
           - pattern: "func ($R $T) $M(ctx context.Context, ...) $RET { ... }"
@@ -74,32 +77,6 @@ rules:
             otel.Tracer().Start(...)
             ...
           }
-      # A context.WithValue wrapper returns the context it derived and cannot
-      # fail; a span on it is an empty frame on every request.
-      - pattern-not: |
-          func $M(...) context.Context {
-            ...
-          }
-      # A pure delegator forwards to a spanned callee and does no work of its
-      # own; its span would be an empty frame in every trace.
-      - pattern-not: |
-          func ($R $T) $M(ctx context.Context, ...) ($RET1, $RET2) {
-            return $RECV.$INNER(ctx, ...)
-          }
-      - pattern-not: |
-          func ($R $T) $M(ctx context.Context, ...) $RET {
-            return $RECV.$INNER(ctx, ...)
-          }
-      # Same delegation, plain-function form: internal/lib and handler
-      # middlewares wrap a spanned callee without a receiver.
-      - pattern-not: |
-          func $M(ctx context.Context, ...) ($RET1, $RET2) {
-            return $INNER(ctx, ...)
-          }
-      - pattern-not: |
-          func $M(ctx context.Context, ...) $RET {
-            return $INNER(ctx, ...)
-          }
 
   # write-go: "Contexts flow downward only — caller to callee. Never return one."
   # Scoped to the layers that carry request flow. internal/lib is exempt by
@@ -113,9 +90,9 @@ rules:
       downward only — take one as the first parameter instead of handing one up.
     paths:
       include:
-        - "internal/core/"
-        - "internal/dao/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/dao/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -148,8 +125,8 @@ rules:
       one method, named Exec.
     paths:
       include:
-        - "internal/core/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -195,8 +172,8 @@ rules:
       *<Entity><Operation>Request so the signature can gain a field later.
     paths:
       include:
-        - "internal/core/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -244,6 +221,8 @@ rules:
   #
   # Constructors are plain functions, not methods, so matching the receiver form
   # targets exactly the mutation this forbids.
+  # NOTE: exempts a field written under a mutex — the rule's premise is that
+  # these types carry no synchronisation, which a sync.Mutex field disproves.
   - id: agora-no-receiver-mutation
     languages: [go]
     severity: ERROR
@@ -252,9 +231,9 @@ rules:
       concurrent requests unsynchronised; every field must be set by New$T only.
     paths:
       include:
-        - "internal/core/"
-        - "internal/dao/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/dao/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -279,3 +258,25 @@ rules:
                 $R.$FIELD = $VAL
                 ...
               }
+      # A method that takes a lock is synchronising deliberately, which is the
+      # premise this rule denies. pattern-not-inside cannot express "the
+      # assignment sits between Lock and Unlock" because the match is the whole
+      # function, so key on the method locking at all.
+      - pattern-not: |
+          func ($R $T) $M(...) {
+            ...
+            $R.$MU.Lock()
+            ...
+          }
+      - pattern-not: |
+          func ($R $T) $M(...) $RET {
+            ...
+            $R.$MU.Lock()
+            ...
+          }
+      - pattern-not: |
+          func ($R $T) $M(...) ($RET1, $RET2) {
+            ...
+            $R.$MU.Lock()
+            ...
+          }
