@@ -70,7 +70,8 @@ runs:
               "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
               "matchStrings": [
                 "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+version:\\s*[\"']?(?<currentValue>[^\"'\\s]+)"
-              ]
+              ],
+              "extractVersionTemplate": "^v?(?<version>.+)$"
             }
           ]
 

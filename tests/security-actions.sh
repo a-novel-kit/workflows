@@ -130,6 +130,20 @@ check "zizmor: findings fail when gating" 1 $?
 run_step "$TMP/zizmor.sh" "CONFIG=" "ADVISORY=true" "ZIZMOR_VERSION=x" "ACTION_PATH=$ZIZMOR_DIR"
 check "zizmor: findings pass in advisory mode" 0 $?
 
+# --- gitleaks version prefix -------------------------------------------------
+# gitleaks tags releases v-prefixed but names archives without it, and it is the only one of the
+# three whose datasource returns the v. A bump that keeps it must still resolve.
+extract "$SECRETS_ACTION" "install gitleaks" >"$TMP/install.sh"
+for spelling in 8.30.1 v8.30.1; do
+  got=$(GITLEAKS_VERSION="$spelling" bash -c '
+    v="${GITLEAKS_VERSION#v}"
+    echo "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz"')
+  want="https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
+  check "gitleaks: version '$spelling' builds the release URL" "$want" "$got"
+done
+# and the shipped script must actually strip it, not just the test's copy
+check "gitleaks: install step strips a leading v" 1 "$(grep -c 'GITLEAKS_VERSION#v' "$TMP/install.sh")"
+
 # --- version is required on all three ----------------------------------------
 # A default would pin the tool inside the action, where Renovate in the consuming repo cannot see
 # it, and every upgrade would wait on a workflows release.
