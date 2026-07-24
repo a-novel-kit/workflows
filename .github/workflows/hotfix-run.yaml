@@ -199,6 +199,8 @@ jobs:
         id: cut
         uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.25.1
         with:
+          # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
+          cli_version: "1.7.5"
           ref: ${{ steps.prepare.outputs.ephemeral }}
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}

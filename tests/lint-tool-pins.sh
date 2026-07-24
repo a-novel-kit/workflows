@@ -45,6 +45,22 @@ done
 check "lint-shell strips/adds the v" 1 "$(grep -c 'SHELLCHECK_VERSION#v' "$ROOT/generic-actions/lint-shell/action.yaml")"
 check "lint-dockerfile strips the v" 1 "$(grep -c 'HADOLINT_VERSION#v' "$ROOT/generic-actions/lint-dockerfile/action.yaml")"
 
+# No floating ref may reach a release. `@latest` in the release path meant a tag could be cut by
+# CLI code nobody reviewed against it, and two repos releasing minutes apart could differ.
+# Matches a floating ref in USE — after `uses:` or an install verb — not a prose mention of one.
+floating=$(grep -rnE '(uses:|go install|pipx install|cargo install|npm i(nstall)? )[^#]*@(latest|main|master)\b' \
+  "$ROOT"/*-actions/*/action.yaml 2>/dev/null | grep -vc '^[^:]*:[0-9]*: *#')
+check "no floating @latest/@main/@master in any action" 0 "$floating"
+
+for a in publish-actions/release-core publish-actions/release-core-hotfix; do
+  got=$(python3 -c "
+import yaml, sys
+v = (yaml.safe_load(open(sys.argv[1]))['inputs'] or {}).get('cli_version', {})
+print('required' if v.get('required') and 'default' not in v else 'missing-or-optional')
+" "$ROOT/$a/action.yaml")
+  check "${a#*/}: cli_version required, no default" required "$got"
+done
+
 # A pin nothing bumps is a pin that rots: the annotation is what the custom manager reads.
 missing=0
 while IFS= read -r f; do
