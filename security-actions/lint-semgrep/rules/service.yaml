@@ -1,0 +1,281 @@
+# Structural conventions for the clean-architecture services: a call that must be
+# present, a pairing that must hold.
+#
+# Not duplicated here — golangci-lint owns them: span lifecycle and error
+# reporting (spancheck), layer import direction (depguard), context in a struct
+# (containedctx).
+#
+# Two Semgrep limits to know before adding a rule: Go has no return-arity
+# wildcard, so signature matches repeat per arity; and *_test.go is skipped by
+# its built-in ignore list, so no rule can target tests.
+rules:
+  # An unspanned method folds its latency into the caller and surfaces errors
+  # with no operation name.
+  - id: agora-must-open-span
+    languages: [go]
+    severity: ERROR
+    message: >-
+      $M takes a context but never opens an otel span, so its work is invisible
+      in traces. Open one with
+      `ctx, span := otel.Tracer().Start(ctx, "<layer>.<Operation>")`.
+    paths:
+      # internal/ only: pkg/go is a generated client and its mocks are not ours
+      # to instrument.
+      include:
+        - "internal/"
+      exclude:
+        - "*_test.go"
+        - "**/mocks/"
+        - "**/protogen/"
+    patterns:
+      # Both forms matter: core/dao/handlers expose methods, while internal/lib
+      # exposes plain functions (EncryptMasterKey, MasterKeyContext). Matching
+      # only the receiver form left the whole lib layer unchecked.
+      - pattern-either:
+          - pattern: "func ($R $T) $M(ctx context.Context, ...) { ... }"
+          - pattern: "func ($R $T) $M(ctx context.Context, ...) $RET { ... }"
+          - pattern: "func ($R $T) $M(ctx context.Context, ...) ($RET1, $RET2) { ... }"
+          - pattern: "func $M(ctx context.Context, ...) { ... }"
+          - pattern: "func $M(ctx context.Context, ...) $RET { ... }"
+          - pattern: "func $M(ctx context.Context, ...) ($RET1, $RET2) { ... }"
+      - pattern-not: |
+          func ($R $T) $M(ctx context.Context, ...) {
+            ...
+            otel.Tracer().Start(...)
+            ...
+          }
+      - pattern-not: |
+          func ($R $T) $M(ctx context.Context, ...) $RET {
+            ...
+            otel.Tracer().Start(...)
+            ...
+          }
+      - pattern-not: |
+          func ($R $T) $M(ctx context.Context, ...) ($RET1, $RET2) {
+            ...
+            otel.Tracer().Start(...)
+            ...
+          }
+      - pattern-not: |
+          func $M(ctx context.Context, ...) {
+            ...
+            otel.Tracer().Start(...)
+            ...
+          }
+      - pattern-not: |
+          func $M(ctx context.Context, ...) $RET {
+            ...
+            otel.Tracer().Start(...)
+            ...
+          }
+      - pattern-not: |
+          func $M(ctx context.Context, ...) ($RET1, $RET2) {
+            ...
+            otel.Tracer().Start(...)
+            ...
+          }
+      # A context.WithValue wrapper returns the context it derived and cannot
+      # fail; a span on it is an empty frame on every request.
+      - pattern-not: |
+          func $M(...) context.Context {
+            ...
+          }
+      # A pure delegator forwards to a spanned callee and does no work of its
+      # own; its span would be an empty frame in every trace.
+      - pattern-not: |
+          func ($R $T) $M(ctx context.Context, ...) ($RET1, $RET2) {
+            return $RECV.$INNER(ctx, ...)
+          }
+      - pattern-not: |
+          func ($R $T) $M(ctx context.Context, ...) $RET {
+            return $RECV.$INNER(ctx, ...)
+          }
+      # Same delegation, plain-function form: internal/lib and handler
+      # middlewares wrap a spanned callee without a receiver.
+      - pattern-not: |
+          func $M(ctx context.Context, ...) ($RET1, $RET2) {
+            return $INNER(ctx, ...)
+          }
+      - pattern-not: |
+          func $M(ctx context.Context, ...) $RET {
+            return $INNER(ctx, ...)
+          }
+
+  # write-go: "Contexts flow downward only — caller to callee. Never return one."
+  # Scoped to the layers that carry request flow. internal/lib is exempt by
+  # design: a context helper (TransferMasterKeyContext, any WithX wrapper) must
+  # return the derived context — that is the whole pattern.
+  - id: agora-no-context-return
+    languages: [go]
+    severity: ERROR
+    message: >-
+      $F returns a context.Context. In the request layers a context flows
+      downward only — take one as the first parameter instead of handing one up.
+    paths:
+      include:
+        - "internal/core/"
+        - "internal/dao/"
+        - "internal/handlers/"
+      exclude:
+        - "*_test.go"
+        - "**/mocks/"
+        - "**/protogen/"
+    patterns:
+      - pattern-either:
+          - pattern: "func $F(...) context.Context { ... }"
+          - pattern: "func ($R $T) $F(...) context.Context { ... }"
+      # A context.WithValue wrapper has to hand back the context it derived —
+      # that is the whole pattern. Keyed on the body rather than on a directory,
+      # so it holds whether the helper lives in lib/ or handlers/middlewares/.
+      - pattern-not: |
+          func $F(...) context.Context {
+            ...
+            return context.WithValue(...)
+          }
+
+  # write-go-service: "One method per interface, named Exec." A dependency
+  # interface is the contract the consumer owns; a differently-named method means
+  # the boundary was drawn by hand instead of by the pattern.
+  #
+  # The compliant case is excluded with pattern-not rather than a negated regex:
+  # semgrep's regex engine has no lookahead. Return arity is enumerated because
+  # Go patterns have no wildcard for it.
+  - id: agora-dep-interface-method-must-be-exec
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Dependency interface $NAME declares $METHOD; layer contracts expose exactly
+      one method, named Exec.
+    paths:
+      include:
+        - "internal/core/"
+        - "internal/handlers/"
+      exclude:
+        - "*_test.go"
+        - "**/mocks/"
+        - "**/protogen/"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              type $NAME interface {
+                $METHOD(ctx context.Context, ...) ($RET1, $RET2)
+              }
+          - pattern: |
+              type $NAME interface {
+                $METHOD(ctx context.Context, ...) $RET
+              }
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: .*(Dao|Service[A-Za-z]*)$
+      - pattern-not: |
+          type $NAME interface {
+            Exec(ctx context.Context, ...) ($RET1, $RET2)
+          }
+      - pattern-not: |
+          type $NAME interface {
+            Exec(ctx context.Context, ...) $RET
+          }
+      # A protoc-generated client method is named by the proto, not by us. The
+      # `opts ...grpc.CallOption` tail is the shape that identifies one, which
+      # holds wherever the interface lives — unlike a path exemption.
+      - pattern-not: |
+          type $NAME interface {
+            $ANY(ctx context.Context, ..., $OPTS ...grpc.CallOption) ($O1, $O2)
+          }
+
+  # write-go-service: the Exec signature is
+  # `(ctx context.Context, request *XxxRequest)` so the request can gain a field
+  # without breaking callers. This catches the non-pointer case; a pointer to a
+  # badly-named struct needs the lookahead semgrep does not have.
+  - id: agora-exec-takes-request-pointer
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Exec on $NAME takes $PARAM by value; it must take a
+      *<Entity><Operation>Request so the signature can gain a field later.
+    paths:
+      include:
+        - "internal/core/"
+        - "internal/handlers/"
+      exclude:
+        - "*_test.go"
+        - "**/mocks/"
+        - "**/protogen/"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              type $NAME interface {
+                Exec(ctx context.Context, $ARG $PARAM) ($RET1, $RET2)
+              }
+          - pattern: |
+              type $NAME interface {
+                Exec(ctx context.Context, $ARG $PARAM) $RET
+              }
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: .*(Dao|Service[A-Za-z]*)$
+      - metavariable-regex:
+          metavariable: $PARAM
+          regex: ^[^*]
+
+  # write-go, Secrets: "Never log, trace, or put in span attributes: passwords,
+  # tokens, API keys, private keys ... Record identifiers only." A span attribute
+  # is the easiest of these to add by reflex and the hardest to notice later.
+  - id: agora-no-secret-in-span-attribute
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Span attribute "$KEY" names credential material. Traces are retained and
+      widely readable — record an identifier (`user.id`, `key.id`) instead.
+    paths:
+      exclude:
+        - "*_test.go"
+    patterns:
+      - pattern-either:
+          - pattern: attribute.String($KEY, ...)
+          - pattern: attribute.StringSlice($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i)"?([a-z0-9_.]*\.)?(password|passwd|secret|token|apikey|api_key|privatekey|private_key|ciphertext|signature|bearer)"?$
+
+  # write-go-service: service and DAO types are "stateless after construction —
+  # every field is set by New* and never mutated, so every type is safe for
+  # concurrent use without synchronization. This is a requirement."
+  #
+  # Constructors are plain functions, not methods, so matching the receiver form
+  # targets exactly the mutation this forbids.
+  - id: agora-no-receiver-mutation
+    languages: [go]
+    severity: ERROR
+    message: >-
+      $M assigns to $R.$FIELD after construction. These types are shared across
+      concurrent requests unsynchronised; every field must be set by New$T only.
+    paths:
+      include:
+        - "internal/core/"
+        - "internal/dao/"
+        - "internal/handlers/"
+      exclude:
+        - "*_test.go"
+        - "**/mocks/"
+        - "**/protogen/"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              func ($R $T) $M(...) {
+                ...
+                $R.$FIELD = $VAL
+                ...
+              }
+          - pattern: |
+              func ($R $T) $M(...) $RET {
+                ...
+                $R.$FIELD = $VAL
+                ...
+              }
+          - pattern: |
+              func ($R $T) $M(...) ($RET1, $RET2) {
+                ...
+                $R.$FIELD = $VAL
+                ...
+              }

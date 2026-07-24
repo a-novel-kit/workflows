@@ -91,6 +91,40 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `setup-node` | Set up Node + pnpm (GitHub registry) and install. |
 | `test-node`  | Run the package's tests and upload coverage.      |
 
+### `security-actions`
+
+Each ships its own config, so a consuming repo carries none. All three run offline: nothing
+off-repo can stall them, which is the property a required check needs.
+
+| Action           | Purpose                                                                |
+| ---------------- | ---------------------------------------------------------------------- |
+| `lint-semgrep`   | Enforce the Agora structural conventions golangci-lint cannot express. |
+| `scan-secrets`   | Scan the working tree for committed credentials (gitleaks).            |
+| `lint-workflows` | Audit GitHub Actions workflows for security defects (zizmor).          |
+
+Each takes `advisory: "true"` to report without failing, for a repo adopting the check over an
+existing backlog.
+
+`version` is **required** on all three. The pin lives in the calling repo so Renovate sees it there
+and bumps each repo on its own cadence, instead of every tool upgrade waiting on a workflows
+release. Annotate it so Renovate can resolve the datasource:
+
+```yaml
+- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.25.1
+  with:
+    # renovate: datasource=github-releases depName=gitleaks/gitleaks
+    version: "8.30.1"
+```
+
+A repo needing its own gitleaks allowlist **extends** the shipped baseline rather than replacing
+it — `scan-secrets` writes the baseline to `.gitleaks-base.toml` in the workspace, and the repo's
+`.gitleaks.toml` opens with `[extend] path = ".gitleaks-base.toml"`. Allowlists from both layers
+apply; a config that omits the block replaces the baseline and the action warns.
+
+Call the three as separate jobs, not through one reusable workflow. A reusable-workflow caller's
+checks are named `<caller-job>/<inner-job>`, but required-check discovery reads the caller's job id
+verbatim — so the required context would be one GitHub never posts, and the PR could never merge.
+
 ### `publish-actions`
 
 | Action                | Purpose                                                                                        |

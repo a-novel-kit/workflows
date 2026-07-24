@@ -1,0 +1,85 @@
+name: lint workflows
+description: >
+  Audit GitHub Actions workflows with zizmor. Replaces CodeQL's `actions` analysis: its
+  `excessive-permissions` is the class CodeQL reported as `actions/missing-workflow-permissions`,
+  plus checkout credential leaks, cache poisoning and floating refs. Config ships with the action;
+  runs `--offline`.
+
+inputs:
+  config:
+    required: false
+    default: ""
+    description: >
+      Path to a repo-local zizmor config, relative to the workspace. Empty (the default) uses the
+      baseline shipped with this action.
+  advisory:
+    required: false
+    default: "false"
+    description: >
+      When "true", findings go to the run summary and the log but the check passes — for a repo
+      adopting the audit over an existing backlog. When "false" (the default), any finding fails.
+  version:
+    required: true
+    description: >
+      zizmor image tag. Pinned by the caller so Renovate bumps it per repo. Annotate it:
+      `# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor`.
+
+runs:
+  using: composite
+  steps:
+    - name: zizmor
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        ADVISORY: ${{ inputs.advisory }}
+        ZIZMOR_VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -d .github/workflows ]; then
+          echo "no .github/workflows — nothing to audit."
+          exit 0
+        fi
+
+        if [ -n "${CONFIG:-}" ]; then
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::config '$CONFIG' not found in the workspace."
+            exit 1
+          fi
+          mount_cfg="$PWD/$CONFIG"
+        else
+          mount_cfg="$ACTION_PATH/zizmor.yml"
+        fi
+
+        # errexit is disabled around the audit deliberately: zizmor exits
+        # non-zero on findings and this step decides gating from that code.
+        set +e
+        docker run --rm \
+          -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
+          "ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION" \
+          --offline --config /zizmor.yml /src/.github/workflows \
+          | tee /tmp/zizmor.out
+        code=${PIPESTATUS[0]}
+        set -e
+
+        if [ "$code" = "0" ]; then
+          echo "zizmor: no findings" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        {
+          echo "### zizmor findings"
+          echo ""
+          echo '```'
+          tail -c 60000 /tmp/zizmor.out
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$ADVISORY" = "true" ]; then
+          echo "::warning::zizmor reported findings; advisory mode, not failing the check."
+          exit 0
+        fi
+
+        echo "::error::zizmor reported findings."
+        exit "$code"

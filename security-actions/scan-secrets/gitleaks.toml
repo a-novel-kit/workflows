@@ -1,0 +1,36 @@
+# Baseline gitleaks config, shipped with the scan-secrets action.
+#
+# It carries only the allowlists that are true for every repo in the fleet, so
+# most repos need no config of their own. A repo with genuinely local fixtures
+# adds its own .gitleaks.toml that extends this one:
+#
+#   [extend]
+#   path = ".gitleaks-base.toml"
+#
+# The action writes this file into the workspace before scanning, so the repo
+# names a path it can author. Allowlists chain: the repo's add to these rather
+# than replacing them.
+#
+# Every allowlist targets `generic-api-key` alone — the entropy heuristic. The
+# provider-specific rules (AWS, GitHub, Stripe, ...) stay active everywhere,
+# including in tests, because a real cloud credential is never acceptable there.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Checksum manifests: module digests are high-entropy by construction."
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)(buf|go)\.sum$''', '''(^|/)pnpm-lock\.yaml$''']
+
+[[allowlists]]
+description = "Go test fixtures: sample keys and tokens generated per test, granting nothing."
+targetRules = ["generic-api-key"]
+paths = ['''_test\.go$''']
+
+[[allowlists]]
+description = "Compose and CI env blocks: throwaway credentials for a database that lives for one job."
+targetRules = ["generic-api-key"]
+regexes = [
+  '''postgres://postgres:postgres@''',
+]
