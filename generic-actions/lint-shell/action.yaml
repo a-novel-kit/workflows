@@ -18,10 +18,36 @@ inputs:
       When "true", findings go to the run summary and the log but the check passes — for a
       repo adopting the lint over an existing backlog. When "false" (the default), any
       finding fails the check.
+  version:
+    required: true
+    description: >
+      shellcheck release tag, with or without the leading v. Pinned by the caller so Renovate
+      bumps it per repo. Annotate it:
+      `# renovate: datasource=github-releases depName=koalaman/shellcheck`.
+
+      Previously the runner's preinstalled shellcheck was used, so the version moved whenever
+      GitHub rebuilt the image — a gate that changed what it accepted with no change in the repo.
 
 runs:
   using: composite
   steps:
+    - name: install shellcheck
+      shell: bash
+      env:
+        SHELLCHECK_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        # The tag and the archive name both carry the v, unlike gitleaks and hadolint whose
+        # archives drop it. Normalise so either spelling of the input works.
+        v="v${SHELLCHECK_VERSION#v}"
+        tmp=$(mktemp -d)
+        curl -sSfL --retry 3 --retry-delay 2 \
+          "https://github.com/koalaman/shellcheck/releases/download/${v}/shellcheck-${v}.linux.x86_64.tar.xz" \
+          | tar -xJ -C "$tmp" --strip-components=1
+        install -m 0755 "$tmp/shellcheck" /usr/local/bin/shellcheck
+        rm -rf "$tmp"
+        shellcheck --version
+
     - name: shellcheck
       shell: bash
       env:

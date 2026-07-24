@@ -15,6 +15,16 @@ description: >
   branch lifecycle, the lock, and the human gate all live in the caller (hotfix.yaml).
 
 inputs:
+  cli_version:
+    required: true
+    description: >
+      a-novel CLI release to install, with or without the leading v. Pinned by the caller so
+      Renovate bumps it per repo. Annotate it:
+      `# renovate: datasource=go depName=github.com/a-novel-kit/stack/cli`.
+
+      It was `@latest`, which resolved at release time to whatever had landed on the CLI — so a
+      release could be cut by code nobody reviewed against it, and two repos releasing minutes
+      apart could use different CLIs.
   ref:
     required: true
     description: >
@@ -111,8 +121,10 @@ runs:
     - name: Install a-novel CLI (for stamp)
       if: ${{ steps.stamp.outputs.needed == 'true' }}
       shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.cli_version }}
       run: |
-        go install github.com/a-novel-kit/stack/cli/cmd/a-novel@latest
+        go install "github.com/a-novel-kit/stack/cli/cmd/a-novel@v${CLI_VERSION#v}"
         echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
     # working-directory __hotfix puts bump, plan and git on the ephemeral tree. $GITHUB_ACTION_PATH
