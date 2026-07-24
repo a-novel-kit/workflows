@@ -22,7 +22,7 @@ rules:
       # internal/ only: pkg/go is a generated client and its mocks are not ours
       # to instrument.
       include:
-        - "internal/"
+        - "**/internal/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -80,6 +80,34 @@ rules:
           func $M(...) context.Context {
             ...
           }
+      # A function handed a trace.Span does not own one — its caller opened the
+      # span and passes it down, which is the point of the parameter.
+      - pattern-not: |
+          func $M(..., $S trace.Span, ...) {
+            ...
+          }
+      - pattern-not: |
+          func $M(..., $S trace.Span, ...) $R {
+            ...
+          }
+      - pattern-not: |
+          func $M(..., $S trace.Span, ...) ($R1, $R2) {
+            ...
+          }
+      - pattern-not: |
+          func ($RC $T) $M(..., $S trace.Span, ...) ($R1, $R2) {
+            ...
+          }
+      # A background loop is not a request operation: one span would cover the
+      # process lifetime. It takes only a context and returns nothing.
+      - pattern-not: |
+          func ($RC $T) $M(ctx context.Context) {
+            ...
+          }
+      - pattern-not: |
+          func $M(ctx context.Context) {
+            ...
+          }
       # A pure delegator forwards to a spanned callee and does no work of its
       # own; its span would be an empty frame in every trace.
       - pattern-not: |
@@ -113,9 +141,9 @@ rules:
       downward only — take one as the first parameter instead of handing one up.
     paths:
       include:
-        - "internal/core/"
-        - "internal/dao/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/dao/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -148,8 +176,8 @@ rules:
       one method, named Exec.
     paths:
       include:
-        - "internal/core/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -195,8 +223,8 @@ rules:
       *<Entity><Operation>Request so the signature can gain a field later.
     paths:
       include:
-        - "internal/core/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -244,6 +272,8 @@ rules:
   #
   # Constructors are plain functions, not methods, so matching the receiver form
   # targets exactly the mutation this forbids.
+  # NOTE: exempts a field written under a mutex — the rule's premise is that
+  # these types carry no synchronisation, which a sync.Mutex field disproves.
   - id: agora-no-receiver-mutation
     languages: [go]
     severity: ERROR
@@ -252,9 +282,9 @@ rules:
       concurrent requests unsynchronised; every field must be set by New$T only.
     paths:
       include:
-        - "internal/core/"
-        - "internal/dao/"
-        - "internal/handlers/"
+        - "**/internal/core/"
+        - "**/internal/dao/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
@@ -279,3 +309,7 @@ rules:
                 $R.$FIELD = $VAL
                 ...
               }
+      - pattern-not-inside: |
+          $R.$MU.Lock()
+          ...
+          $R.$MU.Unlock()
