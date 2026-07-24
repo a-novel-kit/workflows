@@ -1,0 +1,93 @@
+name: lint workflows
+description: >
+  Audit a repo's GitHub Actions workflows with zizmor. This is what replaces CodeQL's `actions`
+  analysis: zizmor's `excessive-permissions` is the class CodeQL reported as
+  `actions/missing-workflow-permissions`, and it audits several more — credentials left in
+  .git/config by checkout, cache poisoning, template injection, floating action refs.
+
+  A baseline config ships with the action, tuned to this fleet's conventions: tag pins are accepted
+  (ref-pin), because Renovate moves the whole workflows reference set as one grouped update and a
+  per-action hash pin breaks that grouping.
+
+  Runs `--offline`, so like the other gates nothing off-repo can stall it.
+
+inputs:
+  config:
+    required: false
+    default: ""
+    description: >
+      Path to a repo-local zizmor config, relative to the workspace. Empty (the default) uses the
+      baseline shipped with this action.
+  advisory:
+    required: false
+    default: "false"
+    description: >
+      When "true", findings go to the run summary and the log but the check passes — for a repo
+      adopting the audit over an existing backlog. When "false" (the default), any finding fails.
+  version:
+    required: false
+    default: "1.28.0"
+    description: >
+      The zizmor image tag to pin. Run as a container step rather than a `container:` job: the
+      image has no libstdc++, and a job container makes GitHub inject its Node runtime into it,
+      so actions/checkout cannot start there.
+
+runs:
+  using: composite
+  steps:
+    - name: zizmor
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        ADVISORY: ${{ inputs.advisory }}
+        ZIZMOR_VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -d .github/workflows ]; then
+          echo "no .github/workflows — nothing to audit."
+          exit 0
+        fi
+
+        if [ -n "${CONFIG:-}" ]; then
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::config '$CONFIG' not found in the workspace."
+            exit 1
+          fi
+          mount_cfg="$PWD/$CONFIG"
+        else
+          mount_cfg="$ACTION_PATH/zizmor.yml"
+        fi
+
+        # errexit is disabled around the audit deliberately: zizmor exits
+        # non-zero on findings and this step decides gating from that code.
+        set +e
+        docker run --rm \
+          -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
+          "ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION" \
+          --offline --config /zizmor.yml /src/.github/workflows \
+          | tee /tmp/zizmor.out
+        code=${PIPESTATUS[0]}
+        set -e
+
+        if [ "$code" = "0" ]; then
+          echo "zizmor: no findings" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        {
+          echo "### zizmor findings"
+          echo ""
+          echo '```'
+          tail -c 60000 /tmp/zizmor.out
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$ADVISORY" = "true" ]; then
+          echo "::warning::zizmor reported findings; advisory mode, not failing the check."
+          exit 0
+        fi
+
+        echo "::error::zizmor reported findings."
+        exit "$code"

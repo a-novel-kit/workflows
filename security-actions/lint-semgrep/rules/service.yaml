@@ -107,6 +107,16 @@ rules:
           func ($R $T) $M(ctx context.Context, ...) $RET {
             return $RECV.$INNER(ctx, ...)
           }
+      # Same delegation, plain-function form: internal/lib and handler
+      # middlewares wrap a spanned callee without a receiver.
+      - pattern-not: |
+          func $M(ctx context.Context, ...) ($RET1, $RET2) {
+            return $INNER(ctx, ...)
+          }
+      - pattern-not: |
+          func $M(ctx context.Context, ...) $RET {
+            return $INNER(ctx, ...)
+          }
 
   # write-go: "Contexts flow downward only — caller to callee. Never return one."
   # Scoped to the layers that carry request flow. internal/lib is exempt by

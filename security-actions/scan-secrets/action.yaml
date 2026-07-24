@@ -1,0 +1,99 @@
+name: scan secrets
+description: >
+  Scan the working tree for committed credentials with gitleaks. A baseline config ships with the
+  action, so most repos need none of their own; a repo with local fixtures adds a .gitleaks.toml
+  that extends it. The scan is offline and finishes in tens of milliseconds, which is what makes it
+  safe on the merge path — unlike a hosted scanner, nothing off-repo can stall it.
+
+  History is deliberately out of scope: a secret that was committed and later deleted is invisible
+  here. That gap belongs to a scheduled sweep, where a slower, network-dependent scan costs an
+  investigation rather than a blocked merge.
+
+  The gitleaks BINARY is used, not gitleaks-action: the action is separately licensed and its free
+  tier covers a single repo per organisation.
+
+inputs:
+  config:
+    required: false
+    default: ""
+    description: >
+      Path to a repo-local gitleaks config, relative to the workspace. Empty (the default) uses the
+      baseline shipped with this action. A repo that needs a local allowlist points here at a file
+      whose [extend] path is the value this action exports as GITLEAKS_BASE in the step summary.
+  advisory:
+    required: false
+    default: "false"
+    description: >
+      When "true", findings go to the run summary and the log but the check passes — for a repo
+      adopting the scan over an existing backlog. When "false" (the default), any finding fails.
+  version:
+    required: false
+    default: "8.30.1"
+    description: >
+      The gitleaks release to pin — a `gitleaks/gitleaks` tag without the leading v. The binary is
+      fetched from that release; it is not preinstalled on the runner.
+
+runs:
+  using: composite
+  steps:
+    - name: install gitleaks
+      shell: bash
+      env:
+        GITLEAKS_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        curl -sSfL --retry 3 --retry-delay 2 \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+          | tar -xz -C /usr/local/bin gitleaks
+        gitleaks version
+
+    - name: scan working tree
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        ADVISORY: ${{ inputs.advisory }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        base="$ACTION_PATH/gitleaks.toml"
+        config="${CONFIG:-}"
+        if [ -z "$config" ]; then
+          config="$base"
+        elif [ ! -f "$config" ]; then
+          echo "::error::config '$config' not found in the workspace."
+          exit 1
+        fi
+        echo "GITLEAKS_BASE=$base" >> "$GITHUB_STEP_SUMMARY"
+
+        # errexit is disabled around the scan deliberately: gitleaks exits
+        # non-zero on findings and this step decides gating from that code.
+        set +e
+        gitleaks dir . --config "$config" --redact --exit-code 1 --verbose | tee /tmp/gitleaks.out
+        code=${PIPESTATUS[0]}
+        set -e
+
+        if [ "$code" = "0" ]; then
+          echo "gitleaks: no leaks found" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        {
+          echo "### gitleaks findings"
+          echo ""
+          echo "Values are redacted. Inspect each one before allowlisting: scope an allowlist to the"
+          echo "exact value or path, never to a whole rule, so a real credential in the same file"
+          echo "still fails."
+          echo ""
+          echo '```'
+          tail -c 60000 /tmp/gitleaks.out
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$ADVISORY" = "true" ]; then
+          echo "::warning::gitleaks reported findings; advisory mode, not failing the check."
+          exit 0
+        fi
+
+        echo "::error::gitleaks reported findings."
+        exit "$code"

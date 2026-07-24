@@ -1,0 +1,24 @@
+# Baseline zizmor config, shipped with the lint-workflows action.
+
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Tag pins are deliberate across this fleet, not an oversight: Renovate
+        # moves the whole a-novel-kit/workflows reference set as one grouped
+        # update, and a repo must sit at a single workflows version. Per-action
+        # hash pins break that grouping and make the diff unreadable.
+        #
+        # ref-pin still fails a genuinely floating `@master` or a missing ref,
+        # which is the failure this audit exists to catch. It only accepts a tag
+        # as sufficient.
+        "*": ref-pin
+
+  cache-poisoning:
+    ignore:
+      # main.yaml both restores a build cache and builds images, which is the
+      # shape this audit looks for. The attack needs a lower-trust branch to
+      # write a cache a release run then reads; GitHub scopes cache writes so a
+      # PR branch cannot reach the default branch's scope, and releases are cut
+      # from release.yaml. zizmor rates the finding Low for the same reason.
+      - main.yaml
