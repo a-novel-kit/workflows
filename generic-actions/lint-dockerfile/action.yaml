@@ -57,10 +57,14 @@ runs:
           exit 0
         fi
         bin="$RUNNER_TEMP/hadolint"
-        if ! curl -fsSL \
+        # Retried, because this check gates: a single reset connection to the releases CDN would
+        # otherwise fail the build on a repo whose Dockerfiles are fine. `--retry-all-errors` is what
+        # covers a transport-level reset (curl exit 35) — plain `--retry` only covers transient HTTP
+        # statuses and timeouts, and the reset is what was actually observed.
+        if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
           "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
           -o "$bin"; then
-          echo "::error::failed to download hadolint ${HADOLINT_VERSION}"
+          echo "::error::failed to download hadolint ${HADOLINT_VERSION} after 3 retries"
           exit 1
         fi
         chmod +x "$bin"
