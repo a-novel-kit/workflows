@@ -44,9 +44,21 @@ runs:
         # gitleaks tags its releases v-prefixed but names the archive without it.
         # Accept either spelling of the input so a bump that keeps the v still resolves.
         v="${GITLEAKS_VERSION#v}"
-        curl -sSfL --retry 3 --retry-delay 2 \
+        tmp=$(mktemp -d)
+        # Downloaded to a file, then extracted, rather than piped into tar. `--retry-all-errors` is
+        # what retries a transport-level reset (curl exit 35); plain `--retry` covers only transient
+        # HTTP statuses and timeouts. Retrying into a pipe would not help either — curl restarts the
+        # transfer while tar has already consumed the partial bytes. The sibling shellcheck download
+        # failed exactly this way, reddening a PR that only bumped prettier; this one is the same
+        # shape and was fixed with it.
+        if ! curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors \
           "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
-          | tar -xz -C /usr/local/bin gitleaks
+          -o "$tmp/gitleaks.tar.gz"; then
+          echo "::error::failed to download gitleaks ${v} after 3 retries"
+          exit 1
+        fi
+        tar -xz -C /usr/local/bin -f "$tmp/gitleaks.tar.gz" gitleaks
+        rm -rf "$tmp"
         gitleaks version
 
     - name: scan working tree
