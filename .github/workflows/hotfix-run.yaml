@@ -134,6 +134,7 @@ jobs:
         env:
           LINE: ${{ inputs.line }}
           FIX_REF: ${{ inputs.fix_ref }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
         run: |
           set -euo pipefail
 
@@ -156,8 +157,8 @@ jobs:
           ephemeral="hotfix/v${LINE}.x"
           echo "Baseline: \`$baseline\` → ephemeral branch \`$ephemeral\`." | tee -a "$GITHUB_STEP_SUMMARY"
 
-          git config user.name "${{ steps.token.outputs.app-slug }}[bot]"
-          git config user.email "${{ steps.token.outputs.app-slug }}[bot]@users.noreply.github.com"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
           # A leftover ephemeral branch from an aborted run blocks a fresh cut, so remove it.
           git push origin --delete "$ephemeral" 2>/dev/null || true

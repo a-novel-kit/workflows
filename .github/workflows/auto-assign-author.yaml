@@ -12,6 +12,8 @@ jobs:
     if: ${{ github.event.pull_request.user.login != vars.DEPENDENCY_BOT_LOGIN }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: ./generic-actions/assign-bot
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
