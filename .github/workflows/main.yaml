@@ -24,6 +24,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: ./node-actions/lint-node
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -42,6 +44,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       # The detector lives in a script so tests/lint-action-manifests.sh runs the shipped code
       # against fixtures, including the violations this gate exists to catch.
       - name: No composite-illegal expression contexts in action manifests
@@ -57,6 +61,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Run the action test suites
         shell: bash
         run: |
@@ -90,6 +96,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: ./generic-actions/lint-shell
         with:
           # renovate: datasource=github-releases depName=koalaman/shellcheck
