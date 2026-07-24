@@ -5,8 +5,11 @@
 # adds its own .gitleaks.toml that extends this one:
 #
 #   [extend]
-#   path = "<the path the action passes as GITLEAKS_BASE>"
-#   useDefault = true
+#   path = ".gitleaks-base.toml"
+#
+# The action writes this file into the workspace before scanning, so the repo
+# names a path it can author. Allowlists chain: the repo's add to these rather
+# than replacing them.
 #
 # Every allowlist targets `generic-api-key` alone — the entropy heuristic. The
 # provider-specific rules (AWS, GitHub, Stripe, ...) stay active everywhere,

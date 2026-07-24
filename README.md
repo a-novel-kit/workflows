@@ -105,6 +105,22 @@ off-repo can stall them, which is the property a required check needs.
 Each takes `advisory: "true"` to report without failing, for a repo adopting the check over an
 existing backlog.
 
+`version` is **required** on all three. The pin lives in the calling repo so Renovate sees it there
+and bumps each repo on its own cadence, instead of every tool upgrade waiting on a workflows
+release. Annotate it so Renovate can resolve the datasource:
+
+```yaml
+- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.25.1
+  with:
+    # renovate: datasource=github-releases depName=gitleaks/gitleaks
+    version: "8.30.1"
+```
+
+A repo needing its own gitleaks allowlist **extends** the shipped baseline rather than replacing
+it — `scan-secrets` writes the baseline to `.gitleaks-base.toml` in the workspace, and the repo's
+`.gitleaks.toml` opens with `[extend] path = ".gitleaks-base.toml"`. Allowlists from both layers
+apply; a config that omits the block replaces the baseline and the action warns.
+
 ### `publish-actions`
 
 | Action                | Purpose                                                                                        |
