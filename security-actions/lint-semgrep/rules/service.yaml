@@ -15,8 +15,10 @@ rules:
     languages: [go]
     severity: ERROR
     message: >-
-      $M takes a context but never opens an otel span, so its work is invisible
-      in traces. Open one with
+      $M takes a context but never opens an otel span. Every function in the
+      internal layers that receives an explicit context is a step in the trace;
+      one that skips the span makes its work invisible and folds its latency
+      into the caller. Open one with
       `ctx, span := otel.Tracer().Start(ctx, "<layer>.<Operation>")`.
     paths:
       # internal/ only: pkg/go is a generated client and its mocks are not ours
@@ -28,9 +30,10 @@ rules:
         - "**/mocks/"
         - "**/protogen/"
     patterns:
-      # Both forms matter: core/dao/handlers expose methods, while internal/lib
-      # exposes plain functions (EncryptMasterKey, MasterKeyContext). Matching
-      # only the receiver form left the whole lib layer unchecked.
+      # Taking a context as the first parameter IS the criterion. There are no
+      # exemptions: not unexported helpers, not delegators, not context
+      # wrappers. A function that should not be traced is one that does not
+      # take a context, and that is the only way to opt out.
       - pattern-either:
           - pattern: "func ($R $T) $M(ctx context.Context, ...) { ... }"
           - pattern: "func ($R $T) $M(ctx context.Context, ...) $RET { ... }"
@@ -73,53 +76,6 @@ rules:
             ...
             otel.Tracer().Start(...)
             ...
-          }
-      # A context.WithValue wrapper returns the context it derived and cannot
-      # fail; a span on it is an empty frame on every request.
-      - pattern-not: |
-          func $M(...) context.Context {
-            ...
-          }
-      # An unexported method is an implementation detail of the exported
-      # operation that calls it, and that operation already opened the span. A
-      # span per private branch fragments one operation into several.
-      #
-      # Note this does NOT bless taking a `span trace.Span` parameter: the span
-      # is already in ctx and `trace.SpanFromContext(ctx)` retrieves it, so a
-      # second parameter is duplicate plumbing. The exemption is the helper's
-      # privacy, not how it got the span.
-      - metavariable-regex:
-          metavariable: $M
-          regex: ^[A-Z]
-      # A background loop is not a request operation: one span would cover the
-      # process lifetime. It takes only a context and returns nothing.
-      - pattern-not: |
-          func ($RC $T) $M(ctx context.Context) {
-            ...
-          }
-      - pattern-not: |
-          func $M(ctx context.Context) {
-            ...
-          }
-      # A pure delegator forwards to a spanned callee and does no work of its
-      # own; its span would be an empty frame in every trace.
-      - pattern-not: |
-          func ($R $T) $M(ctx context.Context, ...) ($RET1, $RET2) {
-            return $RECV.$INNER(ctx, ...)
-          }
-      - pattern-not: |
-          func ($R $T) $M(ctx context.Context, ...) $RET {
-            return $RECV.$INNER(ctx, ...)
-          }
-      # Same delegation, plain-function form: internal/lib and handler
-      # middlewares wrap a spanned callee without a receiver.
-      - pattern-not: |
-          func $M(ctx context.Context, ...) ($RET1, $RET2) {
-            return $INNER(ctx, ...)
-          }
-      - pattern-not: |
-          func $M(ctx context.Context, ...) $RET {
-            return $INNER(ctx, ...)
           }
 
   # write-go: "Contexts flow downward only — caller to callee. Never return one."
