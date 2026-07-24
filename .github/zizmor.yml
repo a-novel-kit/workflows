@@ -1,0 +1,58 @@
+# Repo-local zizmor config for a-novel-kit/workflows.
+#
+# security-actions/lint-workflows mounts EITHER this file OR the baseline it ships, never both, so
+# this file must carry the baseline's rules as well as the ones specific to this repo. Keep the two
+# in sync: security-actions/lint-workflows/zizmor.yml is the original.
+
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Tag pins are deliberate across this fleet, not an oversight: Renovate
+        # moves the whole a-novel-kit/workflows reference set as one grouped
+        # update, and a repo must sit at a single workflows version. Per-action
+        # hash pins break that grouping and make the diff unreadable.
+        #
+        # ref-pin still fails a genuinely floating `@master` or a missing ref,
+        # which is the failure this audit exists to catch. It only accepts a tag
+        # as sufficient.
+        "*": ref-pin
+
+  cache-poisoning:
+    ignore:
+      # main.yaml both restores a build cache and builds images, which is the
+      # shape this audit looks for. The attack needs a lower-trust branch to
+      # write a cache a release run then reads; GitHub scopes cache writes so a
+      # PR branch cannot reach the default branch's scope, and releases are cut
+      # from release.yaml. zizmor rates the finding Low for the same reason.
+      - main.yaml
+
+  github-app:
+    ignore:
+      # Each mints an App token with `owner:` and no `repositories:`, which zizmor reads as
+      # over-broad. For these three it is the requirement, not an oversight — each is an org-wide
+      # sweep, and the suggested fix (naming specific repositories) would blind it:
+      #
+      #   token-expiry.yaml — enumerates the ORGANISATION's PATs. Its one permission,
+      #     organization-personal-access-tokens:read, is an org-level grant; a repository list
+      #     does not narrow an org-level read, it just breaks it.
+      #   watchdog.yaml — scans every repo in the org for stale required checks and stuck hotfix
+      #     runs. Naming repositories would mean the sweep silently stops covering whatever is not
+      #     on the list, which is the exact failure it exists to catch.
+      #   reconcile-board.yaml — same shape: an org-scoped PR search feeding the board reconcile.
+      #
+      # All three already hold the narrow line that IS available to them: `permissions: {}` on the
+      # job, so the default token is unused, and read-only `permission-*` scopes on the App token.
+      # Widen any of them and this suppression stops being justified.
+      - token-expiry.yaml
+      - watchdog.yaml
+      - reconcile-board.yaml
+
+  artipacked:
+    ignore:
+      # The one checkout in this repo that must keep its credentials. It checks out with an
+      # explicitly minted, repo-scoped bot token and then pushes and deletes the ephemeral hotfix
+      # branch with plain `git push` (hotfix-run.yaml:183, :295) — no credential helper of its own,
+      # so the persisted one is what authenticates. Setting persist-credentials: false here does
+      # not harden the workflow, it breaks it. Every other checkout in the repo sets it.
+      - hotfix-run.yaml

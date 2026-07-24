@@ -102,3 +102,21 @@ jobs:
         with:
           # renovate: datasource=github-releases depName=koalaman/shellcheck
           version: "0.11.0"
+
+  # The repo that ships the audit was the one repo not running it, so its own workflows went
+  # unchecked until a fleet sweep ran zizmor here by hand. Dogfooded with a relative path, against
+  # the repo-local config — see .github/zizmor.yml for why it exists rather than the shipped
+  # baseline.
+  lint-workflows:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./security-actions/lint-workflows
+        with:
+          config: .github/zizmor.yml
+          # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
+          version: "1.28.0"
