@@ -1,19 +1,16 @@
 name: lint semgrep
 description: >
-  Enforce the Agora structural conventions golangci-lint cannot express — a call that must be
-  present, a pairing that must hold. The ruleset ships with this action, so a consuming repo
-  carries no semgrep config of its own; the version it runs is the workflows tag it pins.
-  Rules are read from disk only, so the scan makes no network call and cannot be stalled by a
-  third-party service — the failure that took GitGuardian off the merge path.
+  Enforce the Agora structural conventions golangci-lint cannot express: a call that must be
+  present, a pairing that must hold. The ruleset ships with the action, so a consuming repo carries
+  no semgrep config. Rules are read from disk — no network call, so nothing off-repo can stall it.
 
 inputs:
   ruleset:
     required: false
     default: "service"
     description: >
-      Which bundled ruleset to run. "service" is the clean-architecture set for repos shaped as
-      cmd/ + internal/{config,lib,dao,core,handlers}. Libraries pass "none": their conventions are
-      covered by golangci-lint, and every rule here assumes the service layout.
+      "service" for the clean-architecture layout; "none" for libraries, whose conventions
+      golangci-lint already covers.
   advisory:
     required: false
     default: "false"
@@ -23,12 +20,9 @@ inputs:
   version:
     required: true
     description: >
-      REQUIRED. Pin it in the caller so Renovate sees it there and can bump it per repo,
-      rather than every tool upgrade waiting on a workflows release. The caller annotates it:
+      semgrep image tag. Pinned by the caller so Renovate bumps it per repo instead of every
+      upgrade waiting on a workflows release. Annotate it:
       `# renovate: datasource=docker depName=semgrep/semgrep`.
-      The semgrep image tag to pin. Run as a container step rather than a `container:` job,
-      because a job container makes GitHub inject its Node runtime into the image and
-      actions/checkout cannot start in one that lacks libstdc++.
 
 runs:
   using: composite

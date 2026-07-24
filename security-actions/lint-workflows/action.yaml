@@ -1,15 +1,9 @@
 name: lint workflows
 description: >
-  Audit a repo's GitHub Actions workflows with zizmor. This is what replaces CodeQL's `actions`
-  analysis: zizmor's `excessive-permissions` is the class CodeQL reported as
-  `actions/missing-workflow-permissions`, and it audits several more — credentials left in
-  .git/config by checkout, cache poisoning, template injection, floating action refs.
-
-  A baseline config ships with the action, tuned to this fleet's conventions: tag pins are accepted
-  (ref-pin), because Renovate moves the whole workflows reference set as one grouped update and a
-  per-action hash pin breaks that grouping.
-
-  Runs `--offline`, so like the other gates nothing off-repo can stall it.
+  Audit GitHub Actions workflows with zizmor. Replaces CodeQL's `actions` analysis: its
+  `excessive-permissions` is the class CodeQL reported as `actions/missing-workflow-permissions`,
+  plus checkout credential leaks, cache poisoning and floating refs. Config ships with the action;
+  runs `--offline`.
 
 inputs:
   config:
@@ -27,12 +21,8 @@ inputs:
   version:
     required: true
     description: >
-      REQUIRED. Pin it in the caller so Renovate sees it there and can bump it per repo,
-      rather than every tool upgrade waiting on a workflows release. The caller annotates it:
+      zizmor image tag. Pinned by the caller so Renovate bumps it per repo. Annotate it:
       `# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor`.
-      The zizmor image tag to pin. Run as a container step rather than a `container:` job: the
-      image has no libstdc++, and a job container makes GitHub inject its Node runtime into it,
-      so actions/checkout cannot start there.
 
 runs:
   using: composite
