@@ -53,6 +53,7 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
 | `auto-merge-bot`         | Enable auto-merge on a PR.                                                                                        |
 | `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
+| `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                       |
 | `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
@@ -67,6 +68,20 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
 | `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
 | `token-expiry-notify`    | Remind (Discord) before a fine-grained PAT expires, with the regen steps.                                         |
+
+`check-append-only` needs the full base history. It rejects every change except additions under
+the configured path; the `append-only-override` PR label is the reviewed escape hatch.
+
+```yaml
+- uses: actions/checkout@v6
+  with:
+    fetch-depth: 0
+
+- uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.27.0
+  with:
+    path: internal/models/migrations
+    base: ${{ github.event.pull_request.base.sha }}
+```
 
 ### `github-pages-actions`
 
