@@ -80,6 +80,7 @@ runs:
         images: ghcr.io/${{ inputs.image_name }}
         tags: |
           # Ref-derived tags for the tag-push flow, off when a version is passed.
+          type=ref,event=pr,enable=${{ inputs.version == '' }}
           type=schedule,pattern=nightly,enable=${{ inputs.version == '' }}
           type=ref,event=branch,enable=${{ inputs.version == '' }}
           type=ref,event=tag,enable=${{ inputs.version == '' }}
