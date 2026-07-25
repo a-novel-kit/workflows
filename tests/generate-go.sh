@@ -55,11 +55,13 @@ run_case() { # $1=label $2=failures-before-success
 
   if (
     ATTEMPTS=0
+    # shellcheck disable=SC2329 # invoked indirectly by generate
     go() {
       ATTEMPTS=$((ATTEMPTS + 1))
       printf '%s\n' "$ATTEMPTS" >>"$case_dir/attempts"
       [ "$ATTEMPTS" -gt "$failures" ]
     }
+    # shellcheck disable=SC2329 # invoked indirectly by generate
     sleep() {
       printf '%s\n' "$1" >>"$case_dir/delays"
     }
