@@ -38,7 +38,7 @@ printf 'outside\n' > "$REPO/outside/file.txt"
 git -C "$REPO" add frozen/locked.txt outside/file.txt
 git -C "$REPO" commit -qm base
 BASE=$(git -C "$REPO" rev-parse HEAD)
-PATH_TO_CHECK=frozen
+export PATH_TO_CHECK=frozen
 
 fails=0
 check_case() { # $1=label $2=expected(pass|fail)
@@ -95,8 +95,8 @@ check_case "renamed file fails" fail
 
 printf '== override label ==\n'
 
-OVERRIDE_LABEL=append-only-override
-EVENT_LABELS='["bug","append-only-override"]'
+export OVERRIDE_LABEL=append-only-override
+export EVENT_LABELS='["bug","append-only-override"]'
 if has_override; then
   printf '  ok   configured label passes\n'
 else
