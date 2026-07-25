@@ -1,0 +1,54 @@
+name: generate go
+description: Generate Go code with bounded retries and verify the committed output.
+
+inputs:
+  working_directory:
+    required: false
+    description: The Go module directory. Defaults to the repository root.
+  failure_message:
+    required: false
+    default: go generate definitions are not up-to-date, please run 'go generate ./...' and commit the changes
+    description: The message displayed when generation leaves uncommitted changes.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: ${{ inputs.working_directory && format('{0}/go.mod', inputs.working_directory) || 'go.mod' }}
+    - name: Generate Go code
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+
+        generate() {
+          local attempt delay
+
+          cd "${WORKING_DIRECTORY:-.}"
+
+          for attempt in 1 2 3; do
+            if go generate ./...; then
+              return 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::go generate failed after 3 attempts." >&2
+              return 1
+            fi
+
+            delay=$((attempt * 5))
+            echo "::warning::go generate failed; retrying in ${delay}s." >&2
+            sleep "$delay"
+          done
+        }
+
+        generate
+    - uses: a-novel-kit/workflows/generic-actions/check-changes@v1.27.1
+      with:
+        pathspec: ${{ inputs.working_directory || '.' }}
+        fail_message: ${{ inputs.failure_message }}
