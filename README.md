@@ -91,10 +91,10 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 
 ### `go-actions`
 
-| Action    | Purpose                                                     |
-| --------- | ----------------------------------------------------------- |
-| `lint-go` | Run `golangci-lint` (supports a non-root module dir).       |
-| `test-go` | Run the workspace's Go tests with coverage via `gotestsum`. |
+| Action        | Purpose                                                                    |
+| ------------- | -------------------------------------------------------------------------- |
+| `lint-go`     | Run `golangci-lint` (supports a non-root module dir).                      |
+| `test-go`     | Run the workspace's Go tests with coverage via `gotestsum`.                |
 | `generate-go` | Generate Go code with retries and fail when the committed output is stale. |
 
 ### `node-actions`
