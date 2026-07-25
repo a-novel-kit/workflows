@@ -15,6 +15,7 @@ extract() {
   awk '
     /^    - name: Generate Go code$/ {step=1; next}
     step && /^      run: \|$/ {run=1; next}
+    run && /^        generate$/ {exit}
     run && /^    - / {exit}
     run {sub(/^        /, ""); print}
   ' "$ACTION"
