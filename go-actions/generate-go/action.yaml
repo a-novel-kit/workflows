@@ -29,8 +29,10 @@ runs:
         generate() {
           local attempt delay
 
+          cd "${WORKING_DIRECTORY:-.}"
+
           for attempt in 1 2 3; do
-            if (cd "${WORKING_DIRECTORY:-.}" && go generate ./...); then
+            if go generate ./...; then
               return 0
             fi
 

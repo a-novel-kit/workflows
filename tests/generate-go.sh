@@ -51,6 +51,7 @@ run_case() { # $1=label $2=failures-before-success
 
   case_dir="$WORK/$label"
   mkdir -p "$case_dir"
+  : >"$case_dir/delays"
 
   if (
     ATTEMPTS=0
