@@ -90,6 +90,20 @@ runs:
           exit 0
         fi
 
+        # --exit-code 1 makes 1 mean leaks. Anything else is the scan failing to run, and reporting
+        # that as leaks sends a reviewer hunting for a credential that was never detected.
+        if [ "$code" != "1" ]; then
+          echo "::error::gitleaks exited $code — the scan did not complete. This is not a findings report."
+          {
+            echo "### gitleaks did not run"
+            echo ""
+            echo '```'
+            tail -c 20000 /tmp/gitleaks.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+        fi
+
         {
           echo "### gitleaks findings"
           echo ""

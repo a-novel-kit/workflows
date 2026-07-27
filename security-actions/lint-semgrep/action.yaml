@@ -48,20 +48,47 @@ runs:
           exit 1
         fi
 
-        # errexit is disabled around the scan deliberately: semgrep exits non-zero
-        # on findings and this step decides gating from that code itself.
-        set +e
-        docker run --rm \
-          -v "$PWD:/src:ro" -v "$ACTION_PATH/rules:/rules:ro" \
-          "semgrep/semgrep:$SEMGREP_VERSION" \
-          semgrep --config="/rules/$RULESET.yaml" --metrics=off --error /src \
-          | tee /tmp/semgrep.out
-        code=${PIPESTATUS[0]}
-        set -e
+        image="semgrep/semgrep:$SEMGREP_VERSION"
+
+        # errexit is disabled around the scan deliberately: semgrep exits non-zero on findings and
+        # this step decides gating from that code itself.
+        #
+        # 125 is docker's own code for "could not run the container", which is what a registry
+        # timeout looks like. semgrep never exits 125 once started, so retrying it can never re-run
+        # a scan that already produced a result.
+        for attempt in 1 2 3; do
+          set +e
+          docker run --rm \
+            -v "$PWD:/src:ro" -v "$ACTION_PATH/rules:/rules:ro" \
+            "$image" \
+            semgrep --config="/rules/$RULESET.yaml" --metrics=off --error /src \
+            | tee /tmp/semgrep.out
+          code=${PIPESTATUS[0]}
+          set -e
+
+          [ "$code" = "125" ] || break
+          echo "::warning::docker could not run $image (attempt $attempt/3); retrying"
+          sleep $((attempt * 5))
+        done
 
         if [ "$code" = "0" ]; then
           echo "semgrep: clean" >> "$GITHUB_STEP_SUMMARY"
           exit 0
+        fi
+
+        # Only 1 means findings. Anything else is the scan failing to run — a bad ruleset, an
+        # unusable image, a killed container — and reporting that as findings sends a reviewer
+        # hunting for a problem that was never detected.
+        if [ "$code" != "1" ]; then
+          echo "::error::semgrep exited $code — the scan did not complete. This is not a findings report."
+          {
+            echo "### semgrep did not run"
+            echo ""
+            echo '```'
+            tail -c 20000 /tmp/semgrep.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
         fi
 
         {

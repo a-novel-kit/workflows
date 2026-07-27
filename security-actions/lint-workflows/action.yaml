@@ -52,20 +52,46 @@ runs:
           mount_cfg="$ACTION_PATH/zizmor.yml"
         fi
 
-        # errexit is disabled around the audit deliberately: zizmor exits
-        # non-zero on findings and this step decides gating from that code.
-        set +e
-        docker run --rm \
-          -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
-          "ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION" \
-          --offline --config /zizmor.yml /src/.github/workflows \
-          | tee /tmp/zizmor.out
-        code=${PIPESTATUS[0]}
-        set -e
+        image="ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION"
+
+        # errexit is disabled around the audit deliberately: zizmor exits non-zero on findings and
+        # this step decides gating from that code.
+        #
+        # 125 is docker's own code for "could not run the container", which is what a registry
+        # timeout looks like. zizmor never exits 125 once started, so retrying it can never re-run
+        # an audit that already produced a result.
+        for attempt in 1 2 3; do
+          set +e
+          docker run --rm \
+            -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
+            "$image" \
+            --offline --config /zizmor.yml /src/.github/workflows \
+            | tee /tmp/zizmor.out
+          code=${PIPESTATUS[0]}
+          set -e
+
+          [ "$code" = "125" ] || break
+          echo "::warning::docker could not run $image (attempt $attempt/3); retrying"
+          sleep $((attempt * 5))
+        done
 
         if [ "$code" = "0" ]; then
           echo "zizmor: no findings" >> "$GITHUB_STEP_SUMMARY"
           exit 0
+        fi
+
+        # Only 1 means findings. Anything else is the audit failing to run, and reporting that as
+        # findings sends a reviewer hunting for a problem that was never detected.
+        if [ "$code" != "1" ]; then
+          echo "::error::zizmor exited $code — the audit did not complete. This is not a findings report."
+          {
+            echo "### zizmor did not run"
+            echo ""
+            echo '```'
+            tail -c 20000 /tmp/zizmor.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
         fi
 
         {
