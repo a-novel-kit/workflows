@@ -52,12 +52,31 @@ runs:
           mount_cfg="$ACTION_PATH/zizmor.yml"
         fi
 
+        # Pulled before the audit, and retried. A registry timeout makes `docker run` exit 125,
+        # which is indistinguishable from an audit result once the run has started — the check then
+        # reports findings for an audit that never ran. Pulling first keeps the two apart.
+        image="ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION"
+        pulled=""
+        for attempt in 1 2 3; do
+          if docker pull --quiet "$image" >/dev/null; then
+            pulled="yes"
+            break
+          fi
+          echo "::warning::pull of $image failed (attempt $attempt/3); retrying"
+          sleep $((attempt * 5))
+        done
+
+        if [ -z "$pulled" ]; then
+          echo "::error::could not pull $image after 3 attempts — the audit did not run."
+          exit 1
+        fi
+
         # errexit is disabled around the audit deliberately: zizmor exits
         # non-zero on findings and this step decides gating from that code.
         set +e
         docker run --rm \
           -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
-          "ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION" \
+          "$image" \
           --offline --config /zizmor.yml /src/.github/workflows \
           | tee /tmp/zizmor.out
         code=${PIPESTATUS[0]}
@@ -66,6 +85,20 @@ runs:
         if [ "$code" = "0" ]; then
           echo "zizmor: no findings" >> "$GITHUB_STEP_SUMMARY"
           exit 0
+        fi
+
+        # Only 1 means findings. Anything else is the audit failing to run, and reporting that as
+        # findings sends a reviewer hunting for a problem that was never detected.
+        if [ "$code" != "1" ]; then
+          echo "::error::zizmor exited $code — the audit did not complete. This is not a findings report."
+          {
+            echo "### zizmor did not run"
+            echo ""
+            echo '```'
+            tail -c 20000 /tmp/zizmor.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
         fi
 
         {
