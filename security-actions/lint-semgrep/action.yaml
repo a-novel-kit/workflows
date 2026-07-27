@@ -48,35 +48,28 @@ runs:
           exit 1
         fi
 
-        # Pulled before the scan, and retried. A registry timeout makes `docker run` exit 125,
-        # which is indistinguishable from a scan result once the run has started — the check then
-        # reports findings for a scan that never ran. Pulling first keeps the two apart.
         image="semgrep/semgrep:$SEMGREP_VERSION"
-        pulled=""
+
+        # errexit is disabled around the scan deliberately: semgrep exits non-zero on findings and
+        # this step decides gating from that code itself.
+        #
+        # 125 is docker's own code for "could not run the container", which is what a registry
+        # timeout looks like. semgrep never exits 125 once started, so retrying it can never re-run
+        # a scan that already produced a result.
         for attempt in 1 2 3; do
-          if docker pull --quiet "$image" >/dev/null; then
-            pulled="yes"
-            break
-          fi
-          echo "::warning::pull of $image failed (attempt $attempt/3); retrying"
+          set +e
+          docker run --rm \
+            -v "$PWD:/src:ro" -v "$ACTION_PATH/rules:/rules:ro" \
+            "$image" \
+            semgrep --config="/rules/$RULESET.yaml" --metrics=off --error /src \
+            | tee /tmp/semgrep.out
+          code=${PIPESTATUS[0]}
+          set -e
+
+          [ "$code" = "125" ] || break
+          echo "::warning::docker could not run $image (attempt $attempt/3); retrying"
           sleep $((attempt * 5))
         done
-
-        if [ -z "$pulled" ]; then
-          echo "::error::could not pull $image after 3 attempts — the scan did not run."
-          exit 1
-        fi
-
-        # errexit is disabled around the scan deliberately: semgrep exits non-zero
-        # on findings and this step decides gating from that code itself.
-        set +e
-        docker run --rm \
-          -v "$PWD:/src:ro" -v "$ACTION_PATH/rules:/rules:ro" \
-          "$image" \
-          semgrep --config="/rules/$RULESET.yaml" --metrics=off --error /src \
-          | tee /tmp/semgrep.out
-        code=${PIPESTATUS[0]}
-        set -e
 
         if [ "$code" = "0" ]; then
           echo "semgrep: clean" >> "$GITHUB_STEP_SUMMARY"

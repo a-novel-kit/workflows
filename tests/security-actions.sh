@@ -81,6 +81,12 @@ check "semgrep: findings fail when gating" 1 $?
 run_step "$TMP/semgrep.sh" "RULESET=service" "ADVISORY=true" "SEMGREP_VERSION=x" "ACTION_PATH=$SEMGREP_DIR"
 check "semgrep: findings pass in advisory mode" 0 $?
 
+# A scan that never ran is not a clean scan. Advisory mode waives findings, not a broken scanner,
+# so the code must still propagate — otherwise an advisory repo reports green having checked nothing.
+stub docker 2
+run_step "$TMP/semgrep.sh" "RULESET=service" "ADVISORY=true" "SEMGREP_VERSION=x" "ACTION_PATH=$SEMGREP_DIR"
+check "semgrep: a failed scan fails even in advisory mode" 2 $?
+
 # --- scan-secrets ------------------------------------------------------------
 SECRETS_ACTION="$ROOT/security-actions/scan-secrets/action.yaml"
 extract "$SECRETS_ACTION" "scan working tree" >"$TMP/secrets.sh"
@@ -99,6 +105,10 @@ check "gitleaks: findings fail when gating" 1 $?
 
 run_step "$TMP/secrets.sh" "CONFIG=" "ADVISORY=true" "ACTION_PATH=$SECRETS_DIR"
 check "gitleaks: findings pass in advisory mode" 0 $?
+
+stub gitleaks 2
+run_step "$TMP/secrets.sh" "CONFIG=" "ADVISORY=true" "ACTION_PATH=$SECRETS_DIR"
+check "gitleaks: a failed scan fails even in advisory mode" 2 $?
 
 # A repo config replaces the baseline; gitleaks cannot layer two configs, so the
 # action must not leave a stale .gitleaks-base.toml in the workspace pretending otherwise.
@@ -127,6 +137,10 @@ check "zizmor: findings fail when gating" 1 $?
 
 run_step "$TMP/zizmor.sh" "CONFIG=" "ADVISORY=true" "ZIZMOR_VERSION=x" "ACTION_PATH=$ZIZMOR_DIR"
 check "zizmor: findings pass in advisory mode" 0 $?
+
+stub docker 2
+run_step "$TMP/zizmor.sh" "CONFIG=" "ADVISORY=true" "ZIZMOR_VERSION=x" "ACTION_PATH=$ZIZMOR_DIR"
+check "zizmor: a failed audit fails even in advisory mode" 2 $?
 
 # --- gitleaks version prefix -------------------------------------------------
 # gitleaks tags releases v-prefixed but names archives without it, and it is the only one of the
