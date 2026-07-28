@@ -60,8 +60,8 @@ runs:
         RENOVATE_ASSIGN_AUTOMERGE: true
         RENOVATE_ASSIGNEES_FROM_CODE_OWNERS: true
         RENOVATE_LABELS: "['dependencies', 'renovate']"
-        # Tool versions pinned in a workflow's `with:` block are invisible to every
-        # built-in manager. The annotation names the datasource; this reads it.
+        # Built-in managers cannot see workflow `with:` values or composite-action input defaults.
+        # The custom managers extract annotated workflow pins and registry-qualified image defaults.
         RENOVATE_CUSTOM_MANAGERS: |
           [
             {
@@ -72,6 +72,16 @@ runs:
                 "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+version:\\s*[\"']?(?<currentValue>[^\"'\\s]+)"
               ],
               "extractVersionTemplate": "^v?(?<version>.+)$"
+            },
+            {
+              "customType": "regex",
+              "description": "Registry-qualified Docker images pinned as repository-local composite-action input defaults.",
+              "managerFilePatterns": ["/^\\.github/actions/.+/action\\.ya?ml$/"],
+              "matchStrings": [
+                "(?:^|\\r?\\n)[ \\t]+default:\\s*[\"']?(?<depName>[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._-]+)+):(?<currentValue>[^\\s\"'/:]+)[\"']?"
+              ],
+              "datasourceTemplate": "docker",
+              "versioningTemplate": "docker"
             }
           ]
 
