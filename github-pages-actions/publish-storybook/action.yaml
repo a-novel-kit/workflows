@@ -1,0 +1,54 @@
+name: publish Storybook page
+description: Build a Storybook static site and deploy it to GitHub Pages.
+
+inputs:
+  build_action:
+    required: false
+    default: build-storybook
+    description: The package script that builds the Storybook static site.
+  build_path:
+    required: false
+    default: storybook-static/
+    description: The repository-relative directory containing the Storybook static site.
+  working_directory:
+    required: false
+    default: ./
+    description: The directory containing the package script.
+  github_token:
+    required: true
+    description: A GitHub token with read access to the caller's package dependencies.
+  app_private_key:
+    required: true
+    description: A GitHub App private key with read access to the caller repository.
+  client_id:
+    required: false
+    description: The GitHub App client ID.
+
+outputs:
+  page_url:
+    description: The deployed GitHub Pages URL.
+    value: ${{ steps.deployment.outputs.page_url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.28.1
+      with:
+        github_token: ${{ inputs.github_token }}
+        app_private_key: ${{ inputs.app_private_key }}
+        client_id: ${{ inputs.client_id }}
+    - name: Build Storybook
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        STORYBOOK_BUILD_ACTION: ${{ inputs.build_action }}
+      run: pnpm run "$STORYBOOK_BUILD_ACTION"
+    - name: Configure GitHub Pages
+      uses: actions/configure-pages@v6
+    - name: Upload Storybook Pages artifact
+      uses: actions/upload-pages-artifact@v5
+      with:
+        path: ${{ inputs.build_path }}
+    - name: Deploy Storybook to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v5
