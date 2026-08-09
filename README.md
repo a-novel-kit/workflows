@@ -85,9 +85,10 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 
 ### `github-pages-actions`
 
-| Action             | Purpose                                    |
-| ------------------ | ------------------------------------------ |
-| `publish-vuepress` | Build a VuePress site and deploy to Pages. |
+| Action              | Purpose                                     |
+| ------------------- | ------------------------------------------- |
+| `publish-storybook` | Build a Storybook site and deploy to Pages. |
+| `publish-vuepress`  | Build a VuePress site and deploy to Pages.  |
 
 ### `go-actions`
 
