@@ -85,7 +85,7 @@ runs:
             }
           ]
 
-        # TODO: two temporary allowedVersions holds below — drop each once its condition clears
+        # TODO: three temporary allowedVersions holds below — drop each once its condition clears
         # (see the rule descriptions). Tracked in https://github.com/a-novel-kit/workflows/issues/308
         RENOVATE_PACKAGE_RULES: |
           [
@@ -105,15 +105,21 @@ runs:
               "allowedVersions": "<7"
             },
             {
+              "description": "Hold golangci-lint off v2.13.0: its bundled nilness analyzer panics on valid service code with 'internal error: unhandled builtin recover', so both Renovate artifact generation and lint-go fail. The range admits every other release, so Renovate resumes on the first fixed patch — drop this rule then.",
+              "matchPackageNames": ["github.com/golangci/golangci-lint/v2"],
+              "allowedVersions": "<2.13.0 || >2.13.0"
+            },
+            {
               "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to the npm manager (which is what Renovate uses for pnpm: pnpm-lock.yaml, workspaces, catalogs) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
               "matchManagers": ["npm"],
               "minimumReleaseAge": "3 days"
             },
             {
-              "description": "Bump the go directive, grouped with the golang base image",
+              "description": "Bump the main go directive, grouped with the golang base image. Tool modfiles keep their existing compatibility floor until a tool dependency requires a newer Go release.",
               "matchManagers": ["gomod"],
               "matchDepNames": ["go"],
               "matchDepTypes": ["golang"],
+              "matchFileNames": ["/(^|/)go\\.mod$/"],
               "rangeStrategy": "bump",
               "groupName": "go toolchain"
             },
@@ -122,6 +128,17 @@ runs:
               "matchManagers": ["dockerfile", "docker-compose"],
               "matchDepNames": ["docker.io/library/golang"],
               "groupName": "go toolchain"
+            },
+            {
+              "description": "Regenerate root-module protobuf output when the direct generator dependency changes, keeping generated headers and code synchronized with go.mod.",
+              "matchManagers": ["gomod"],
+              "matchPackageNames": ["google.golang.org/protobuf"],
+              "matchDepTypes": ["require"],
+              "matchFileNames": ["/^go\\.mod$/"],
+              "postUpgradeTasks": {
+                "commands": ["go tool -modfile=buf.mod buf generate"],
+                "executionMode": "branch"
+              }
             },
             {
               "matchPackageNames": ["/.*a-novel-kit\\/nodelib.*/"],
