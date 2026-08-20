@@ -124,28 +124,10 @@ runs:
               "groupName": "go toolchain"
             },
             {
-              "description": "Require Dependency Dashboard approval for Go minor and major upgrades so the linter, generator, and container-image ecosystem can be verified before the repository language floor changes.",
-              "matchManagers": ["gomod"],
-              "matchDepNames": ["go"],
-              "matchDepTypes": ["golang"],
-              "matchFileNames": ["/(^|/)go\\.mod$/"],
-              "matchUpdateTypes": ["minor", "major"],
-              "groupName": "go toolchain",
-              "dependencyDashboardApproval": true
-            },
-            {
               "description": "Keep the golang base image in the same PR as the go directive",
               "matchManagers": ["dockerfile", "docker-compose"],
               "matchDepNames": ["docker.io/library/golang"],
               "groupName": "go toolchain"
-            },
-            {
-              "description": "Require Dependency Dashboard approval for golang base-image minor and major upgrades so the complete Go toolchain group remains operator-controlled.",
-              "matchManagers": ["dockerfile", "docker-compose"],
-              "matchDepNames": ["docker.io/library/golang"],
-              "matchUpdateTypes": ["minor", "major"],
-              "groupName": "go toolchain",
-              "dependencyDashboardApproval": true
             },
             {
               "description": "Regenerate root-module protobuf output when the direct generator dependency changes, keeping generated headers and code synchronized with go.mod.",

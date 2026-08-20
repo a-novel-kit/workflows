@@ -143,14 +143,11 @@ for (const toolModule of ["buf.mod", "golangci-lint.mod", "gotestsum.mod", "mock
   );
 }
 
-const goApprovalRules = packageRules.filter(
-  ({ groupName, dependencyDashboardApproval }) =>
-    groupName === "go toolchain" && dependencyDashboardApproval,
+assert.equal(
+  packageRules.filter(({ dependencyDashboardApproval }) => dependencyDashboardApproval).length,
+  0,
+  "Dependency Dashboard approval must not gate Renovate updates",
 );
-assert.equal(goApprovalRules.length, 2, "Go module and image approval rules are required");
-for (const rule of goApprovalRules) {
-  assert.deepEqual(rule.matchUpdateTypes, ["minor", "major"]);
-}
 
 const protobufRule = packageRules.find(({ matchPackageNames }) =>
   matchPackageNames?.includes("google.golang.org/protobuf"),
