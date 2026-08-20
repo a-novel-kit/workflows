@@ -121,5 +121,58 @@ for (const dependency of [
   );
 }
 
+const goDirectiveRule = packageRules.find(
+  ({ groupName, matchManagers, matchDepNames, rangeStrategy }) =>
+    groupName === "go toolchain" &&
+    matchManagers?.includes("gomod") &&
+    matchDepNames?.includes("go") &&
+    rangeStrategy === "bump",
+);
+assert(goDirectiveRule, "main Go directive rule is missing");
+const goFilePatterns = goDirectiveRule.matchFileNames.map(compileRenovateRegex);
+for (const mainModule of ["go.mod", "cli/go.mod"]) {
+  assert(
+    goFilePatterns.some((pattern) => pattern.test(mainModule)),
+    `${mainModule} does not join the Go toolchain group`,
+  );
+}
+for (const toolModule of ["buf.mod", "golangci-lint.mod", "gotestsum.mod", "mockery.mod"]) {
+  assert(
+    goFilePatterns.every((pattern) => !pattern.test(toolModule)),
+    `${toolModule} must keep its existing Go compatibility floor`,
+  );
+}
+
+const goApprovalRules = packageRules.filter(
+  ({ groupName, dependencyDashboardApproval }) =>
+    groupName === "go toolchain" && dependencyDashboardApproval,
+);
+assert.equal(goApprovalRules.length, 2, "Go module and image approval rules are required");
+for (const rule of goApprovalRules) {
+  assert.deepEqual(rule.matchUpdateTypes, ["minor", "major"]);
+}
+
+const protobufRule = packageRules.find(({ matchPackageNames }) =>
+  matchPackageNames?.includes("google.golang.org/protobuf"),
+);
+assert(protobufRule, "protobuf regeneration rule is missing");
+assert.deepEqual(protobufRule.matchDepTypes, ["require"]);
+const protobufFilePatterns = protobufRule.matchFileNames.map(compileRenovateRegex);
+assert(
+  protobufFilePatterns.some((pattern) => pattern.test("go.mod")),
+  "protobuf regeneration must match the root module",
+);
+assert(protobufFilePatterns.every((pattern) => !pattern.test("cli/go.mod")));
+assert.deepEqual(protobufRule.postUpgradeTasks, {
+  commands: ["go tool -modfile=buf.mod buf generate"],
+  executionMode: "branch",
+});
+
+const golangciHold = packageRules.find(({ matchPackageNames }) =>
+  matchPackageNames?.includes("github.com/golangci/golangci-lint/v2"),
+);
+assert(golangciHold, "golangci-lint v2.13.0 hold is missing");
+assert.equal(golangciHold.allowedVersions, "<2.13.0 || >2.13.0");
+
 console.log("renovate-extraction: all assertions passed");
 NODE
