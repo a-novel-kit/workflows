@@ -31,6 +31,9 @@ for action in docker docker-job; do
     printf "FAIL %s: actions/attest must use a documented full commit pin\n" "$action" >&2
     exit 1
   fi
+  # These are literal GitHub-expression contracts from the action manifests;
+  # expanding them in this shell test would change what the test is asserting.
+  # shellcheck disable=SC2016
   for contract in \
     'subject-name: ghcr.io/${{ inputs.image_name }}' \
     'subject-digest: ${{ steps.build.outputs.digest }}' \
