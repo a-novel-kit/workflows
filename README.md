@@ -38,10 +38,37 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `build-actions`
 
-| Action       | Purpose                                                             |
-| ------------ | ------------------------------------------------------------------- |
-| `docker`     | Build an image and verify it runs **healthy** (long-lived service). |
-| `docker-job` | Build an image and verify it **exits 0** (one-shot job).            |
+| Action       | Purpose                                                                         |
+| ------------ | ------------------------------------------------------------------------------- |
+| `docker`     | Build an image, verify it runs **healthy**, push it, and attest its provenance. |
+| `docker-job` | Build an image, verify it **exits 0**, push it, and attest its provenance.      |
+
+Both actions fail the caller after a successful push unless GitHub can sign and publish provenance
+for the exact output digest. Every calling job therefore grants only the permissions the official
+GitHub attestation flow requires:
+
+```yaml
+permissions:
+  attestations: write
+  contents: read
+  id-token: write
+  packages: write
+```
+
+The actions use GitHub's first-party `actions/attest`, pinned to a full commit, and publish its
+Sigstore-signed SLSA provenance beside the GHCR image. They do not create the optional linked-artifact
+storage record, so callers do not need `artifact-metadata: write`. Consumers verify an immutable
+digest against the producer repository without registry write access:
+
+```bash
+gh attestation verify \
+  oci://ghcr.io/a-novel/service-json-keys/grpc@sha256:<64-hex-digest> \
+  --repo a-novel/service-json-keys
+```
+
+An image is releasable only after this command succeeds for its expected source repository. Do not
+backfill a missing build attestation or move an existing tag; fix the build path and publish a fresh
+SemVer release.
 
 ### `generic-actions`
 
