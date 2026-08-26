@@ -48,7 +48,7 @@ runs:
         }
 
         generate
-    - uses: a-novel-kit/workflows/generic-actions/check-changes@v1.29.2
+    - uses: a-novel-kit/workflows/generic-actions/check-changes@v1.30.0
       with:
         pathspec: ${{ inputs.working_directory || '.' }}
         fail_message: ${{ inputs.failure_message }}
