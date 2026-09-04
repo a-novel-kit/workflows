@@ -52,7 +52,7 @@ jobs:
         with:
           persist-credentials: false
       - id: core
-        uses: ./publish-actions/release-core
+        uses: $/publish-actions/release-core
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.7.5"
@@ -63,7 +63,7 @@ jobs:
       # Everything on master has now shipped, so clear this repo's awaiting-release items off the
       # board. Skipped on a dry run, where nothing was released.
       - if: ${{ !inputs.dry_run }}
-        uses: ./generic-actions/archive-board-items
+        uses: $/generic-actions/archive-board-items
         with:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}

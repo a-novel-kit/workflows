@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: ./node-actions/audit
+      - uses: $/node-actions/audit
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           app_private_key: ${{ secrets.PUBLISH_BOT_PRIVATE_KEY }}
