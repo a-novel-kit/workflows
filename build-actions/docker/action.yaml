@@ -160,7 +160,7 @@ runs:
         secret-files: ${{ inputs.secret-files }}
         secrets: ${{ inputs.secrets }}
     - name: Attest the pushed image
-      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      uses: actions/attest@v4.2.2
       with:
         subject-name: ghcr.io/${{ inputs.image_name }}
         subject-digest: ${{ steps.build.outputs.digest }}
