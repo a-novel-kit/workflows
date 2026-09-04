@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: ./node-actions/lint-node
+      - uses: $/node-actions/lint-node
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
@@ -98,7 +98,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: ./generic-actions/lint-shell
+      - uses: $/generic-actions/lint-shell
         with:
           # renovate: datasource=github-releases depName=koalaman/shellcheck
           version: "0.11.0"
@@ -115,8 +115,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: ./security-actions/lint-workflows
+      - uses: $/security-actions/lint-workflows
         with:
           config: .github/zizmor.yml
           # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
-          version: "1.29.0"
+          version: "1.30.0"
