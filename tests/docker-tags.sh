@@ -27,8 +27,8 @@ for action in docker docker-job; do
     printf "FAIL %s: attestation must follow the successful image push\n" "$action" >&2
     exit 1
   fi
-  if ! grep -Eq 'uses: actions/attest@[a-f0-9]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' "$manifest"; then
-    printf "FAIL %s: actions/attest must use a documented full commit pin\n" "$action" >&2
+  if ! grep -Eq 'uses: actions/attest@v[0-9]+\.[0-9]+\.[0-9]+$' "$manifest"; then
+    printf "FAIL %s: actions/attest must use a full SemVer tag\n" "$action" >&2
     exit 1
   fi
   # These are literal GitHub-expression contracts from the action manifests;

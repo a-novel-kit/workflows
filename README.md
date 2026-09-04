@@ -55,7 +55,7 @@ permissions:
   packages: write
 ```
 
-The actions use GitHub's first-party `actions/attest`, pinned to a full commit, and publish its
+The actions use GitHub's first-party `actions/attest`, versioned with a full SemVer tag, and publish its
 Sigstore-signed SLSA provenance beside the GHCR image. They do not create the optional linked-artifact
 storage record, so callers do not need `artifact-metadata: write`. Consumers verify an immutable
 digest against the producer repository without registry write access:
