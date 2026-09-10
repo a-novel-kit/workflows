@@ -42,6 +42,9 @@ runs:
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
         RENOVATE_PR_HOURLY_LIMIT: 0
         LOG_LEVEL: debug
+        # Resolve the recommended preset immediately as global config. The raw package rules below
+        # are then applied afterward, so final fleet groups override recommended monorepo groups.
+        RENOVATE_GLOBAL_EXTENDS: '["config:recommended"]'
         RENOVATE_SECRETS: '{"GITHUB_TOKEN": "${{ inputs.github_token }}"}'
         # Fetch public dependencies through the CDN-backed module proxy, falling back to
         # direct only when the proxy cannot serve a version. Resolving every dependency from
@@ -174,14 +177,33 @@ runs:
               "groupName": "uptrace/bun"
             },
             {
-              "matchPackageNames": ["/.playwright.*/"],
-              "groupName": "playwright"
-            },
-            {
-              "description": "Consolidate non-major npm updates into one PR per repo. They all edit the shared pnpm-lock.yaml, so as separate PRs they conflict pairwise and the merge queue can only land one per cycle. This rule is last so it supersedes the per-name/monorepo groups for non-major npm updates; major npm updates keep their named groups and individual review.",
+              "description": "Consolidate non-major npm updates into one PR per repo. They all edit the shared pnpm-lock.yaml, so as separate PRs they conflict pairwise and the merge queue can only land one per cycle. This rule follows the recommended preset so it supersedes its per-name and monorepo groups; exact fleet rules below may override it.",
               "matchManagers": ["npm"],
               "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
               "groupName": "javascript dependencies"
+            },
+            {
+              "description": "Keep the pre-1.0 uikit package family together and require review because minor releases may break consumers.",
+              "matchPackageNames": ["/^@a-novel-kit\\/uikit(?:-|$)/"],
+              "matchCurrentVersion": "/^0\\./",
+              "groupName": "a-novel-kit uikit",
+              "automerge": false
+            },
+            {
+              "description": "Keep Playwright packages and CI container images on the same runtime version.",
+              "matchPackageNames": ["playwright", "/^@playwright\\//", "mcr.microsoft.com/playwright"],
+              "groupName": "playwright runtime"
+            },
+            {
+              "description": "Keep the Vitest core and scoped packages on one runnable version.",
+              "matchPackageNames": ["vitest", "/^@vitest\\//"],
+              "groupName": "vitest monorepo"
+            },
+            {
+              "description": "Keep Vite and the Svelte Vite plugin on a compatible release line.",
+              "matchPackageNames": ["vite", "@sveltejs/vite-plugin-svelte"],
+              "matchUpdateTypes": ["major"],
+              "groupName": "svelte vite toolchain"
             },
             {
               "description": "Leave pnpm audit-managed overrides to the audit action. node-actions/audit runs `pnpm audit --fix=override` daily and pins vulnerable transitive dependencies to the minimal patched version within each consumer's supported range. Renovate's npm manager otherwise re-reads the override value as an ordinary dependency and bumps it to the latest major, pushing the pin past the parent's compatibility ceiling (e.g. undici v8 breaks jsdom's private wrap-handler.js deep-import). Audit owns these values; Renovate must not touch them. All three depTypes must stay listed: Renovate types package.json `pnpm.overrides` and its `overrides` alias, but overrides declared in pnpm-workspace.yaml (pnpm 10's preferred location) get `pnpm-workspace.overrides` — omit it and the guard silently no-ops for every workspace-level override.",
