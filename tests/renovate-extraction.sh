@@ -23,6 +23,7 @@ renovate_step = next(
 
 print(json.dumps({
     "customManagers": json.loads(renovate_step["env"]["RENOVATE_CUSTOM_MANAGERS"]),
+    "globalExtends": json.loads(renovate_step["env"]["RENOVATE_GLOBAL_EXTENDS"]),
     "packageRules": json.loads(renovate_step["env"]["RENOVATE_PACKAGE_RULES"]),
 }))
 PY
@@ -31,7 +32,9 @@ PY
 RENOVATE_CONFIG="$config" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
 
-const { customManagers, packageRules } = JSON.parse(process.env.RENOVATE_CONFIG);
+const { customManagers, globalExtends, packageRules } = JSON.parse(process.env.RENOVATE_CONFIG);
+
+assert.deepEqual(globalExtends, ["config:recommended"]);
 
 function compileRenovateRegex(value) {
   const separator = value.lastIndexOf("/");
@@ -170,6 +173,60 @@ const golangciHold = packageRules.find(({ matchPackageNames }) =>
 );
 assert(golangciHold, "golangci-lint v2.13.0 hold is missing");
 assert.equal(golangciHold.allowedVersions, "<2.13.0 || >2.13.0");
+
+const javascriptGroupIndex = packageRules.findIndex(
+  ({ groupName }) => groupName === "javascript dependencies",
+);
+const uikitGroupIndex = packageRules.findIndex(
+  ({ groupName }) => groupName === "a-novel-kit uikit",
+);
+const playwrightGroupIndex = packageRules.findIndex(
+  ({ groupName }) => groupName === "playwright runtime",
+);
+const vitestGroupIndex = packageRules.findIndex(
+  ({ groupName }) => groupName === "vitest monorepo",
+);
+const svelteViteGroupIndex = packageRules.findIndex(
+  ({ groupName }) => groupName === "svelte vite toolchain",
+);
+assert(javascriptGroupIndex >= 0, "javascript dependency group is missing");
+for (const [name, index] of [
+  ["uikit", uikitGroupIndex],
+  ["Playwright", playwrightGroupIndex],
+  ["Vitest", vitestGroupIndex],
+  ["Svelte/Vite", svelteViteGroupIndex],
+]) {
+  assert(index > javascriptGroupIndex, name + " must override the npm catch-all");
+}
+
+const uikitRule = packageRules[uikitGroupIndex];
+assert.equal(uikitRule.automerge, false);
+assert(compileRenovateRegex(uikitRule.matchCurrentVersion).test("0.3.1"));
+assert(!compileRenovateRegex(uikitRule.matchCurrentVersion).test("1.0.0"));
+assert(compileRenovateRegex(uikitRule.matchPackageNames[0]).test("@a-novel-kit/uikit"));
+assert(compileRenovateRegex(uikitRule.matchPackageNames[0]).test("@a-novel-kit/uikit-icons"));
+
+const playwrightRule = packageRules[playwrightGroupIndex];
+assert.deepEqual(playwrightRule.matchPackageNames, [
+  "playwright",
+  "/^@playwright\\//",
+  "mcr.microsoft.com/playwright",
+]);
+assert(
+  playwrightRule.matchPackageNames.every((pattern) =>
+    pattern.startsWith("/")
+      ? !compileRenovateRegex(pattern).test("@vitest/browser-playwright")
+      : pattern !== "@vitest/browser-playwright",
+  ),
+  "Vitest Playwright adapters must remain in the Vitest group",
+);
+
+const vitestRule = packageRules[vitestGroupIndex];
+assert.deepEqual(vitestRule.matchPackageNames, ["vitest", "/^@vitest\\//"]);
+
+const svelteViteRule = packageRules[svelteViteGroupIndex];
+assert.deepEqual(svelteViteRule.matchPackageNames, ["vite", "@sveltejs/vite-plugin-svelte"]);
+assert.deepEqual(svelteViteRule.matchUpdateTypes, ["major"]);
 
 console.log("renovate-extraction: all assertions passed");
 NODE
