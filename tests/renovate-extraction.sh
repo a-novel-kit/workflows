@@ -22,6 +22,7 @@ renovate_step = next(
 )
 
 print(json.dumps({
+    "customEnvVariables": json.loads(renovate_step["env"]["RENOVATE_CUSTOM_ENV_VARIABLES"]),
     "customManagers": json.loads(renovate_step["env"]["RENOVATE_CUSTOM_MANAGERS"]),
     "globalExtends": json.loads(renovate_step["env"]["RENOVATE_GLOBAL_EXTENDS"]),
     "packageRules": json.loads(renovate_step["env"]["RENOVATE_PACKAGE_RULES"]),
@@ -32,9 +33,16 @@ PY
 RENOVATE_CONFIG="$config" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
 
-const { customManagers, globalExtends, packageRules } = JSON.parse(process.env.RENOVATE_CONFIG);
+const { customEnvVariables, customManagers, globalExtends, packageRules } = JSON.parse(
+  process.env.RENOVATE_CONFIG,
+);
 
 assert.deepEqual(globalExtends, ["config:recommended"]);
+assert.equal(
+  customEnvVariables["npm_config_//npm.pkg.github.com/:_authToken"],
+  "{{ secrets.GITHUB_TOKEN }}",
+  "post-upgrade package installs must receive registry-scoped GitHub Packages authentication",
+);
 
 function compileRenovateRegex(value) {
   const separator = value.lastIndexOf("/");
@@ -173,6 +181,25 @@ const golangciHold = packageRules.find(({ matchPackageNames }) =>
 );
 assert(golangciHold, "golangci-lint v2.13.0 hold is missing");
 assert.equal(golangciHold.allowedVersions, "<2.13.0 || >2.13.0");
+
+const grpcHold = packageRules.find(({ matchPackageNames }) =>
+  matchPackageNames?.includes("google.golang.org/grpc"),
+);
+assert(grpcHold, "gRPC v1.84.0 security hold is missing");
+assert.equal(grpcHold.allowedVersions, "<1.84.0 || >1.84.0");
+
+const ubuntuHold = packageRules.find(({ matchPackageNames }) =>
+  matchPackageNames?.includes("ubuntu"),
+);
+assert(ubuntuHold, "unavailable Ubuntu v26 runner hold is missing");
+assert.equal(ubuntuHold.allowedVersions, "<26");
+
+const terraformGoogleGroup = packageRules.find(
+  ({ groupName }) => groupName === "terraform google",
+);
+assert(terraformGoogleGroup, "Terraform Google provider group is missing");
+assert.deepEqual(terraformGoogleGroup.matchManagers, ["terraform"]);
+assert.deepEqual(terraformGoogleGroup.matchPackageNames, ["hashicorp/google"]);
 
 const javascriptGroupIndex = packageRules.findIndex(
   ({ groupName }) => groupName === "javascript dependencies",

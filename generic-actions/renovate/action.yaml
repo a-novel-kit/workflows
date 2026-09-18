@@ -29,9 +29,8 @@ runs:
         token: ${{ steps.app_token.outputs.token }}
         docker-network: ${{ job.container.network }}
       env:
-        # postUpgradeTasks cannot install private npm packages. Running the full install from
-        # the main renovate process, which holds the right token, leaves every node module
-        # in place before those tasks run.
+        # Generate dependency artifacts before postUpgradeTasks so those tasks start from a
+        # complete install. Private GitHub Packages authentication is also forwarded below.
         RENOVATE_SKIP_INSTALLS: false
         # A tight pnpm allowlist by default — install, format, dedupe — so postUpgradeTasks run
         # without permitting arbitrary `pnpm exec` or `pnpm dlx`. The `( |$)` suffix matches the
@@ -57,7 +56,8 @@ runs:
           {
             "GITHUB_TOKEN": "'{{ secrets.GITHUB_TOKEN }}'",
             "GOPROXY": "https://proxy.golang.org,direct",
-            "GOPRIVATE": "github.com/a-novel,github.com/a-novel-kit"
+            "GOPRIVATE": "github.com/a-novel,github.com/a-novel-kit",
+            "npm_config_//npm.pkg.github.com/:_authToken": "{{ secrets.GITHUB_TOKEN }}"
           }
         RENOVATE_ALLOW_SCRIPTS: true
         RENOVATE_ASSIGN_AUTOMERGE: true
@@ -88,7 +88,7 @@ runs:
             }
           ]
 
-        # TODO: three temporary allowedVersions holds below — drop each once its condition clears
+        # TODO: five temporary allowedVersions holds below — drop each once its condition clears
         # (see the rule descriptions). Tracked in https://github.com/a-novel-kit/workflows/issues/308
         RENOVATE_PACKAGE_RULES: |
           [
@@ -113,6 +113,16 @@ runs:
               "allowedVersions": "<2.13.0 || >2.13.0"
             },
             {
+              "description": "Hold google.golang.org/grpc off v1.84.0 because CVE-2026-84445 is reported in that release while v1.83.2 remains fixed. The range admits every other release, so Renovate resumes on the first fixed stable patch — drop this rule then.",
+              "matchPackageNames": ["google.golang.org/grpc"],
+              "allowedVersions": "<1.84.0 || >1.84.0"
+            },
+            {
+              "description": "Hold GitHub-hosted Ubuntu runners below v26 until GitHub Actions offers the ubuntu-26.04 label. Renovate currently derives it from runner metadata even though actionlint and GitHub reject the unavailable label — drop this rule once the runner is generally available.",
+              "matchPackageNames": ["ubuntu"],
+              "allowedVersions": "<26"
+            },
+            {
               "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to the npm manager (which is what Renovate uses for pnpm: pnpm-lock.yaml, workspaces, catalogs) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
               "matchManagers": ["npm"],
               "minimumReleaseAge": "3 days"
@@ -131,6 +141,12 @@ runs:
               "matchManagers": ["dockerfile", "docker-compose"],
               "matchDepNames": ["docker.io/library/golang"],
               "groupName": "go toolchain"
+            },
+            {
+              "description": "Keep every Google Terraform provider constraint and lockfile update in one PR. Pinning reusable modules separately from root provider upgrades leaves the roots locked to a version that no longer satisfies those modules.",
+              "matchManagers": ["terraform"],
+              "matchPackageNames": ["hashicorp/google"],
+              "groupName": "terraform google"
             },
             {
               "description": "Regenerate root-module protobuf output when the direct generator dependency changes, keeping generated headers and code synchronized with go.mod.",
