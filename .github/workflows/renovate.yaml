@@ -21,6 +21,7 @@ jobs:
           persist-credentials: false
       - uses: $/generic-actions/renovate
         with:
+          repository_config: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
           client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
