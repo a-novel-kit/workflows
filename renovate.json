@@ -1,10 +1,4 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "packageRules": [
-    {
-      "description": "Keep GitHub Actions on complete stable SemVer tags.",
-      "matchManagers": ["github-actions"],
-      "pinDigests": false
-    }
-  ]
+  "extends": ["github>a-novel-kit/workflows//renovate/workflows#v1.31.0"]
 }
