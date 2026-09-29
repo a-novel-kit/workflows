@@ -164,7 +164,7 @@ runs:
               "groupName": "nodelib"
             },
             {
-              "description": "Group every a-novel-kit/workflows action together — the composite actions are one repo released as a unit, so consumers must bump all their pinned refs at once.",
+              "description": "Keep workflows action and Renovate preset refs on the same release in one update PR.",
               "matchPackageNames": ["/.*a-novel-kit\\/workflows.*/"],
               "groupName": "a-novel-kit workflows"
             },
