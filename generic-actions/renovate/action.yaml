@@ -2,6 +2,10 @@ name: self-hosted renovate
 description: Run a self-hosted Renovate pass against the repository, authenticated as the bot.
 
 inputs:
+  repository_config:
+    required: false
+    default: "false"
+    description: Use the repository's class preset as the only source of update policy.
   allowed_commands:
     required: false
     description: Specify allowed commands for renovate post update actions.
@@ -27,206 +31,13 @@ runs:
       uses: renovatebot/github-action@v46.3.6
       with:
         token: ${{ steps.app_token.outputs.token }}
+        configurationFile: ${{ github.action_path }}/config.json
         docker-network: ${{ job.container.network }}
       env:
-        # Generate dependency artifacts before postUpgradeTasks so those tasks start from a
-        # complete install. Private GitHub Packages authentication is also forwarded below.
-        RENOVATE_SKIP_INSTALLS: false
-        # A tight pnpm allowlist by default — install, format, dedupe — so postUpgradeTasks run
-        # without permitting arbitrary `pnpm exec` or `pnpm dlx`. The `( |$)` suffix matches the
-        # command with arguments or on its own, such as a bare `pnpm i`. The default also covers a
-        # caller passing an empty `allowed_commands`, where the tasks are skipped and leave an
-        # unformatted pnpm-workspace.yaml and stale lockfiles. Callers can still override it.
-        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands || '["^pnpm (install|i|format|dedupe)( |$)"]' }}
+        # Empty overrides preserve the JSON defaults for callers that have not migrated.
+        RENOVATE_GLOBAL_EXTENDS: ${{ inputs.repository_config == 'true' && '[]' || '' }}
+        RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
-        RENOVATE_PR_HOURLY_LIMIT: 0
-        LOG_LEVEL: debug
-        # Resolve the recommended preset immediately as global config. The raw package rules below
-        # are then applied afterward, so final fleet groups override recommended monorepo groups.
-        RENOVATE_GLOBAL_EXTENDS: '["config:recommended"]'
         RENOVATE_SECRETS: '{"GITHUB_TOKEN": "${{ inputs.github_token }}"}'
-        # Fetch public dependencies through the CDN-backed module proxy, falling back to
-        # direct only when the proxy cannot serve a version. Resolving every dependency from
-        # origin makes `go mod tidy` fail intermittently on vanity-import hosts — gonum.org
-        # resets the connection mid-fetch — which aborts the tidy and leaves go.sum
-        # un-regenerated after a go.mod bump. GOPRIVATE keeps the a-novel and a-novel-kit
-        # modules off the proxy and sumdb, so a freshly tagged internal version is fetched
-        # straight from GitHub without waiting for proxy.golang.org to index it.
-        RENOVATE_CUSTOM_ENV_VARIABLES: |
-          {
-            "GITHUB_TOKEN": "'{{ secrets.GITHUB_TOKEN }}'",
-            "GOPROXY": "https://proxy.golang.org,direct",
-            "GOPRIVATE": "github.com/a-novel,github.com/a-novel-kit",
-            "npm_config_//npm.pkg.github.com/:_authToken": "{{ secrets.GITHUB_TOKEN }}"
-          }
-        RENOVATE_ALLOW_SCRIPTS: true
-        RENOVATE_ASSIGN_AUTOMERGE: true
-        RENOVATE_ASSIGNEES_FROM_CODE_OWNERS: true
-        RENOVATE_LABELS: "['dependencies', 'renovate']"
-        # Built-in managers cannot see workflow `with:` values or composite-action input defaults.
-        # The custom managers extract annotated workflow pins and registry-qualified image defaults.
-        RENOVATE_CUSTOM_MANAGERS: |
-          [
-            {
-              "customType": "regex",
-              "description": "Versions pinned in workflow with: blocks, annotated with a renovate datasource comment.",
-              "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
-              "matchStrings": [
-                "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+version:\\s*[\"']?(?<currentValue>[^\"'\\s]+)"
-              ],
-              "extractVersionTemplate": "^v?(?<version>.+)$"
-            },
-            {
-              "customType": "regex",
-              "description": "Registry-qualified Docker images pinned as repository-local composite-action input defaults.",
-              "managerFilePatterns": ["/^\\.github/actions/.+/action\\.ya?ml$/"],
-              "matchStrings": [
-                "(?:^|\\r?\\n)[ \\t]+default:\\s*[\"']?(?<depName>[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._-]+)+):(?<currentValue>[^\\s\"'/:]+)[\"']?"
-              ],
-              "datasourceTemplate": "docker",
-              "versioningTemplate": "docker"
-            }
-          ]
-
-        # TODO: five temporary allowedVersions holds below — drop each once its condition clears
-        # (see the rule descriptions). Tracked in https://github.com/a-novel-kit/workflows/issues/308
-        RENOVATE_PACKAGE_RULES: |
-          [
-            {
-              "description": "Automerge everything except major updates",
-              "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
-              "automerge": true
-            },
-            {
-              "description": "Hold pnpm off 11.12.0: that release regressed pnpm's own global self-installer (createFullPkgId throws 'Cannot use in operator to search for integrity in undefined'), so pnpm/action-setup crashes during CI setup the moment a repo bumps its packageManager field to it. The range allows every other version, so Renovate resumes bumping as soon as a fixed patch (11.12.1+) ships — drop this rule then.",
-              "matchPackageNames": ["pnpm"],
-              "allowedVersions": "<11.12.0 || >11.12.0"
-            },
-            {
-              "description": "Hold TypeScript on the v6 line until the toolchain supports the v7 native-compiler rewrite. TS7 removes JS-API surface prettier's .ts-config loader relies on (it reads an undefined ModuleKind member and throws), and typescript-eslint still caps its peer range at typescript <6.1.0, so a frozen-lockfile install fails on the unmet peer. Drop this rule once typescript-eslint's peer range admits v7.",
-              "matchPackageNames": ["typescript"],
-              "allowedVersions": "<7"
-            },
-            {
-              "description": "Hold golangci-lint off v2.13.0: its bundled nilness analyzer panics on valid service code with 'internal error: unhandled builtin recover', so both Renovate artifact generation and lint-go fail. The range admits every other release, so Renovate resumes on the first fixed patch — drop this rule then.",
-              "matchPackageNames": ["github.com/golangci/golangci-lint/v2"],
-              "allowedVersions": "<2.13.0 || >2.13.0"
-            },
-            {
-              "description": "Hold google.golang.org/grpc off v1.84.0 because CVE-2026-84445 is reported in that release while v1.83.2 remains fixed. The range admits every other release, so Renovate resumes on the first fixed stable patch — drop this rule then.",
-              "matchPackageNames": ["google.golang.org/grpc"],
-              "allowedVersions": "<1.84.0 || >1.84.0"
-            },
-            {
-              "description": "Hold GitHub-hosted Ubuntu runners below v26 until GitHub Actions offers the ubuntu-26.04 label. Renovate currently derives it from runner metadata even though actionlint and GitHub reject the unavailable label — drop this rule once the runner is generally available.",
-              "matchPackageNames": ["ubuntu"],
-              "allowedVersions": "<26"
-            },
-            {
-              "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to the npm manager (which is what Renovate uses for pnpm: pnpm-lock.yaml, workspaces, catalogs) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
-              "matchManagers": ["npm"],
-              "minimumReleaseAge": "3 days"
-            },
-            {
-              "description": "Bump the main go directive, grouped with the golang base image. Tool modfiles keep their existing compatibility floor until a tool dependency requires a newer Go release.",
-              "matchManagers": ["gomod"],
-              "matchDepNames": ["go"],
-              "matchDepTypes": ["golang"],
-              "matchFileNames": ["/(^|/)go\\.mod$/"],
-              "rangeStrategy": "bump",
-              "groupName": "go toolchain"
-            },
-            {
-              "description": "Keep the golang base image in the same PR as the go directive",
-              "matchManagers": ["dockerfile", "docker-compose"],
-              "matchDepNames": ["docker.io/library/golang"],
-              "groupName": "go toolchain"
-            },
-            {
-              "description": "Keep every Google Terraform provider constraint and lockfile update in one PR. Pinning reusable modules separately from root provider upgrades leaves the roots locked to a version that no longer satisfies those modules.",
-              "matchManagers": ["terraform"],
-              "matchPackageNames": ["hashicorp/google"],
-              "groupName": "terraform google"
-            },
-            {
-              "description": "Regenerate root-module protobuf output when the direct generator dependency changes, keeping generated headers and code synchronized with go.mod.",
-              "matchManagers": ["gomod"],
-              "matchPackageNames": ["google.golang.org/protobuf"],
-              "matchDepTypes": ["require"],
-              "matchFileNames": ["/^go\\.mod$/"],
-              "postUpgradeTasks": {
-                "commands": ["go tool -modfile=buf.mod buf generate"],
-                "executionMode": "branch"
-              }
-            },
-            {
-              "matchPackageNames": ["/.*a-novel-kit\\/nodelib.*/"],
-              "groupName": "nodelib"
-            },
-            {
-              "description": "Keep workflows action and Renovate preset refs on the same release in one update PR.",
-              "matchPackageNames": ["/.*a-novel-kit\\/workflows.*/"],
-              "groupName": "a-novel-kit workflows"
-            },
-            {
-              "matchPackageNames": ["/.*a-novel\\/service-json-keys.*/"],
-              "groupName": "service json keys"
-            },
-            {
-              "matchPackageNames": ["/.*a-novel\\/service-authentication.*/"],
-              "groupName": "service authentication"
-            },
-            {
-              "matchPackageNames": ["/.*a-novel\\/service-narrative-engine.*/"],
-              "groupName": "service narrative engine"
-            },
-            {
-              "matchPackageNames": ["/.*a-novel\\/platform-authentication.*/"],
-              "groupName": "platform authentication"
-            },
-            {
-              "matchPackageNames": ["/.*a-novel\\/platform-narrative-engine.*/"],
-              "groupName": "platform narrative engine"
-            },
-            {
-              "matchPackageNames": ["/.*github.com\\/uptrace\\/bun.*/"],
-              "groupName": "uptrace/bun"
-            },
-            {
-              "description": "Consolidate non-major npm updates into one PR per repo. They all edit the shared pnpm-lock.yaml, so as separate PRs they conflict pairwise and the merge queue can only land one per cycle. This rule follows the recommended preset so it supersedes its per-name and monorepo groups; exact fleet rules below may override it.",
-              "matchManagers": ["npm"],
-              "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
-              "groupName": "javascript dependencies"
-            },
-            {
-              "description": "Keep the pre-1.0 uikit package family together and require review because minor releases may break consumers.",
-              "matchPackageNames": ["/^@a-novel-kit\\/uikit(?:-|$)/"],
-              "matchCurrentVersion": "/^0\\./",
-              "groupName": "a-novel-kit uikit",
-              "automerge": false
-            },
-            {
-              "description": "Keep Playwright packages and CI container images on the same runtime version.",
-              "matchPackageNames": ["playwright", "/^@playwright\\//", "mcr.microsoft.com/playwright"],
-              "groupName": "playwright runtime"
-            },
-            {
-              "description": "Keep the Vitest core and scoped packages on one runnable version.",
-              "matchPackageNames": ["vitest", "/^@vitest\\//"],
-              "groupName": "vitest monorepo"
-            },
-            {
-              "description": "Keep Vite and the Svelte Vite plugin on a compatible release line.",
-              "matchPackageNames": ["vite", "@sveltejs/vite-plugin-svelte"],
-              "matchUpdateTypes": ["major"],
-              "groupName": "svelte vite toolchain"
-            },
-            {
-              "description": "Leave pnpm audit-managed overrides to the audit action. node-actions/audit runs `pnpm audit --fix=override` daily and pins vulnerable transitive dependencies to the minimal patched version within each consumer's supported range. Renovate's npm manager otherwise re-reads the override value as an ordinary dependency and bumps it to the latest major, pushing the pin past the parent's compatibility ceiling (e.g. undici v8 breaks jsdom's private wrap-handler.js deep-import). Audit owns these values; Renovate must not touch them. All three depTypes must stay listed: Renovate types package.json `pnpm.overrides` and its `overrides` alias, but overrides declared in pnpm-workspace.yaml (pnpm 10's preferred location) get `pnpm-workspace.overrides` — omit it and the guard silently no-ops for every workspace-level override.",
-              "matchDepTypes": ["pnpm.overrides", "overrides", "pnpm-workspace.overrides"],
-              "enabled": false
-            }
-          ]
-        # Authenticate npm installs against the private GitHub Packages registry.
-        RENOVATE_DETECT_HOST_RULES_FROM_ENV: true
         RENOVATE_NPM_NPM_PKG_GITHUB_COM_TOKEN: ${{ inputs.github_token }}
+        LOG_LEVEL: debug

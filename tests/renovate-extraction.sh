@@ -4,46 +4,20 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-ACTION="$ROOT/generic-actions/renovate/action.yaml"
-
-config=$(python3 - "$ACTION" <<'PY'
-import json
-import sys
-
-import yaml
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    manifest = yaml.safe_load(stream)
-
-renovate_step = next(
-    step
-    for step in manifest["runs"]["steps"]
-    if "RENOVATE_CUSTOM_MANAGERS" in step.get("env", {})
-)
-
-print(json.dumps({
-    "customEnvVariables": json.loads(renovate_step["env"]["RENOVATE_CUSTOM_ENV_VARIABLES"]),
-    "customManagers": json.loads(renovate_step["env"]["RENOVATE_CUSTOM_MANAGERS"]),
-    "globalExtends": json.loads(renovate_step["env"]["RENOVATE_GLOBAL_EXTENDS"]),
-    "packageRules": json.loads(renovate_step["env"]["RENOVATE_PACKAGE_RULES"]),
-}))
-PY
-)
-
-RENOVATE_CONFIG="$config" node --input-type=module - "$ROOT" <<'NODE'
+node --input-type=module - "$ROOT" <<'NODE'
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const { customEnvVariables, customManagers, globalExtends, packageRules } = JSON.parse(
-  process.env.RENOVATE_CONFIG,
-);
-
-assert.deepEqual(globalExtends, ["config:recommended"]);
-assert.equal(
-  customEnvVariables["npm_config_//npm.pkg.github.com/:_authToken"],
-  "{{ secrets.GITHUB_TOKEN }}",
-  "post-upgrade package installs must receive registry-scoped GitHub Packages authentication",
-);
+const preset = (name) =>
+  JSON.parse(readFileSync(`${process.argv[2]}/renovate/${name}.json`, "utf8"));
+const { customManagers, packageRules, extends: baseExtends } = preset("base");
+const runtime = JSON.parse(readFileSync(`${process.argv[2]}/generic-actions/renovate/config.json`, "utf8"));
+assert.deepEqual(baseExtends, ["config:recommended"]);
+assert.deepEqual(runtime.allowedCommands, ["^pnpm (install|i|format|dedupe)( |$)"]);
+assert.equal(runtime.customEnvVariables["npm_config_//npm.pkg.github.com/:_authToken"], "{{ secrets.GITHUB_TOKEN }}");
+for (const name of ["service", "platform", "library", "infra", "workflows", "meta"]) {
+  assert(preset(name).extends.includes("./base"), `${name} must inherit the base`);
+}
 
 function compileRenovateRegex(value) {
   const separator = value.lastIndexOf("/");
@@ -256,8 +230,6 @@ const svelteViteRule = packageRules[svelteViteGroupIndex];
 assert.deepEqual(svelteViteRule.matchPackageNames, ["vite", "@sveltejs/vite-plugin-svelte"]);
 assert.deepEqual(svelteViteRule.matchUpdateTypes, ["major"]);
 
-const preset = (name) =>
-  JSON.parse(readFileSync(`${process.argv[2]}/renovate/${name}.json`, "utf8"));
 const service = preset("service");
 for (const [manager, matches, misses] of [
   ["gomod", ["buf.mod", "tools/mockery.mod"], ["models.mod"]],

@@ -22,6 +22,14 @@
       "managerFilePatterns": ["/^builds\\/database\\.apko\\.yaml$/"],
       "matchStrings": ["- (?<depName>[a-z0-9-]+)=(?<currentValue>[^\\s]+)"],
       "datasourceTemplate": "apk"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^builds\\/database\\.Dockerfile$/"],
+      "matchStrings": ["github\\.com/tianon/gosu@(?<currentValue>[0-9.]+)"],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "tianon/gosu",
+      "versioningTemplate": "loose"
     }
   ],
   "customDatasources": {
