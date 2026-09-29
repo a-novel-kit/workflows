@@ -1,0 +1,108 @@
+name: test playwright
+description: Set up Chromium, run browser component and Playwright tests, and retain coverage and failure diagnostics.
+
+inputs:
+  github_token:
+    required: true
+    description: The GitHub token used to install packages.
+  app_private_key:
+    required: true
+    description: The GitHub App private key used to check out the repository.
+  client_id:
+    required: false
+    description: GitHub App client id.
+  component_test_action:
+    required: false
+    default: test:browser
+    description: Package script for browser component tests that produce coverage.
+  test_action:
+    required: false
+    default: test:e2e
+    description: Package script for Playwright journeys; owns application and service startup.
+  coverage_artifact:
+    required: false
+    default: browsercover
+    description: Name of the browser component coverage artifact.
+  coverage_file:
+    required: false
+    default: coverage/browser/lcov.info
+    description: Browser component coverage file to upload.
+  report_artifact:
+    required: false
+    default: playwright-report
+    description: Name of the seven-day artifact containing reports, traces, screenshots and service logs.
+  compose_file:
+    required: false
+    default: ""
+    description: Optional Docker Compose file for disposable test services; logs and volume cleanup always run when supplied.
+
+outputs:
+  artifact-id:
+    description: Browser component coverage artifact id for the Codecov action.
+    value: ${{ steps.coverage.outputs.artifact-id }}
+
+runs:
+  using: composite
+  steps:
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.31.1
+      with:
+        github_token: ${{ inputs.github_token }}
+        app_private_key: ${{ inputs.app_private_key }}
+        client_id: ${{ inputs.client_id }}
+    - name: Install Chromium and system dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        pnpm exec playwright install --with-deps chromium
+    - name: Run browser component tests
+      id: component-tests
+      shell: bash
+      env:
+        TEST_ACTION: ${{ inputs.component_test_action }}
+      run: |
+        set -euo pipefail
+        pnpm run "$TEST_ACTION"
+    - uses: actions/upload-artifact@v7
+      id: coverage
+      with:
+        name: ${{ inputs.coverage_artifact }}
+        path: ${{ inputs.coverage_file }}
+        if-no-files-found: error
+    - name: Run Playwright journeys
+      id: journeys
+      shell: bash
+      env:
+        TEST_ACTION: ${{ inputs.test_action }}
+      run: |
+        set -euo pipefail
+        pnpm run "$TEST_ACTION"
+    - name: Collect service logs
+      id: service-logs
+      if: ${{ always() && inputs.compose_file != '' }}
+      shell: bash
+      env:
+        COMPOSE_FILE: ${{ inputs.compose_file }}
+      run: |
+        set -euo pipefail
+        if [ ! -f integration-services.log ]; then
+          docker compose --file "$COMPOSE_FILE" logs --no-color > integration-services.log
+        fi
+    - name: Upload browser report and diagnostics
+      uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: ${{ inputs.report_artifact }}
+        path: |
+          playwright-report/
+          test-results/
+          integration-services.log
+        retention-days: 7
+    - name: Remove integration services and data
+      id: cleanup
+      if: ${{ always() && inputs.compose_file != '' }}
+      shell: bash
+      env:
+        COMPOSE_FILE: ${{ inputs.compose_file }}
+      run: |
+        set -euo pipefail
+        docker compose --file "$COMPOSE_FILE" down --volumes --remove-orphans

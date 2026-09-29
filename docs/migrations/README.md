@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.32.0](./v1.32.0.md) | Shared Playwright pipeline for platform browser tests, coverage and failure diagnostics.                                  |
 | [v1.31.0](./v1.31.0.md) | Composable Renovate presets by repository class and JSON runner configuration.                                            |
 | [v1.30.1](./v1.30.1.md) | Centralizes Renovate defaults and lockfile-sensitive groups; consumers remove duplicated local policy.                    |
 | [v1.30.0](./v1.30.0.md) | Docker build actions publish signed GitHub provenance and require four narrow job permissions.                            |
