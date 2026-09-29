@@ -127,13 +127,23 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 
 ### `node-actions`
 
-| Action       | Purpose                                           |
-| ------------ | ------------------------------------------------- |
-| `audit`      | Run `pnpm audit --fix` and commit the fixes.      |
-| `build-node` | Run the package's build script (default `build`). |
-| `lint-node`  | Run the package's lint script (default `lint`).   |
-| `setup-node` | Set up Node + pnpm (GitHub registry) and install. |
-| `test-node`  | Run the package's tests and upload coverage.      |
+| Action            | Purpose                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `audit`           | Run `pnpm audit --fix` and commit the fixes.                                                              |
+| `build-node`      | Run the package's build script (default `build`).                                                         |
+| `lint-node`       | Run the package's lint script (default `lint`).                                                           |
+| `setup-node`      | Set up Node + pnpm (GitHub registry) and install.                                                         |
+| `test-node`       | Run the package's tests and upload coverage.                                                              |
+| `test-playwright` | Set up Chromium, run browser component and Playwright tests, and retain coverage and failure diagnostics. |
+
+`test-playwright` runs on an Ubuntu host with Docker Compose available. Its default scripts are
+`test:browser` and `test:e2e`; the latter owns application and service startup. The action uploads
+`coverage/browser/lcov.info` and exposes its `artifact-id` for Codecov. It retains `playwright-report/`,
+`test-results/` and `integration-services.log` for seven days, including when tests fail.
+
+Pass `compose_file` for disposable integration services and set a unique `COMPOSE_PROJECT_NAME` in
+the calling job. The action preserves logs already collected by the runner and always removes that
+Compose project's services and volumes. See the [adoption guide](./docs/migrations/v1.32.0.md).
 
 ### `security-actions`
 
