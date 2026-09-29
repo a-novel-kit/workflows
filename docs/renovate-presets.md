@@ -48,7 +48,7 @@ allowlist; an empty input preserves the default and `[]` disables post-upgrade c
 
 ## Local configuration
 
-Keep architecture and registry choices, compatibility exceptions and repository-specific
+Keep nonstandard architecture or registry choices, compatibility exceptions and repository-specific
 generation paths in the consumer. Matching package rules merge in order, with repository
 rules applied after presets. Remove the rules and managers transferred to the class preset;
 retaining them would apply the same configuration twice.
@@ -58,21 +58,13 @@ groups PostgreSQL runtime packages. Its pgBackRest manager updates source versio
 SHA-256 together, accepting only stable releases with a matching asset and valid digest.
 The custom datasource uses Renovate's experimental custom datasource support.
 
-The database preset selects no APK registry or architecture. A Wolfi consumer adds:
+The database preset defaults APK lookups in `builds/database.apko.yaml` to
+`https://packages.wolfi.dev/os?arch=x86_64`. Standard Wolfi services need only the class
+preset. Services adopt the Wolfi image separately; the rule is inactive without matching
+dependencies. Other APK files and Debian registry rules are unaffected. A consumer using
+another registry or architecture overrides `registryUrls` for that file and datasource;
+use `arch=aarch64` for ARM64.
 
-```json
-{
-  "packageRules": [
-    {
-      "matchFileNames": ["builds/database.apko.yaml"],
-      "matchDatasources": ["apk"],
-      "registryUrls": ["https://packages.wolfi.dev/os?arch=x86_64"]
-    }
-  ]
-}
-```
-
-Use `aarch64` for ARM64. Services using Debian retain their Debian registry rules.
 Presets request regeneration tasks; the runner's allowlist grants permission to execute them.
 
 ## Validation

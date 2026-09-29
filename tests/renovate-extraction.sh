@@ -244,6 +244,12 @@ for (const [manager, matches, misses] of [
 }
 
 const database = preset("database");
+assert(service.extends.includes("./database"));
+assert.deepEqual(database.packageRules.find(({ registryUrls }) => registryUrls), {
+  matchFileNames: ["builds/database.apko.yaml"],
+  matchDatasources: ["apk"],
+  registryUrls: ["https://packages.wolfi.dev/os?arch=x86_64"],
+});
 for (const [datasource, fixture, expected] of [
   [
     "custom.pgbackrest",
