@@ -1,0 +1,84 @@
+# Repository-class Renovate configuration
+
+Choose the same class as `a-novel repo`: `service`, `platform`, `library`, `infra`,
+`workflows` or `meta`. Each class inherits `base`, which owns the common update policy.
+
+```json
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>a-novel-kit/workflows//renovate/service#v1.31.0"]
+}
+```
+
+Pin the preset to the same workflows release as the repository's actions. Renovate's
+native config manager updates the preset reference in the existing workflows update group.
+Relative references inside presets inherit that release tag.
+
+| Class       | Additional configuration                                                                                                            |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `service`   | Podman Compose and isolated Go tool modules; standard service regeneration; database dependency detection.                          |
+| `library`   | Isolated Go tool modules, standard linter/test-tool updates, npm deduplication and peer-dependency updates. Includes the stack CLI. |
+| `platform`  | npm deduplication and peer-dependency updates.                                                                                      |
+| `workflows` | Complete GitHub Actions release tags.                                                                                               |
+| `infra`     | Common base; deployment-specific policy remains in the repository.                                                                  |
+| `meta`      | Common base for organization configuration repositories.                                                                            |
+
+## Runner configuration
+
+The shared action loads its operator settings from `generic-actions/renovate/config.json`.
+Set `repository_config` when adopting a class preset:
+
+```yaml
+- uses: a-novel-kit/workflows/generic-actions/renovate@v1.31.0
+  with:
+    repository_config: "true"
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
+    client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
+```
+
+Existing callers retain the base policy through the runner's `globalExtends` default.
+`repository_config: "true"` disables that compatibility default: the repository's class
+preset becomes the single source of update policy. Adopt the preset and input together.
+
+The environment supplies credentials, the current repository, logging and explicit caller
+overrides. Static install behavior, credential-forwarding templates and default command
+permissions live in the runner JSON. `allowed_commands` still overrides the default
+allowlist; an empty input preserves the default and `[]` disables post-upgrade commands.
+
+## Local configuration
+
+Keep architecture and registry choices, compatibility exceptions and repository-specific
+generation paths in the consumer. Matching package rules merge in order, with repository
+rules applied after presets. Remove the rules and managers transferred to the class preset;
+retaining them would apply the same configuration twice.
+
+The service class includes `database`, which updates apko and pinned APK packages and
+groups PostgreSQL runtime packages. Its pgBackRest manager updates source version and
+SHA-256 together, accepting only stable releases with a matching asset and valid digest.
+The custom datasource uses Renovate's experimental custom datasource support.
+
+The database preset selects no APK registry or architecture. A Wolfi consumer adds:
+
+```json
+{
+  "packageRules": [
+    {
+      "matchFileNames": ["builds/database.apko.yaml"],
+      "matchDatasources": ["apk"],
+      "registryUrls": ["https://packages.wolfi.dev/os?arch=x86_64"]
+    }
+  ]
+}
+```
+
+Use `aarch64` for ARM64. Services using Debian retain their Debian registry rules.
+Presets request regeneration tasks; the runner's allowlist grants permission to execute them.
+
+## Validation
+
+Run `tests/renovate-extraction.sh` for the shipped manager and policy fixtures. Before
+releasing a preset change, validate the files with Renovate's strict configuration validator
+and resolve representative consumer configurations with the supported Renovate version.
+Check group precedence, local exceptions, command permissions, duplicate managers and preset-tag
+updates. The runner's compatibility base reference is stamped by the release workflow.

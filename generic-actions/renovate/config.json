@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "globalExtends": ["github>a-novel-kit/workflows//renovate/base#v1.31.0"],
+  "skipInstalls": false,
+  "allowedCommands": ["^pnpm (install|i|format|dedupe)( |$)"],
+  "customEnvVariables": {
+    "GITHUB_TOKEN": "'{{ secrets.GITHUB_TOKEN }}'",
+    "GOPROXY": "https://proxy.golang.org,direct",
+    "GOPRIVATE": "github.com/a-novel,github.com/a-novel-kit",
+    "npm_config_//npm.pkg.github.com/:_authToken": "{{ secrets.GITHUB_TOKEN }}"
+  },
+  "allowScripts": true,
+  "detectHostRulesFromEnv": true
+}

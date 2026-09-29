@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.31.0](./v1.31.0.md) | Composable Renovate presets by repository class and JSON runner configuration.                                            |
 | [v1.30.1](./v1.30.1.md) | Centralizes Renovate defaults and lockfile-sensitive groups; consumers remove duplicated local policy.                    |
 | [v1.30.0](./v1.30.0.md) | Docker build actions publish signed GitHub provenance and require four narrow job permissions.                            |
 | [v1.24.0](./v1.24.0.md) | Removes the `go-actions/go-report-card` action (dead service); activation-snapshot membership resolves without the label. |

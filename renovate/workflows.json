@@ -1,0 +1,11 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["./base"],
+  "packageRules": [
+    {
+      "description": "Keep GitHub Actions on complete stable SemVer tags.",
+      "matchManagers": ["github-actions"],
+      "pinDigests": false
+    }
+  ]
+}
