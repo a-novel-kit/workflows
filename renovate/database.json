@@ -47,6 +47,11 @@
       "matchDatasources": ["apk"],
       "matchPackageNames": ["/^postgresql-[0-9]+(?:-|$)/"],
       "groupName": "PostgreSQL runtime packages"
+    },
+    {
+      "matchFileNames": ["builds/database.apko.yaml"],
+      "matchDatasources": ["apk"],
+      "registryUrls": ["https://packages.wolfi.dev/os?arch=x86_64"]
     }
   ]
 }
