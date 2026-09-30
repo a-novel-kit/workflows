@@ -111,7 +111,9 @@ def compare(script, approved=False, seed=False):
     if not visual_only or (
         code and all(test["status"] == "passed" for test in report["tests"])
     ):
-        raise Failure("Test execution or screenshot capture failed; approval cannot waive it")
+        raise Failure(
+            "Test execution or screenshot capture failed; approval cannot waive it"
+        )
     if seed:
         if code:
             raise Failure("Initial screenshot capture failed")
