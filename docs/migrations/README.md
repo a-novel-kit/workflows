@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.33.0](./v1.33.0.md) | Optional private Drive storage, native screenshot comparisons and reviewed visual updates.                                |
 | [v1.32.0](./v1.32.0.md) | Shared Playwright pipeline for platform browser tests, coverage and failure diagnostics.                                  |
 | [v1.31.0](./v1.31.0.md) | Composable Renovate presets by repository class and JSON runner configuration.                                            |
 | [v1.30.1](./v1.30.1.md) | Centralizes Renovate defaults and lockfile-sensitive groups; consumers remove duplicated local policy.                    |

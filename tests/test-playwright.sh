@@ -19,6 +19,7 @@ done
 
 cd "$WORK"
 export CALLS="$WORK/calls"
+export DRIVE_PROVIDER=""
 pnpm() { printf '<%s>\n' "$@" > "$CALLS"; return "${PNPM_EXIT:-0}"; }
 docker() { printf '<%s>\n' "$@" > "$CALLS"; printf 'service output\n'; return "${DOCKER_EXIT:-0}"; }
 export -f pnpm docker

@@ -12,6 +12,7 @@
     "publish:patch": "pnpm version patch --no-git-tag-version && pnpm run prepublish:doc && git add -A && V=$(node -p \"require('./package.json').version\") && git commit -qm \"$V\" && git tag \"v$V\" && git push origin HEAD && git push origin \"v$V\""
   },
   "devDependencies": {
+    "playwright": "1.63.0",
     "prettier": "^3.6.2",
     "prettier-plugin-packagejson": "^3.0.0"
   },
