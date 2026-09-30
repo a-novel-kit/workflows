@@ -9,6 +9,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: "24"
+        package-manager-cache: false
     - name: Verify the label and refresh checks
       shell: bash
       env:
@@ -16,4 +20,4 @@ runs:
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
-        python3 "$ACTION_PATH/../../node-actions/test-playwright/drive/policy.py" label
+        node "$ACTION_PATH/../../node-actions/test-playwright/drive/policy.mjs" label
