@@ -63,18 +63,22 @@ export class Drive {
         this.files(`/${id}`, { fields: "id,mimeType,driveId,parents,trashed,capabilities" })
       )
     );
+    // Drive hides parents from folder-only shares; maintenance must verify the full hierarchy.
+    const parentsVisible = folders.every((folder) => folder.parents !== undefined);
     if (
       folders.some(
         (folder) =>
           folder.mimeType !== "application/vnd.google-apps.folder" ||
           folder.trashed ||
           !folder.driveId ||
-          folder.parents?.length !== 1 ||
-          folder.parents[0] === folder.driveId ||
+          folder.id === folder.driveId ||
+          (folder.parents !== undefined &&
+            (!Array.isArray(folder.parents) || folder.parents.length !== 1 || folder.parents[0] === folder.driveId)) ||
           !folder.capabilities?.canListChildren
       ) ||
       folders[0].driveId !== folders[1].driveId ||
-      !isDeepStrictEqual(folders[0].parents, folders[1].parents)
+      (maintenance && !parentsVisible) ||
+      (parentsVisible && !isDeepStrictEqual(folders[0].parents, folders[1].parents))
     ) {
       throw new Failure("Use accessible references/results folders under one platform folder in a Shared Drive");
     }
