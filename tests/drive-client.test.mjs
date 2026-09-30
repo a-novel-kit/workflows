@@ -96,11 +96,46 @@ test("folder-only candidate and maintenance access is accepted", async () => {
     await drive.validateFolders("references", "results", maintenance);
   }
 });
+test("candidate folder shares work when Drive hides their parents", async () => {
+  for (const hidden of [[0], [1], [0, 1]]) {
+    const values = folders();
+    for (const index of hidden) delete values[index].parents;
+    await client(values.map((data) => ({ data }))).drive.validateFolders("references", "results");
+  }
+});
+test("maintenance requires visible sibling parents even with deletion access", async () => {
+  for (const hidden of [[0], [1], [0, 1]]) {
+    const values = folders(true);
+    for (const index of hidden) delete values[index].parents;
+    await assert.rejects(
+      client(values.map((data) => ({ data }))).drive.validateFolders("references", "results", true),
+      Failure
+    );
+  }
+});
+test("hidden parents do not weaken candidate storage or reference access checks", async () => {
+  for (const invalid of [
+    { id: "shared-drive" },
+    { driveId: "other-drive" },
+    { capabilities: { canListChildren: true, canAddChildren: true } },
+    { capabilities: { canListChildren: true, canDeleteChildren: true } },
+  ]) {
+    const values = folders();
+    for (const folder of values) delete folder.parents;
+    Object.assign(values[0], invalid);
+    await assert.rejects(
+      client(values.map((data) => ({ data }))).drive.validateFolders("references", "results"),
+      Failure
+    );
+  }
+});
 test("wrong storage and reference write access are rejected", async () => {
   for (const invalid of [
     { driveId: null },
     { parents: ["other-platform"] },
     { parents: ["shared-drive"] },
+    { parents: [] },
+    { parents: null },
     { mimeType: "application/x-tar" },
     { trashed: true },
     { capabilities: { canListChildren: true, canAddChildren: true } },
