@@ -377,6 +377,7 @@ def main():
             try:
                 drive.download(batch, workspace / "reference.tar")
                 extract_snapshots(workspace / "reference.tar", snapshots)
+                (workspace / "reference.tar").unlink()
                 baseline = batch["properties"]["sha"]
                 break
             except HttpError as error:
