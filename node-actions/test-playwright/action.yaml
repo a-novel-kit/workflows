@@ -1,5 +1,5 @@
 name: test playwright
-description: Set up Chromium, run browser component and Playwright tests, and retain coverage and failure diagnostics.
+description: Run browser component and Playwright tests with coverage and optional private Drive screenshot comparisons.
 
 inputs:
   github_token:
@@ -36,6 +36,35 @@ inputs:
     default: ""
     description: Optional Docker Compose file for disposable test services; logs and volume cleanup always run when supplied.
 
+  drive_ci_provider:
+    required: false
+    default: ""
+    description: Candidate Workload Identity provider. Empty keeps the existing GitHub report storage path.
+  drive_ci_account:
+    required: false
+    default: ""
+    description: Candidate service account, with read-only references and contributor results access.
+  drive_maintenance_provider:
+    required: false
+    default: ""
+    description: Master-only provider used to stage the validated local reference batch.
+  drive_maintenance_account:
+    required: false
+    default: ""
+    description: Trusted service account allowed to stage references on master.
+  references_drive:
+    required: false
+    default: ""
+    description: Dedicated Shared Drive containing the current master reference.
+  results_drive:
+    required: false
+    default: ""
+    description: Separate Shared Drive containing branch evidence.
+  seed_sha:
+    required: false
+    default: ""
+    description: Exact reviewed master commit allowed to create the first reference when none exists.
+
 outputs:
   artifact-id:
     description: Browser component coverage artifact id for the Codecov action.
@@ -68,14 +97,69 @@ runs:
         name: ${{ inputs.coverage_artifact }}
         path: ${{ inputs.coverage_file }}
         if-no-files-found: error
+    - name: Install the Drive client
+      if: ${{ inputs.drive_ci_provider != '' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        CI_ACCOUNT: ${{ inputs.drive_ci_account }}
+        MAINTENANCE_PROVIDER: ${{ inputs.drive_maintenance_provider }}
+        MAINTENANCE_ACCOUNT: ${{ inputs.drive_maintenance_account }}
+        REFERENCES_DRIVE: ${{ inputs.references_drive }}
+        RESULTS_DRIVE: ${{ inputs.results_drive }}
+      run: |
+        set -euo pipefail
+        : "${CI_ACCOUNT:?Missing drive_ci_account}" "${MAINTENANCE_PROVIDER:?Missing drive_maintenance_provider}" "${MAINTENANCE_ACCOUNT:?Missing drive_maintenance_account}" "${REFERENCES_DRIVE:?Missing references_drive}" "${RESULTS_DRIVE:?Missing results_drive}"
+        python3 -m venv "$RUNNER_TEMP/playwright-drive-client"
+        "$RUNNER_TEMP/playwright-drive-client/bin/pip" install --disable-pip-version-check -r "$ACTION_PATH/drive/requirements.txt"
+    - name: Authenticate candidate Drive access
+      id: drive-auth
+      if: ${{ inputs.drive_ci_provider != '' }}
+      uses: google-github-actions/auth@v3
+      with:
+        workload_identity_provider: ${{ inputs.drive_ci_provider }}
+        service_account: ${{ inputs.drive_ci_account }}
+        token_format: access_token
+        access_token_scopes: https://www.googleapis.com/auth/drive
+        create_credentials_file: false
+        export_environment_variables: false
+    - name: Download the current master reference
+      id: reference
+      if: ${{ inputs.drive_ci_provider != '' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DRIVE_TOKEN: ${{ steps.drive-auth.outputs.access_token }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        REFERENCES_DRIVE: ${{ inputs.references_drive }}
+        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        SEED_SHA: ${{ inputs.seed_sha }}
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/drive/storage.py" download
+    - name: Check approval for this head
+      if: ${{ inputs.drive_ci_provider != '' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+        python3 "$ACTION_PATH/drive/policy.py" allow
     - name: Run Playwright journeys
       id: journeys
       shell: bash
       env:
         TEST_ACTION: ${{ inputs.test_action }}
+        ACTION_PATH: ${{ github.action_path }}
+        DRIVE_PROVIDER: ${{ inputs.drive_ci_provider }}
       run: |
         set -euo pipefail
-        pnpm run "$TEST_ACTION"
+        if [ -n "$DRIVE_PROVIDER" ]; then
+          python3 "$ACTION_PATH/drive/runner.py" "$TEST_ACTION"
+        else
+          pnpm run "$TEST_ACTION"
+        fi
     - name: Collect service logs
       id: service-logs
       if: ${{ always() && inputs.compose_file != '' }}
@@ -89,7 +173,7 @@ runs:
         fi
     - name: Upload browser report and diagnostics
       uses: actions/upload-artifact@v7
-      if: always()
+      if: ${{ always() && inputs.drive_ci_provider == '' }}
       with:
         name: ${{ inputs.report_artifact }}
         path: |
@@ -97,6 +181,60 @@ runs:
           test-results/
           integration-services.log
         retention-days: 7
+    - name: Upload private browser evidence
+      id: drive-upload
+      if: ${{ always() && steps.reference.outcome == 'success' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DRIVE_TOKEN: ${{ steps.drive-auth.outputs.access_token }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        REFERENCES_DRIVE: ${{ inputs.references_drive }}
+        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        BATCH_ARCHIVE: .visual/batch.tar
+        JOURNEY_OUTCOME: ${{ steps.journeys.outcome }}
+      run: |
+        set -euo pipefail
+        if [ "$JOURNEY_OUTCOME" != success ]; then
+          python3 "$ACTION_PATH/drive/runner.py" --diagnostics
+        else
+          python3 "$ACTION_PATH/drive/runner.py" --archive
+        fi
+        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/drive/storage.py" upload
+    - name: Record the visual comparison result
+      if: ${{ always() && steps.reference.outcome == 'success' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        VISUAL_OUTCOME: ${{ steps.journeys.outcome == 'success' && steps.drive-upload.outcome == 'success' && 'success' || 'failure' }}
+      run: |
+        set -euo pipefail
+        python3 "$ACTION_PATH/drive/policy.py" record
+    - name: Authenticate master reference staging
+      id: reference-auth
+      if: ${{ success() && inputs.drive_ci_provider != '' && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      uses: google-github-actions/auth@v3
+      with:
+        workload_identity_provider: ${{ inputs.drive_maintenance_provider }}
+        service_account: ${{ inputs.drive_maintenance_account }}
+        token_format: access_token
+        access_token_scopes: https://www.googleapis.com/auth/drive
+        create_credentials_file: false
+        export_environment_variables: false
+    - name: Stage the complete master reference
+      if: ${{ success() && steps.reference-auth.outcome == 'success' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DRIVE_TOKEN: ${{ steps.reference-auth.outputs.access_token }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        REFERENCES_DRIVE: ${{ inputs.references_drive }}
+        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        BATCH_ARCHIVE: .visual/batch.tar
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/drive/storage.py" stage
     - name: Remove integration services and data
       id: cleanup
       if: ${{ always() && inputs.compose_file != '' }}

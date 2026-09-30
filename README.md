@@ -84,6 +84,8 @@ SemVer release.
 | `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
+| `approve-playwright`     | Bind a human screenshot-change label to the current PR head and refresh browser checks.                           |
+| `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.            |
 | `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                           |
 | `epic-membership`        | Resolve an Epic's authorized member set — open PRs labeled `epic:<N>`.                                            |
@@ -127,19 +129,24 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 
 ### `node-actions`
 
-| Action            | Purpose                                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------------------------- |
-| `audit`           | Run `pnpm audit --fix` and commit the fixes.                                                              |
-| `build-node`      | Run the package's build script (default `build`).                                                         |
-| `lint-node`       | Run the package's lint script (default `lint`).                                                           |
-| `setup-node`      | Set up Node + pnpm (GitHub registry) and install.                                                         |
-| `test-node`       | Run the package's tests and upload coverage.                                                              |
-| `test-playwright` | Set up Chromium, run browser component and Playwright tests, and retain coverage and failure diagnostics. |
+| Action            | Purpose                                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `audit`           | Run `pnpm audit --fix` and commit the fixes.                                                                |
+| `build-node`      | Run the package's build script (default `build`).                                                           |
+| `lint-node`       | Run the package's lint script (default `lint`).                                                             |
+| `setup-node`      | Set up Node + pnpm (GitHub registry) and install.                                                           |
+| `test-node`       | Run the package's tests and upload coverage.                                                                |
+| `test-playwright` | Run browser component and Playwright tests with coverage and optional private Drive screenshot comparisons. |
 
 `test-playwright` runs on an Ubuntu host with Docker Compose available. Its default scripts are
 `test:browser` and `test:e2e`; the latter owns application and service startup. The action uploads
 `coverage/browser/lcov.info` and exposes its `artifact-id` for Codecov. It retains `playwright-report/`,
-`test-results/` and `integration-services.log` for seven days, including when tests fail.
+`test-results/` and `integration-services.log` for seven days, including when tests fail. With Drive
+configured, browser evidence instead stays in two private Shared Drives: the latest successful
+master reference and one completed batch per live branch. Coverage continues using GitHub artifacts.
+Use `generic-actions/approve-playwright` for exact-head label approval and
+`generic-actions/maintain-playwright` for trusted publication and cleanup; see the
+[Drive adoption guide](./docs/migrations/v1.33.0.md).
 
 Pass `compose_file` for disposable integration services and set a unique `COMPOSE_PROJECT_NAME` in
 the calling job. The action preserves logs already collected by the runner and always removes that

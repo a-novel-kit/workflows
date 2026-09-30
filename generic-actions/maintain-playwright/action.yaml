@@ -1,0 +1,52 @@
+name: maintain playwright
+description: Promote successful master screenshot batches and remove superseded or merged/deleted branch evidence from Drive.
+
+inputs:
+  github_token:
+    required: true
+    description: Read-only token for verifying run completion, current master and live branches.
+  identity_provider:
+    required: true
+    description: Trusted default-branch maintenance Workload Identity provider.
+  service_account:
+    required: true
+    description: Maintenance service account with Manager access to the two dedicated Shared Drives.
+  references_drive:
+    required: true
+    description: Shared Drive containing the current master reference.
+  results_drive:
+    required: true
+    description: Shared Drive containing branch evidence.
+
+runs:
+  using: composite
+  steps:
+    - name: Install the Drive client
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python3 -m venv "$RUNNER_TEMP/playwright-drive-client"
+        "$RUNNER_TEMP/playwright-drive-client/bin/pip" install --disable-pip-version-check -r "$ACTION_PATH/../../node-actions/test-playwright/drive/requirements.txt"
+    - name: Authenticate trusted cleanup
+      id: auth
+      uses: google-github-actions/auth@v3
+      with:
+        workload_identity_provider: ${{ inputs.identity_provider }}
+        service_account: ${{ inputs.service_account }}
+        token_format: access_token
+        access_token_scopes: https://www.googleapis.com/auth/drive
+        create_credentials_file: false
+        export_environment_variables: false
+    - name: Reconcile retained batches
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        DRIVE_TOKEN: ${{ steps.auth.outputs.access_token }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        REFERENCES_DRIVE: ${{ inputs.references_drive }}
+        RESULTS_DRIVE: ${{ inputs.results_drive }}
+      run: |
+        set -euo pipefail
+        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/../../node-actions/test-playwright/drive/storage.py" cleanup

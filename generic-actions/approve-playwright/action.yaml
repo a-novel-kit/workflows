@@ -1,0 +1,19 @@
+name: approve playwright
+description: Bind a human screenshot-change label to the current PR head and refresh its browser checks.
+
+inputs:
+  github_token:
+    required: true
+    description: Token with Actions and statuses write plus contents and pull requests read; use only from trusted pull_request_target code.
+
+runs:
+  using: composite
+  steps:
+    - name: Verify the label and refresh checks
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+        python3 "$ACTION_PATH/../../node-actions/test-playwright/drive/policy.py" label
