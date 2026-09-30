@@ -1,6 +1,7 @@
 """Exercise exact-head approval and merge-queue provenance with GitHub boundary responses."""
 
 from copy import deepcopy
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -33,7 +34,7 @@ class PolicyTest(unittest.TestCase):
             "creator": {"login": "github-actions[bot]"},
             "state": "success",
             "created_at": "2026-09-01T10:00:01Z",
-            "target_url": self.pr["html_url"],
+            "target_url": "https://github.com/example/studio/actions/runs/41/attempts/1",
         }
         self.comparison = {
             "context": COMPARISON,
@@ -49,15 +50,25 @@ class PolicyTest(unittest.TestCase):
         self.github.pages.side_effect = lambda path: (
             self.events if path.startswith("issues/") else self.statuses
         )
-        self.github.request.side_effect = lambda path: (
-            {"permission": "write"}
-            if path.startswith("collaborators/")
-            else {
+
+        def request(path):
+            if path.startswith("collaborators/"):
+                return {"permission": "write"}
+            if "/41/" in path:
+                return {
+                    "event": "pull_request_target",
+                    "path": ".github/workflows/visual-tests.yaml",
+                    "display_title": "Visual approval 1 head master labeled",
+                }
+            return {
                 "head_sha": "head",
                 "path": ".github/workflows/main.yaml",
                 "event": "push",
             }
-        )
+
+        self.github.request.side_effect = request
+        self.github.successful_job.return_value = True
+        os.environ.update(GITHUB_RUN_ID="41", GITHUB_RUN_ATTEMPT="1")
         self.github.successful_browser_run.return_value = True
         self.policy = Policy(self.github)
 
@@ -76,6 +87,21 @@ class PolicyTest(unittest.TestCase):
         self.setUp()
         self.github.request.return_value = {"permission": "read"}
         self.github.request.side_effect = None
+        self.assertFalse(self.policy.approved(self.pr))
+
+    def test_candidate_status_cannot_forge_a_trusted_approval_receipt(self):
+        self.receipt["target_url"] = self.comparison["target_url"]
+        self.assertFalse(self.policy.approved(self.pr))
+        self.setUp()
+        original = self.github.request.side_effect
+        self.github.request.side_effect = lambda path: (
+            dict(
+                original(path),
+                display_title="Visual approval 1 previous-head master labeled",
+            )
+            if "/41/" in path
+            else original(path)
+        )
         self.assertFalse(self.policy.approved(self.pr))
 
     def test_latest_label_removal_revokes_but_post_merge_removal_preserves_history(

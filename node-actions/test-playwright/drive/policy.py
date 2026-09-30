@@ -79,21 +79,37 @@ class Policy:
         if permission["permission"] not in ("admin", "maintain", "write"):
             return False
         receipt = self.latest_status(pr["head"]["sha"], APPROVAL, before)
-        return bool(
-            receipt
-            and receipt["state"] == "success"
-            and receipt["created_at"] >= latest["created_at"]
-            and receipt["target_url"] == pr["html_url"]
+        if (
+            not receipt
+            or receipt["state"] != "success"
+            or receipt["created_at"] < latest["created_at"]
+        ):
+            return False
+        match = self.run_target(receipt)
+        if not match:
+            return False
+        run = self.github.request(f"actions/runs/{match[1]}/attempts/{match[2]}")
+        expected_title = (
+            f"Visual approval {pr['number']} {pr['head']['sha']} master labeled"
+        )
+        return (
+            run["event"] == "pull_request_target"
+            and run["path"] == ".github/workflows/visual-tests.yaml"
+            and run["display_title"] == expected_title
+            and self.github.successful_job(match[1], match[2], "approval")
+        )
+
+    def run_target(self, status):
+        return re.fullmatch(
+            rf"https://github.com/{re.escape(self.github.repository)}/actions/runs/(\d+)/attempts/(\d+)",
+            status.get("target_url", ""),
         )
 
     def proof(self, pr, baseline, before=None):
         status = self.latest_status(pr["head"]["sha"], COMPARISON, before)
         if not status or status["state"] != "success":
             return None
-        match = re.fullmatch(
-            rf"https://github.com/{re.escape(self.github.repository)}/actions/runs/(\d+)/attempts/(\d+)",
-            status.get("target_url", ""),
-        )
+        match = self.run_target(status)
         if not match:
             return None
         run = self.github.request(f"actions/runs/{match[1]}/attempts/{match[2]}")
@@ -215,7 +231,7 @@ class Policy:
                 if approved
                 else "Apply the label after reviewing this head"
             ),
-            pr["html_url"],
+            f"https://github.com/{self.github.repository}/actions/runs/{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}",
         )
         if action not in ("labeled", "unlabeled"):
             return

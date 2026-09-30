@@ -78,20 +78,27 @@ class GitHub:
             and run["run_attempt"] == int(attempt)
         )
 
+    def successful_job(self, run_id, attempt, name):
+        jobs = self.request(
+            f"actions/runs/{int(run_id)}/attempts/{int(attempt)}/jobs?per_page=100"
+        )
+        if jobs["total_count"] > 100:
+            raise Failure("Too many jobs to verify test completion")
+        selected = [job for job in jobs["jobs"] if job["name"] == name]
+        return (
+            len(selected) == 1
+            and selected[0]["status"] == "completed"
+            and selected[0]["conclusion"] == "success"
+        )
+
     def successful_browser_run(self, batch):
         props = batch["properties"]
         run = self.request(
             f"actions/runs/{int(props['run_id'])}/attempts/{int(props['attempt'])}"
         )
-        if run["status"] != "completed":
-            return False
-        jobs = self.request(
-            f"actions/runs/{int(props['run_id'])}/attempts/{int(props['attempt'])}/jobs?per_page=100"
+        return run["status"] == "completed" and self.successful_job(
+            props["run_id"], props["attempt"], "test-browser"
         )
-        if jobs["total_count"] > 100:
-            raise Failure("Too many jobs to verify browser test completion")
-        browser = [job for job in jobs["jobs"] if job["name"] == "test-browser"]
-        return len(browser) == 1 and browser[0]["conclusion"] == "success"
 
     def branch(self, batch):
         props = batch["properties"]
