@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,11 @@ class BrowserTest(unittest.TestCase):
             )
 
             def run(expected, **values):
+                for evidence in (work / ".visual").glob("comparison*"):
+                    if evidence.is_dir():
+                        shutil.rmtree(evidence)
+                    else:
+                        evidence.unlink()
                 env = dict(
                     os.environ,
                     PLAYWRIGHT_VISUAL_REPORT=".visual/results.json",
@@ -59,9 +65,14 @@ class BrowserTest(unittest.TestCase):
                 (work / ".visual/snapshots/desktop/one.png").read_bytes(), changed
             )
             run(False, PROBE_CAPTURE_FAILURE="true", VISUAL_APPROVED="true")
+            run(False, PROBE_CAPTURE_ONCE="true", VISUAL_APPROVED="true")
+            self.assertEqual(
+                (work / ".visual/snapshots/desktop/one.png").read_bytes(), changed
+            )
+            run(False, PROBE_CHANGED="true", PROBE_ADD="true")
+            run(True, PROBE_CHANGED="true", PROBE_ADD="true", VISUAL_APPROVED="true")
+            self.assertTrue((work / ".visual/snapshots/desktop/three.png").is_file())
             # Recreate clean completed evidence after the capture-failure probe.
-            import shutil
-
             shutil.rmtree(work / ".visual")
             run(True, VISUAL_SEED="true")
             run(False, PROBE_REMOVE="true")

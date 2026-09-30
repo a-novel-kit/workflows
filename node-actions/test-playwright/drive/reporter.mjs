@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 
 /** Records public Playwright events so visual approval cannot hide another assertion failure. */
 export default class VisualReporter {
@@ -15,7 +16,17 @@ export default class VisualReporter {
   onStepEnd(_test, result, step) {
     if (step.category !== "expect" || !/\btoHaveScreenshot\b/.test(step.title)) return;
     this.screenshots.set(result, (this.screenshots.get(result) ?? 0) + 1);
-    if (step.error) {
+    const message = stripVTControlCharacters(step.error?.message ?? "").replace(/^Error: /, "");
+    const missing = message.startsWith("A snapshot doesn't exist at ") && message.endsWith(".png.");
+    // Stable mismatch evidence distinguishes a reviewable diff from capture/timeout failures.
+    const stableDifference =
+      message.includes("captured a stable screenshot") &&
+      ["-actual.png", "-expected.png"].every((suffix) =>
+        step.attachments.some(
+          (attachment) => attachment.contentType === "image/png" && attachment.name.endsWith(suffix)
+        )
+      );
+    if (step.error && (missing || stableDifference)) {
       const errors = this.visualErrors.get(result) ?? [];
       errors.push(step.error.message);
       this.visualErrors.set(result, errors);

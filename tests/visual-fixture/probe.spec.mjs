@@ -1,10 +1,18 @@
+import { existsSync, writeFileSync } from "node:fs";
+
 import { expect, test } from "playwright/test";
 
 test("captures complete stable screenshots", async ({ page }, info) => {
   const color = process.env.PROBE_CHANGED === "true" ? "blue" : "red";
   await page.setContent(`<body style="margin:0;background:${color}"></body>`);
   if (process.env.PROBE_CAPTURE_FAILURE === "true") await page.close();
-  for (const name of process.env.PROBE_REMOVE === "true" ? ["one"] : ["one", "two"]) {
+  if (process.env.PROBE_CAPTURE_ONCE === "true" && !existsSync("capture-failed")) {
+    writeFileSync("capture-failed", "first capture failed");
+    await page.close();
+  }
+  const names = process.env.PROBE_REMOVE === "true" ? ["one"] : ["one", "two"];
+  if (process.env.PROBE_ADD === "true") names.push("three");
+  for (const name of names) {
     info.annotations.push({ type: "visual-snapshot", description: `desktop/${name}.png` });
     await expect.soft(page).toHaveScreenshot(`${name}.png`);
   }
