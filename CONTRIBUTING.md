@@ -16,6 +16,14 @@ Because everything ships together, an action may depend on another in this repo 
 
 Downstream repos pin every `uses:` to a release tag (never `@master`) so their CI is reproducible, and bump them together on upgrade — Renovate groups them into one `a-novel-kit workflows` update so the versions never drift apart.
 
+## Scripts and tests
+
+Write scripts outside YAML as JavaScript ES modules (`.mjs`) for Node.js 24. Action run blocks may use Bash. Pass action inputs through environment variables so callers' values remain data.
+
+Tests use Node's built-in runner and assertions. After `pnpm install` and `npm ci --prefix node-actions/test-playwright/drive`, install Chromium with `pnpm exec playwright install chromium` and run `a-novel test --type=pnpm -y`. `pnpm lint` checks formatting and composite manifest contexts.
+
+The shared test helpers read run blocks from parsed YAML and provide isolated workspaces and command stubs. Prefer complete-step behavior tests; extract a function only when the full step would add unrelated setup. Keep cases for distinct failures and security boundaries. Avoid assertions that merely restate configuration or duplicate another test's outcome. The shell lint job extracts and checks the Bash actually shipped in YAML.
+
 ## Questions?
 
 [Open an issue](https://github.com/a-novel-kit/workflows/issues) — include logs and environment details.

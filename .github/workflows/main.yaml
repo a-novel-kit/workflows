@@ -32,12 +32,7 @@ jobs:
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
           client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
 
-  # A composite action's whole manifest is expression-templated at load time, input descriptions,
-  # `run:` strings and the bash comments inside them included. The vars, secrets, needs, matrix and
-  # strategy contexts do not exist for a composite action, so a literal `vars.X` template expression
-  # anywhere in one — documentation included — makes the action fail to load for every consumer.
-  # Caller workflows under .github/workflows may use those contexts; a composite manifest may not.
-  # This is a main.yaml job, so repocfg makes it a required check on this repo.
+  # Validate manifests before a release reaches downstream consumers.
   lint-action-manifests:
     runs-on: ubuntu-latest
     permissions:
@@ -46,15 +41,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # The detector lives in a script so tests/lint-action-manifests.sh runs the shipped code
-      # against fixtures, including the violations this gate exists to catch.
-      - name: No composite-illegal expression contexts in action manifests
-        shell: bash
-        run: bash .github/scripts/lint-action-manifests.sh .
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Validate composite expression contexts
+        run: node .github/scripts/lint-action-manifests.mjs .
 
-  # The landing-saga actions are bash, and their freeze, clear and hold decisions are too costly to
-  # get wrong to leave unexercised. Each suite in tests/ extracts the functions it covers straight out
-  # of its action manifest and runs them against stubbed network leaves, offline and deterministic.
   test-actions:
     runs-on: ubuntu-latest
     permissions:
@@ -75,38 +70,10 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
           npm ci --prefix node-actions/test-playwright/drive --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
-      - name: Verify Drive retention and native screenshot approvals
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --test tests/drive-*.test.mjs
-      - name: Run the action test suites
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          suites=(tests/*.sh)
-          if [ ${#suites[@]} -eq 0 ]; then
-            echo "::error::no test suites found under tests/ — the job would pass vacuously"
-            exit 1
-          fi
-          fail=0
-          for suite in "${suites[@]}"; do
-            echo "::group::$suite"
-            bash "$suite" || fail=1
-            echo "::endgroup::"
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::at least one action test suite failed"
-            exit 1
-          fi
-          echo "✓ ${#suites[@]} action test suite(s) passed."
+      - name: Run action regression suites
+        run: pnpm test
 
-  # Shellcheck the repo's bash via the shared generic-actions/lint-shell action (dogfooded here
-  # with a relative path). The tests/ suites embed each action's shipped functions verbatim (see
-  # test-actions above), so linting them lints the saga logic itself — the errexit-under-`||`,
-  # pipefail and `local`-scoping semantics the landing decisions turn on. Gating: the adoption
-  # backlog was cleared in #320, so any new finding fails the check.
+  # Check the shipped Bash run blocks, which are embedded in YAML.
   lint-shell:
     runs-on: ubuntu-latest
     permissions:
@@ -115,10 +82,21 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Extract Bash steps from YAML
+        env:
+          SHELL_DIR: ${{ runner.temp }}/workflow-shell
+        run: node .github/scripts/extract-shell.mjs "$SHELL_DIR"
       - uses: $/generic-actions/lint-shell
         with:
           # renovate: datasource=github-releases depName=koalaman/shellcheck
           version: "0.11.0"
+          paths: ${{ runner.temp }}/workflow-shell/*.sh
 
   # The repo that ships the audit was the one repo not running it, so its own workflows went
   # unchecked until a fleet sweep ran zizmor here by hand. Dogfooded with a relative path, against

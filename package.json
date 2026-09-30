@@ -4,17 +4,16 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "format": "pnpm run format:prettier",
-    "format:prettier": "prettier --write . --config prettier.config.js",
-    "lint": "pnpm run lint:prettier",
-    "lint:prettier": "prettier --check . --config prettier.config.js",
+    "format": "prettier --write . --config prettier.config.js",
+    "lint": "prettier --check . --config prettier.config.js && node .github/scripts/lint-action-manifests.mjs .",
     "prepublish:doc": "a-novel publish stamp 'a-novel-kit/workflows/[^@]+@' '*/*/action.yaml' && a-novel publish stamp 'github>a-novel-kit/workflows//renovate/base#' 'generic-actions/renovate/config.json'",
-    "publish:patch": "pnpm version patch --no-git-tag-version && pnpm run prepublish:doc && git add -A && V=$(node -p \"require('./package.json').version\") && git commit -qm \"$V\" && git tag \"v$V\" && git push origin HEAD && git push origin \"v$V\""
+    "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "playwright": "1.63.0",
     "prettier": "^3.6.2",
-    "prettier-plugin-packagejson": "^3.0.0"
+    "prettier-plugin-packagejson": "^3.0.0",
+    "yaml": "2.9.1"
   },
   "packageManager": "pnpm@12.7.0"
 }

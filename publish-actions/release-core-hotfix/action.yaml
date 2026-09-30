@@ -1,7 +1,7 @@
 name: release core (hotfix)
 description: >
   Cut a HOTFIX release from an already-released line — the exception-path sibling of release-core.
-  It reuses release-core's bump.cjs + plan.cjs UNCHANGED (the version math and tag plan are
+  It reuses release-core's bump.mjs + plan.mjs UNCHANGED (the version math and tag plan are
   identical) but drops the three default-branch assumptions baked into release-core: the
   default-branch guard, the default-branch checkout, and the push-to-the-default-branch. Instead it
   checks out an ephemeral branch that was cut from a release TAG (carrying the fix on top of the
@@ -29,7 +29,7 @@ inputs:
     required: true
     description: >
       The ephemeral hotfix branch to cut from (e.g. hotfix/vX.Y.x), already carrying the fix on top
-      of the baseline release tag. bump.cjs derives the version from THIS ref's package.json, so it
+      of the baseline release tag. bump.mjs derives the version from THIS ref's package.json, so it
       must descend from a real release tag — hard-asserted below (the baseline vX.Y.Z tag must exist).
   client_id:
     required: true
@@ -79,7 +79,7 @@ runs:
     # Bot-authenticated checkout of the ephemeral branch named by the `ref` input, with full history
     # and tags so the baseline assert and the tag resolve.
     # The checkout goes into a sub-path: a root checkout replaces $GITHUB_WORKSPACE with the
-    # old-baseline tree, breaking this action's own sibling read of ../release-core/*.cjs, absent on
+    # old-baseline tree, breaking this action's own sibling read of ../release-core/*.mjs, absent on
     # old lines, and any local `./` action a caller runs after the cut. With a sub-path the root
     # workspace stays on the caller's ref and $GITHUB_ACTION_PATH/../release-core resolves to the
     # current scripts.
@@ -125,10 +125,9 @@ runs:
         CLI_VERSION: ${{ inputs.cli_version }}
       run: |
         go install "github.com/a-novel-kit/stack/cli/cmd/a-novel@v${CLI_VERSION#v}"
-        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
     # working-directory __hotfix puts bump, plan and git on the ephemeral tree. $GITHUB_ACTION_PATH
-    # stays absolute, pointing at this action's dir in the untouched root, so $RC/*.cjs are the
+    # stays absolute, pointing at this action's dir in the untouched root, so $RC/*.mjs are the
     # current scripts.
     - name: Cut hotfix
       id: cut
@@ -142,7 +141,7 @@ runs:
       run: |
         set -euo pipefail
 
-        # release-core owns bump.cjs and plan.cjs, reused from this action's sibling dir through the
+        # release-core owns bump.mjs and plan.mjs, reused from this action's sibling dir through the
         # absolute $GITHUB_ACTION_PATH, which the __hotfix working-directory does not affect, so the
         # current scripts run whatever tree the ephemeral checkout holds. A hotfix is always a patch
         # bump of its line.
@@ -152,7 +151,7 @@ runs:
         git config user.name "${APP_SLUG}[bot]"
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
-        # Assert the ephemeral branch is cut from a real release. bump.cjs derives the next version
+        # Assert the ephemeral branch is cut from a real release. bump.mjs derives the next version
         # from package.json at this ref, so the baseline vX.Y.Z it patches from has to be a released
         # tag and this HEAD has to descend from it. A branch cut from anywhere else yields a bogus
         # tag.
@@ -167,7 +166,7 @@ runs:
         fi
 
         # Patch-bump package.json (root + workspace members).
-        node "$RC/bump.cjs"
+        node "$RC/bump.mjs"
         version=$(node -p "require('./package.json').version")
 
         # Refresh doc version refs where a prepublish:doc script exists. The env var skips pnpm's
@@ -177,7 +176,7 @@ runs:
         fi
 
         # Stamp in-repo version refs and compute the tags (root vX.Y.Z plus any sub-module tags).
-        tags=$(node "$RC/plan.cjs")
+        tags=$(node "$RC/plan.mjs")
         root_tag="v${version}"
 
         # Refuse when any computed tag already exists, which means a stale-baseline cut or a re-run.
@@ -213,11 +212,14 @@ runs:
         # carries it to the remote.
         git add -A
         git commit -m "$version"
+        tag_refs=()
         while IFS= read -r t; do
           [ -n "$t" ] || continue
           git tag "$t"
-          git push origin "refs/tags/$t"
+          tag_refs+=("refs/tags/$t")
         done <<< "$tags"
+
+        git push --atomic origin "${tag_refs[@]}"
 
         # --latest=false keeps a patch to an old line from becoming the repo's "Latest" release over
         # a newer version.

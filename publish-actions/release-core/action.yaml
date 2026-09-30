@@ -2,7 +2,7 @@ name: release core
 description: >
   Cut a release in CI: bump the version (package.json, workspace-aware), stamp
   in-repo version refs, commit, push the tags (a root vX.Y.Z plus any sub-module
-  tags — see plan.cjs), and create the GitHub Release. The release-type selector
+  tags — see plan.mjs), and create the GitHub Release. The release-type selector
   and the protected `release` environment live in the caller.
 
 inputs:
@@ -55,9 +55,12 @@ runs:
     # mutated: a bump tag pushed from a feature branch names the wrong commit.
     - name: Guard — default branch only
       shell: bash
+      env:
+        REF_NAME: ${{ github.ref_name }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
-        if [ "${{ github.ref_name }}" != "${{ github.event.repository.default_branch }}" ]; then
-          echo "::error::releases run from the default branch (${{ github.event.repository.default_branch }}) only — got '${{ github.ref_name }}'"
+        if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+          echo "::error::releases run from the default branch ($DEFAULT_BRANCH) only — got '$REF_NAME'"
           exit 1
         fi
 
@@ -118,7 +121,6 @@ runs:
         CLI_VERSION: ${{ inputs.cli_version }}
       run: |
         go install "github.com/a-novel-kit/stack/cli/cmd/a-novel@v${CLI_VERSION#v}"
-        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
     - name: Cut release
       id: cut
@@ -142,8 +144,8 @@ runs:
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
         # Version bump across package.json at the root and in every workspace member.
-        # Plain Node runs it, which skips pnpm's cold-store supply-chain pass. See bump.cjs.
-        node "$GITHUB_ACTION_PATH/bump.cjs"
+        # Plain Node runs it, which skips pnpm's cold-store supply-chain pass. See bump.mjs.
+        node "$GITHUB_ACTION_PATH/bump.mjs"
 
         # Refresh doc version refs through `a-novel publish stamp` where that script exists.
         # The env var skips pnpm's pre-run install, which would need npm-registry auth.
@@ -154,8 +156,8 @@ runs:
         version=$(node -p "require('./package.json').version")
 
         # Stamp in-repo version refs and compute the tags: the root vX.Y.Z plus any
-        # sub-module tags. A new ecosystem is added in plan.cjs.
-        tags=$(node "$GITHUB_ACTION_PATH/plan.cjs")
+        # sub-module tags. plan.mjs also stamps self-references to the new release.
+        tags=$(node "$GITHUB_ACTION_PATH/plan.mjs" --self-pins)
         root_tag="v${version}"
 
         {
@@ -170,21 +172,6 @@ runs:
           printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
         } | tee -a "$GITHUB_STEP_SUMMARY"
 
-        # Rewrite every self-reference to this repo's own actions and workflows
-        # (owner/repo/...@vX.Y.Z) to the version being cut, so the released tag runs its own siblings.
-        # A reusable workflow cannot use a relative ref, so without this its sibling pins trail every
-        # release: Renovate bumps them, but each bump needs its own release, leaving the tag one
-        # behind. Only self-refs are rewritten; cross-repo pins stay Renovate-managed. This is a no-op
-        # in a repo that does not self-reference, and is discarded under dry-run.
-        repo_esc=$(printf '%s' "$GITHUB_REPOSITORY" | sed 's/\./\\./g')
-        selfpin_files=$(git ls-files '*.yaml' '*.yml' | xargs -r grep -lE "${repo_esc}/[A-Za-z0-9._/-]+@v[0-9]+\.[0-9]+\.[0-9]+" 2>/dev/null || true)
-        if [ -n "$selfpin_files" ]; then
-          printf '%s\n' "$selfpin_files" | while IFS= read -r f; do
-            sed -i -E "s#(${repo_esc}/[A-Za-z0-9._/-]+)@v[0-9]+\.[0-9]+\.[0-9]+#\1@v${version}#g" "$f"
-          done
-          { echo "Self-pins synced → v${version}:"; printf '%s\n' "$selfpin_files" | sed 's/^/- /'; } | tee -a "$GITHUB_STEP_SUMMARY"
-        fi
-
         if [ "$DRY_RUN" = "true" ]; then
           echo "[dry-run] no commit, tag, push, or release." | tee -a "$GITHUB_STEP_SUMMARY"
           git checkout -- . 2>/dev/null || true
@@ -193,12 +180,13 @@ runs:
 
         git add -A
         git commit -m "$version"
-        git push origin "HEAD:$BRANCH"
+        tag_refs=()
         while IFS= read -r t; do
           [ -n "$t" ] || continue
           git tag "$t"
-          git push origin "refs/tags/$t"
+          tag_refs+=("refs/tags/$t")
         done <<< "$tags"
+        git push --atomic origin "HEAD:$BRANCH" "${tag_refs[@]}"
         gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes
         echo "- ✓ released $(printf '%s\n' "$tags" | grep -c .) tag(s), root \`$root_tag\`" | tee -a "$GITHUB_STEP_SUMMARY"

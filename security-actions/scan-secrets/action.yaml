@@ -78,48 +78,5 @@ runs:
           exit 1
         fi
 
-        # errexit is disabled around the scan deliberately: gitleaks exits
-        # non-zero on findings and this step decides gating from that code.
-        set +e
-        gitleaks dir . --config "$config" --redact --exit-code 1 --verbose | tee /tmp/gitleaks.out
-        code=${PIPESTATUS[0]}
-        set -e
-
-        if [ "$code" = "0" ]; then
-          echo "gitleaks: no leaks found" >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-        fi
-
-        # --exit-code 1 makes 1 mean leaks. Anything else is the scan failing to run, and reporting
-        # that as leaks sends a reviewer hunting for a credential that was never detected.
-        if [ "$code" != "1" ]; then
-          echo "::error::gitleaks exited $code — the scan did not complete. This is not a findings report."
-          {
-            echo "### gitleaks did not run"
-            echo ""
-            echo '```'
-            tail -c 20000 /tmp/gitleaks.out
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$code"
-        fi
-
-        {
-          echo "### gitleaks findings"
-          echo ""
-          echo "Values are redacted. Inspect each one before allowlisting: scope an allowlist to the"
-          echo "exact value or path, never to a whole rule, so a real credential in the same file"
-          echo "still fails."
-          echo ""
-          echo '```'
-          tail -c 60000 /tmp/gitleaks.out
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
-
-        if [ "$ADVISORY" = "true" ]; then
-          echo "::warning::gitleaks reported findings; advisory mode, not failing the check."
-          exit 0
-        fi
-
-        echo "::error::gitleaks reported findings."
-        exit "$code"
+        node "$ACTION_PATH/../run-scan.mjs" gitleaks \
+          gitleaks dir . --config "$config" --redact --exit-code 1 --verbose

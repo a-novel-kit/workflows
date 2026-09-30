@@ -17,4 +17,4 @@ runs:
       run: gh pr review --approve "$PR_URL"
       env:
         PR_URL: ${{ inputs.pull_request }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GH_TOKEN: ${{ inputs.github_token }}
