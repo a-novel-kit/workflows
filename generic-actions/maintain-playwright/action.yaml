@@ -10,13 +10,13 @@ inputs:
     description: Trusted default-branch maintenance Workload Identity provider.
   service_account:
     required: true
-    description: Maintenance service account with Manager access to the dedicated test Shared Drive.
+    description: Trusted service account able to publish and permanently delete batches in both configured folders.
   references_folder:
     required: true
-    description: Platform references folder ID in the dedicated test Shared Drive.
+    description: Platform references folder ID inside a Shared Drive.
   results_folder:
     required: true
-    description: Sibling platform results folder ID in the dedicated test Shared Drive.
+    description: Sibling platform results folder ID inside a Shared Drive.
 
 runs:
   using: composite

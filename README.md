@@ -143,7 +143,7 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 `coverage/browser/lcov.info` and exposes its `artifact-id` for Codecov. It retains `playwright-report/`,
 `test-results/` and `integration-services.log` for seven days, including when tests fail. With Drive
 configured, browser evidence instead stays in each platform's private reference and results folders in a
-dedicated Shared Drive: the latest successful
+Shared Drive: the latest successful
 master reference and one completed batch per live branch. Coverage continues using GitHub artifacts.
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the

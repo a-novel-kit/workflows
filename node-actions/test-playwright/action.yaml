@@ -55,11 +55,11 @@ inputs:
   references_folder:
     required: false
     default: ""
-    description: Platform references folder ID in the dedicated test Shared Drive.
+    description: Platform references folder ID inside a Shared Drive.
   results_folder:
     required: false
     default: ""
-    description: Sibling platform results folder ID in the dedicated test Shared Drive.
+    description: Sibling platform results folder ID inside a Shared Drive.
   seed_sha:
     required: false
     default: ""
