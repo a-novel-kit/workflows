@@ -9,9 +9,9 @@ export function violations(source) {
   const hits = [];
   // Quoted expression strings may contain braces or context names as ordinary text.
   for (const expression of source.matchAll(/\$\{\{((?:'(?:[^']|'')*'|[^'])*?)\}\}/g)) {
-    const tokens = /'(?:[^']|'')*'|(?<![\w.])(?:vars|secrets|needs|matrix|strategy)\s*(?=[.\[])/gi;
+    const tokens = /'(?:[^']|'')*'|(?<![\w.-])(?:vars|secrets|needs|matrix|strategy)(?![\w-])/gi;
     for (const token of expression[1].matchAll(tokens)) {
-      if (token[0].startsWith("'")) continue;
+      if (token[0].startsWith("'") || expression[1].slice(0, token.index).trimEnd().endsWith(".")) continue;
       const line = source.slice(0, expression.index + 3 + token.index).split("\n").length;
       hits.push({ line, context: token[0].trim() });
     }

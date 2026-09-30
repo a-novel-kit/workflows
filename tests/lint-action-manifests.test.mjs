@@ -16,6 +16,8 @@ test("composite contexts respect expression boundaries, quoting and access synta
     "inputs.flag ||\n        vars.FLAG",
     "format('}}', secrets.TOKEN)",
     "VARS.FLAG",
+    "toJSON(vars)",
+    "needs",
   ])
     assert.equal(violations(composite(`\u0024{{ ${expression} }}`)).length, 1, expression);
   for (const body of [
@@ -23,6 +25,7 @@ test("composite contexts respect expression boundaries, quoting and access synta
     "${{ inputs.flag }} ${{ github.repository }}",
     "${{ inputs.myvars.thing }}",
     "${{ inputs.vars }}",
+    "${{ inputs . vars }}",
     "${{ format('vars.FLAG', inputs.flag) }}",
     "${{ 'it''s secrets.TOKEN' }}",
   ])
