@@ -78,5 +78,6 @@ runs:
           exit 1
         fi
 
+        # Reserve 10 for findings; gitleaks uses 1 for configuration and execution errors.
         node "$ACTION_PATH/../run-scan.mjs" gitleaks \
-          gitleaks dir . --config "$config" --redact --exit-code 1 --verbose
+          gitleaks dir . --config "$config" --redact --exit-code 10 --verbose

@@ -1,4 +1,4 @@
-// Scanners agree on 0 = clean, 1 = findings; execution failures must never be advisory.
+// Advisory mode waives only each scanner's findings codes; execution failures still fail.
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
@@ -31,7 +31,7 @@ for (let attempt = 1; attempt <= 3; attempt++) {
 const summary = (text) => appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`);
 if (code === 0) summary(`${name}: clean`);
 else {
-  const failed = code !== 1;
+  const failed = !{ semgrep: [1], gitleaks: [10], zizmor: [11, 12, 13, 14] }[name]?.includes(code);
   const advisory = !failed && process.env.ADVISORY === "true";
   const status = failed ? "did not run" : "findings";
   const note =

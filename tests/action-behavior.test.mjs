@@ -43,29 +43,43 @@ test("generation retries transient failures and propagates exhaustion", (t) => {
   }
 });
 
-for (const [action, name, tool, env] of [
-  ["lint-semgrep", "semgrep", "docker", { RULESET: "service", SEMGREP_VERSION: "test" }],
-  ["scan-secrets", "scan working tree", "gitleaks", { CONFIG: "" }],
-  ["lint-workflows", "zizmor", "docker", { CONFIG: "", ZIZMOR_VERSION: "test" }],
+for (const [action, name, tool, env, findings] of [
+  ["lint-semgrep", "semgrep", "docker", { RULESET: "service", SEMGREP_VERSION: "test" }, [1]],
+  ["scan-secrets", "scan working tree", "gitleaks", { CONFIG: "" }, [10]],
+  ["lint-workflows", "zizmor", "docker", { CONFIG: "", ZIZMOR_VERSION: "test" }, [11, 12, 13, 14]],
 ])
   test(`${action}: advisory waives findings, never a failed scanner`, (t) => {
     const w = workspace(t);
     w.write(".github/workflows/main.yaml", "name: fixture\n");
-    w.stub(tool, "console.error('scanner diagnostic'); process.exit(Number(process.env.SCANNER_EXIT));");
+    w.stub(
+      tool,
+      `
+      const args = process.argv.slice(2), index = args.indexOf('--exit-code');
+      const code = process.env.SCANNER_EXIT === 'findings' ? (index < 0 ? 1 : Number(args[index + 1])) : Number(process.env.SCANNER_EXIT);
+      console.error('scanner diagnostic'); process.exit(code);
+    `
+    );
     const script = step(`security-actions/${action}/action.yaml`, name);
     const vars = { ...env, ACTION_PATH: join(root, "security-actions", action) };
     for (const [code, advisory, expected] of [
       [0, false, 0],
-      [1, false, 1],
-      [1, true, 0],
-      [2, true, 2],
+      ...findings.flatMap((code) => [
+        [code, false, code],
+        [code, true, 0],
+      ]),
+      ...[1, 2, 3].filter((code) => !findings.includes(code)).map((code) => [code, true, code]),
     ]) {
       w.write("summary", "");
       assert.equal(
-        w.bash(script, { ...vars, ADVISORY: String(advisory), SCANNER_EXIT: String(code) }).status,
+        w.bash(script, {
+          ...vars,
+          ADVISORY: String(advisory),
+          SCANNER_EXIT: tool === "gitleaks" && code === 10 ? "findings" : String(code),
+        }).status,
         expected
       );
       assert.match(w.read("summary"), code === 0 ? /clean/ : /scanner diagnostic/);
+      if (code !== 0) assert.match(w.read("summary"), findings.includes(code) ? / findings/ : / did not run/);
     }
     const invalid = action === "lint-semgrep" ? { RULESET: "missing" } : { CONFIG: "missing" };
     assert.equal(w.bash(script, { ...vars, ...invalid, ADVISORY: "false", SCANNER_EXIT: "0" }).status, 1);
