@@ -10,7 +10,7 @@ description: >
 inputs:
   client_id:
     required: true
-    description: Client ID of a GitHub App with the contents read and pull-requests write permissions.
+    description: Client ID of a GitHub App with the pull-requests write permission.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -70,8 +70,8 @@ runs:
         fi
         echo "@${ACTOR} is a repo admin — recording an [Agent] approval." | tee -a "$GITHUB_STEP_SUMMARY"
 
-    # Mint a token scoped to what an approval needs: read the repo, so the nested
-    # approve-bot can `gh pr checkout`, plus write the PR review.
+    # Mint a token scoped to writing the PR review. The nested action addresses
+    # the pull request directly, so it does not need a checkout or contents access.
     - name: Mint approval token
       id: token
       uses: actions/create-github-app-token@v3
@@ -79,17 +79,7 @@ runs:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
-        permission-contents: read
         permission-pull-requests: write
-
-    # approve-bot runs `gh pr checkout`, so a base checkout must exist first. The
-    # minted token keeps this off the default token's contents permission, and
-    # persist-credentials:false keeps it out of the git config — approve-bot passes
-    # it to gh explicitly.
-    - uses: actions/checkout@v7
-      with:
-        token: ${{ steps.token.outputs.token }}
-        persist-credentials: false
 
     - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.32.0
       with:

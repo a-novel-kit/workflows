@@ -74,7 +74,7 @@ SemVer release.
 
 | Action                   | Purpose                                                                                                           |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `approve-bot`            | Auto-approve a PR (skips if already approved); trusted users only.                                                |
+| `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                               |
 | `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
 | `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
 | `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
