@@ -21,14 +21,17 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: "24"
+        package-manager-cache: false
     - name: Install the Drive client
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        python3 -m venv "$RUNNER_TEMP/playwright-drive-client"
-        "$RUNNER_TEMP/playwright-drive-client/bin/pip" install --disable-pip-version-check -r "$ACTION_PATH/../../node-actions/test-playwright/drive/requirements.txt"
+        npm ci --prefix "$ACTION_PATH/../../node-actions/test-playwright/drive" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
     - name: Authenticate trusted cleanup
       id: auth
       uses: google-github-actions/auth@v3
@@ -49,4 +52,4 @@ runs:
         RESULTS_FOLDER: ${{ inputs.results_folder }}
       run: |
         set -euo pipefail
-        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/../../node-actions/test-playwright/drive/storage.py" cleanup
+        node "$ACTION_PATH/../../node-actions/test-playwright/drive/storage.mjs" cleanup

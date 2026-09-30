@@ -74,13 +74,12 @@ jobs:
           set -euo pipefail
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
-          python3 -m venv "$RUNNER_TEMP/drive-tests"
-          "$RUNNER_TEMP/drive-tests/bin/pip" install --disable-pip-version-check -r node-actions/test-playwright/drive/requirements.txt
+          npm ci --prefix node-actions/test-playwright/drive --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
       - name: Verify Drive retention and native screenshot approvals
         shell: bash
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/drive-tests/bin/python" -m unittest discover -s tests -p '*_test.py' -v
+          node --test tests/drive-*.test.mjs
       - name: Run the action test suites
         shell: bash
         run: |

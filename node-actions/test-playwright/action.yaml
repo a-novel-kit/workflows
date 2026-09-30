@@ -110,8 +110,7 @@ runs:
       run: |
         set -euo pipefail
         : "${CI_ACCOUNT:?Missing drive_ci_account}" "${MAINTENANCE_PROVIDER:?Missing drive_maintenance_provider}" "${MAINTENANCE_ACCOUNT:?Missing drive_maintenance_account}" "${REFERENCES_FOLDER:?Missing references_folder}" "${RESULTS_FOLDER:?Missing results_folder}"
-        python3 -m venv "$RUNNER_TEMP/playwright-drive-client"
-        "$RUNNER_TEMP/playwright-drive-client/bin/pip" install --disable-pip-version-check -r "$ACTION_PATH/drive/requirements.txt"
+        npm ci --prefix "$ACTION_PATH/drive" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
     - name: Authenticate candidate Drive access
       id: drive-auth
       if: ${{ inputs.drive_ci_provider != '' }}
@@ -136,7 +135,7 @@ runs:
         SEED_SHA: ${{ inputs.seed_sha }}
       run: |
         set -euo pipefail
-        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/drive/storage.py" download
+        node "$ACTION_PATH/drive/storage.mjs" download
     - name: Check approval for this head
       if: ${{ inputs.drive_ci_provider != '' }}
       shell: bash
@@ -145,7 +144,7 @@ runs:
         GH_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
-        python3 "$ACTION_PATH/drive/policy.py" allow
+        node "$ACTION_PATH/drive/policy.mjs" allow
     - name: Run Playwright journeys
       id: journeys
       shell: bash
@@ -156,7 +155,7 @@ runs:
       run: |
         set -euo pipefail
         if [ -n "$DRIVE_PROVIDER" ]; then
-          python3 "$ACTION_PATH/drive/runner.py" "$TEST_ACTION"
+          node "$ACTION_PATH/drive/runner.mjs" "$TEST_ACTION"
         else
           pnpm run "$TEST_ACTION"
         fi
@@ -196,11 +195,11 @@ runs:
       run: |
         set -euo pipefail
         if [ "$JOURNEY_OUTCOME" != success ]; then
-          python3 "$ACTION_PATH/drive/runner.py" --diagnostics
+          node "$ACTION_PATH/drive/runner.mjs" --diagnostics
         else
-          python3 "$ACTION_PATH/drive/runner.py" --archive
+          node "$ACTION_PATH/drive/runner.mjs" --archive
         fi
-        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/drive/storage.py" upload
+        node "$ACTION_PATH/drive/storage.mjs" upload
     - name: Record the visual comparison result
       if: ${{ always() && steps.reference.outcome == 'success' }}
       shell: bash
@@ -210,7 +209,7 @@ runs:
         VISUAL_OUTCOME: ${{ steps.journeys.outcome == 'success' && steps.drive-upload.outcome == 'success' && 'success' || 'failure' }}
       run: |
         set -euo pipefail
-        python3 "$ACTION_PATH/drive/policy.py" record
+        node "$ACTION_PATH/drive/policy.mjs" record
     - name: Authenticate master reference staging
       id: reference-auth
       if: ${{ success() && inputs.drive_ci_provider != '' && github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -234,7 +233,7 @@ runs:
         BATCH_ARCHIVE: .visual/batch.tar
       run: |
         set -euo pipefail
-        "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/drive/storage.py" stage
+        node "$ACTION_PATH/drive/storage.mjs" stage
     - name: Remove integration services and data
       id: cleanup
       if: ${{ always() && inputs.compose_file != '' }}
