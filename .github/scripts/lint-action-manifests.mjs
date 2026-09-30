@@ -7,14 +7,24 @@ import { parse } from "yaml";
 export function violations(source) {
   if (parse(source)?.runs?.using !== "composite") return [];
   const hits = [];
-  // Quoted expression strings may contain braces or context names as ordinary text.
-  for (const expression of source.matchAll(/\$\{\{((?:'(?:[^']|'')*'|[^'])*?)\}\}/g)) {
-    const tokens = /'(?:[^']|'')*'|(?<![\w.-])(?:vars|secrets|needs|matrix|strategy)(?![\w-])/gi;
-    for (const token of expression[1].matchAll(tokens)) {
-      if (token[0].startsWith("'") || expression[1].slice(0, token.index).trimEnd().endsWith(".")) continue;
-      const line = source.slice(0, expression.index + 3 + token.index).split("\n").length;
-      hits.push({ line, context: token[0].trim() });
+  const unavailable = new Set(["vars", "secrets", "needs", "matrix", "strategy"]);
+  const openings = /\$\{\{/g;
+  // Consume quoted strings as single tokens; nested repetition can backtrack exponentially.
+  const tokens = /'(?:[^']|'')*'|[A-Za-z_][\w-]*|\}\}|[^\s]/g;
+  let line = 1,
+    counted = 0;
+  while (openings.exec(source)) {
+    tokens.lastIndex = openings.lastIndex;
+    let previous, token;
+    while ((token = tokens.exec(source)) && token[0] !== "}}") {
+      if (previous !== "." && unavailable.has(token[0].toLowerCase())) {
+        line += source.slice(counted, token.index).split("\n").length - 1;
+        counted = token.index;
+        hits.push({ line, context: token[0] });
+      }
+      previous = token[0];
     }
+    openings.lastIndex = token ? tokens.lastIndex : source.length;
   }
   return hits;
 }
