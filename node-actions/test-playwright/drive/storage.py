@@ -1,4 +1,4 @@
-"""Store Playwright batches in dedicated Shared Drives using short-lived CI credentials."""
+"""Store Playwright batches in platform folders in a Shared Drive using short-lived CI credentials."""
 
 import hashlib
 import json
@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 
 PROTOCOL = "playwright-v1"
-FIELDS = "id,name,size,md5Checksum,properties,createdTime"
+FIELDS = "id,name,size,md5Checksum,properties,createdTime,parents"
 CHUNK = 16 * 1024 * 1024
 
 
@@ -143,18 +143,65 @@ class Drive:
         ).files()
         self.repository = repository
 
-    def batches(self, drive_id):
+    def validate_folders(self, references, results, *, maintenance=False):
+        """Require sibling Shared Drive folders with a read-only candidate reference boundary."""
+        if references == results or any(
+            not re.fullmatch(r"[\w-]+", value) for value in (references, results)
+        ):
+            raise Failure("Two distinct platform folder IDs are required")
+        folders = [
+            self.files.get(
+                fileId=folder_id,
+                supportsAllDrives=True,
+                fields="id,mimeType,driveId,parents,trashed,capabilities",
+            ).execute(num_retries=5)
+            for folder_id in (references, results)
+        ]
+        if any(
+            folder.get("mimeType") != "application/vnd.google-apps.folder"
+            or folder.get("trashed")
+            or not folder.get("driveId")
+            or len(folder.get("parents", [])) != 1
+            or folder["parents"] == [folder["driveId"]]
+            or not folder.get("capabilities", {}).get("canListChildren")
+            for folder in folders
+        ) or any(
+            folders[0].get(field) != folders[1].get(field)
+            for field in ("driveId", "parents")
+        ):
+            raise Failure(
+                "Use accessible references/results folders under one platform folder in a Shared Drive"
+            )
+        reference_access, result_access = [folder["capabilities"] for folder in folders]
+        if not result_access.get("canAddChildren"):
+            raise Failure("The identity cannot upload platform results")
+        if maintenance:
+            if not all(
+                access.get("canAddChildren") and access.get("canDeleteChildren")
+                for access in (reference_access, result_access)
+            ):
+                raise Failure(
+                    "Maintenance must publish and permanently delete platform batches"
+                )
+        elif reference_access.get("canAddChildren") or reference_access.get(
+            "canDeleteChildren"
+        ):
+            raise Failure(
+                "Candidate CI must have read-only access to the reference folder"
+            )
+
+    def batches(self, folder_id):
         page = None
         batches = []
         while True:
             result = self.files.list(
-                corpora="drive",
-                driveId=drive_id,
+                # Folder-only shares do not make CI a Shared Drive member.
+                corpora="user",
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True,
                 pageSize=1000,
                 pageToken=page,
-                q=f"trashed = false and properties has {{ key='protocol' and value='{PROTOCOL}' }} and properties has {{ key='repository' and value='{self.repository}' }}",
+                q=f"'{folder_id}' in parents and trashed = false and properties has {{ key='protocol' and value='{PROTOCOL}' }} and properties has {{ key='repository' and value='{self.repository}' }}",
                 fields=f"nextPageToken,incompleteSearch,files({FIELDS})",
             ).execute(num_retries=5)
             if result.get("incompleteSearch"):
@@ -182,7 +229,7 @@ class Drive:
         ).execute(num_retries=5)
         batch["properties"] = props
 
-    def upload(self, drive_id, archive, props, identity_file):
+    def upload(self, folder_id, archive, props, identity_file):
         from googleapiclient.errors import HttpError
         from googleapiclient.http import MediaFileUpload
 
@@ -197,7 +244,7 @@ class Drive:
         metadata = {
             "id": file_id,
             "name": f"playwright-{props['run_number']}-{props['attempt']}.tar",
-            "parents": [drive_id],
+            "parents": [folder_id],
             "properties": dict(
                 props, protocol=PROTOCOL, repository=self.repository, state="pending"
             ),
@@ -226,7 +273,9 @@ class Drive:
             or int(batch.get("size", -1)) != Path(archive).stat().st_size
         ):
             raise Failure("Uploaded batch checksum or size does not match")
-        if dict(batch.get("properties", {}), state="pending") != metadata["properties"]:
+        if dict(batch.get("properties", {}), state="pending") != metadata[
+            "properties"
+        ] or batch.get("parents") != [folder_id]:
             raise Failure("Uploaded batch provenance does not match")
         return batch
 
@@ -254,7 +303,7 @@ def current_reference(batches):
 
 
 def promote(drive, github, references_id, batch):
-    """Promote only a complete successful master upload from the protected references Drive."""
+    """Promote only a complete successful master upload from the protected references folder."""
     props = batch["properties"]
     if not github.successful_browser_run(batch) or not github.current(
         props["sha"], props["run_id"], props["attempt"]
@@ -337,14 +386,11 @@ def main():
     repository = os.environ["GITHUB_REPOSITORY"]
     github = GitHub(repository, os.environ["GH_TOKEN"])
     drive = Drive(os.environ["DRIVE_TOKEN"], repository)
-    references = os.environ["REFERENCES_DRIVE"]
-    results = os.environ["RESULTS_DRIVE"]
-    if (
-        not re.fullmatch(r"[\w-]+", references)
-        or not re.fullmatch(r"[\w-]+", results)
-        or references == results
-    ):
-        raise Failure("Two distinct Shared Drive IDs are required")
+    references = os.environ["REFERENCES_FOLDER"]
+    results = os.environ["RESULTS_FOLDER"]
+    drive.validate_folders(
+        references, results, maintenance=mode in ("stage", "cleanup")
+    )
     workspace = Path(os.environ["RUNNER_TEMP"]) / "playwright-drive"
     workspace.mkdir(exist_ok=True)
     if mode == "download":

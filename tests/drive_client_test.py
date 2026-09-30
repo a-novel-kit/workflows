@@ -26,6 +26,80 @@ class ClientTest(unittest.TestCase):
         ).files()
         return drive
 
+    def folders(self, maintenance=False):
+        return [
+            {
+                "id": name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "driveId": "shared-drive",
+                "parents": ["platform-studio"],
+                "trashed": False,
+                "capabilities": {
+                    "canListChildren": True,
+                    "canAddChildren": maintenance or name == "results",
+                    "canDeleteChildren": maintenance,
+                },
+            }
+            for name in ("references", "results")
+        ]
+
+    def test_folder_only_candidate_and_trusted_maintenance_access(self):
+        for maintenance in (False, True):
+            with self.subTest(maintenance=maintenance):
+                drive = self.drive(
+                    [
+                        ({"status": "200"}, json.dumps(folder).encode())
+                        for folder in self.folders(maintenance)
+                    ]
+                )
+                drive.validate_folders("references", "results", maintenance=maintenance)
+
+    def test_rejects_wrong_storage_or_reference_write_access(self):
+        for invalid in (
+            {"driveId": None},  # My Drive cannot use service-account-owned storage.
+            {"parents": ["other-platform"]},
+            {"parents": ["shared-drive"]},
+            {"mimeType": "application/x-tar"},
+            {"trashed": True},
+            {"capabilities": {"canListChildren": True, "canAddChildren": True}},
+        ):
+            with self.subTest(invalid=invalid):
+                folders = self.folders()
+                folders[0].update(invalid)
+                drive = self.drive(
+                    [
+                        ({"status": "200"}, json.dumps(folder).encode())
+                        for folder in folders
+                    ]
+                )
+                with self.assertRaises(Failure):
+                    drive.validate_folders("references", "results")
+        drive = self.drive([])
+        with self.assertRaises(Failure):
+            drive.validate_folders("same-folder", "same-folder")
+        drive = self.drive(
+            [
+                ({"status": "200"}, json.dumps(folder).encode())
+                for folder in self.folders()
+            ]
+        )
+        with self.assertRaises(Failure):
+            drive.validate_folders("references", "results", maintenance=True)
+
+    def test_list_requires_both_the_platform_parent_and_repository(self):
+        drive = self.drive([({"status": "200"}, b'{"files":[]}')])
+        request = drive.files.list
+        with patch.object(drive.files, "list", wraps=request) as listing:
+            self.assertEqual(drive.batches("studio-results"), [])
+        query = listing.call_args.kwargs
+        self.assertEqual(query["corpora"], "user")
+        self.assertNotIn("driveId", query)
+        self.assertIn("'studio-results' in parents", query["q"])
+        self.assertIn(
+            "key='repository' and value='a-novel/platform-studio'", query["q"]
+        )
+        self.assertIn("key='protocol'", query["q"])
+
     def test_resumes_multiple_chunks_after_retryable_http_failure(self):
         props = {"run_id": "10", "run_number": "2", "attempt": "1", "sha": "a" * 40}
         with tempfile.TemporaryDirectory() as directory:
@@ -36,6 +110,7 @@ class ClientTest(unittest.TestCase):
                 checksum = hashlib.file_digest(source, "md5").hexdigest()
             result = {
                 "id": "batch-id",
+                "parents": ["results"],
                 "size": str(archive.stat().st_size),
                 "md5Checksum": checksum,
                 "properties": dict(
@@ -76,6 +151,7 @@ class ClientTest(unittest.TestCase):
             identity.write_text("batch-id")
             result = {
                 "id": "batch-id",
+                "parents": ["results"],
                 "size": str(archive.stat().st_size),
                 "md5Checksum": hashlib.md5(archive.read_bytes()).hexdigest(),
                 "properties": dict(
@@ -94,6 +170,15 @@ class ClientTest(unittest.TestCase):
             self.assertEqual(
                 drive.upload("results", archive, props, identity)["id"], "batch-id"
             )
+            result["parents"] = ["another-platform-results"]
+            drive = self.drive(
+                [
+                    ({"status": "409"}, b"{}"),
+                    ({"status": "200"}, json.dumps(result).encode()),
+                ]
+            )
+            with self.assertRaisesRegex(Failure, "provenance"):
+                drive.upload("results", archive, props, identity)
 
     def test_paginated_listing_and_incomplete_results(self):
         drive = self.drive(

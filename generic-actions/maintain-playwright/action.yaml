@@ -10,13 +10,13 @@ inputs:
     description: Trusted default-branch maintenance Workload Identity provider.
   service_account:
     required: true
-    description: Maintenance service account with Manager access to the two dedicated Shared Drives.
-  references_drive:
+    description: Maintenance service account with Manager access to the dedicated test Shared Drive.
+  references_folder:
     required: true
-    description: Shared Drive containing the current master reference.
-  results_drive:
+    description: Platform references folder ID in the dedicated test Shared Drive.
+  results_folder:
     required: true
-    description: Shared Drive containing branch evidence.
+    description: Sibling platform results folder ID in the dedicated test Shared Drive.
 
 runs:
   using: composite
@@ -45,8 +45,8 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         DRIVE_TOKEN: ${{ steps.auth.outputs.access_token }}
         GH_TOKEN: ${{ inputs.github_token }}
-        REFERENCES_DRIVE: ${{ inputs.references_drive }}
-        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        REFERENCES_FOLDER: ${{ inputs.references_folder }}
+        RESULTS_FOLDER: ${{ inputs.results_folder }}
       run: |
         set -euo pipefail
         "$RUNNER_TEMP/playwright-drive-client/bin/python" "$ACTION_PATH/../../node-actions/test-playwright/drive/storage.py" cleanup

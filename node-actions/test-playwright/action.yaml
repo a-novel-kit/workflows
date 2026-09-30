@@ -52,14 +52,14 @@ inputs:
     required: false
     default: ""
     description: Trusted service account allowed to stage references on master.
-  references_drive:
+  references_folder:
     required: false
     default: ""
-    description: Dedicated Shared Drive containing the current master reference.
-  results_drive:
+    description: Platform references folder ID in the dedicated test Shared Drive.
+  results_folder:
     required: false
     default: ""
-    description: Separate Shared Drive containing branch evidence.
+    description: Sibling platform results folder ID in the dedicated test Shared Drive.
   seed_sha:
     required: false
     default: ""
@@ -105,11 +105,11 @@ runs:
         CI_ACCOUNT: ${{ inputs.drive_ci_account }}
         MAINTENANCE_PROVIDER: ${{ inputs.drive_maintenance_provider }}
         MAINTENANCE_ACCOUNT: ${{ inputs.drive_maintenance_account }}
-        REFERENCES_DRIVE: ${{ inputs.references_drive }}
-        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        REFERENCES_FOLDER: ${{ inputs.references_folder }}
+        RESULTS_FOLDER: ${{ inputs.results_folder }}
       run: |
         set -euo pipefail
-        : "${CI_ACCOUNT:?Missing drive_ci_account}" "${MAINTENANCE_PROVIDER:?Missing drive_maintenance_provider}" "${MAINTENANCE_ACCOUNT:?Missing drive_maintenance_account}" "${REFERENCES_DRIVE:?Missing references_drive}" "${RESULTS_DRIVE:?Missing results_drive}"
+        : "${CI_ACCOUNT:?Missing drive_ci_account}" "${MAINTENANCE_PROVIDER:?Missing drive_maintenance_provider}" "${MAINTENANCE_ACCOUNT:?Missing drive_maintenance_account}" "${REFERENCES_FOLDER:?Missing references_folder}" "${RESULTS_FOLDER:?Missing results_folder}"
         python3 -m venv "$RUNNER_TEMP/playwright-drive-client"
         "$RUNNER_TEMP/playwright-drive-client/bin/pip" install --disable-pip-version-check -r "$ACTION_PATH/drive/requirements.txt"
     - name: Authenticate candidate Drive access
@@ -131,8 +131,8 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         DRIVE_TOKEN: ${{ steps.drive-auth.outputs.access_token }}
         GH_TOKEN: ${{ inputs.github_token }}
-        REFERENCES_DRIVE: ${{ inputs.references_drive }}
-        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        REFERENCES_FOLDER: ${{ inputs.references_folder }}
+        RESULTS_FOLDER: ${{ inputs.results_folder }}
         SEED_SHA: ${{ inputs.seed_sha }}
       run: |
         set -euo pipefail
@@ -189,8 +189,8 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         DRIVE_TOKEN: ${{ steps.drive-auth.outputs.access_token }}
         GH_TOKEN: ${{ inputs.github_token }}
-        REFERENCES_DRIVE: ${{ inputs.references_drive }}
-        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        REFERENCES_FOLDER: ${{ inputs.references_folder }}
+        RESULTS_FOLDER: ${{ inputs.results_folder }}
         BATCH_ARCHIVE: .visual/batch.tar
         JOURNEY_OUTCOME: ${{ steps.journeys.outcome }}
       run: |
@@ -229,8 +229,8 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         DRIVE_TOKEN: ${{ steps.reference-auth.outputs.access_token }}
         GH_TOKEN: ${{ inputs.github_token }}
-        REFERENCES_DRIVE: ${{ inputs.references_drive }}
-        RESULTS_DRIVE: ${{ inputs.results_drive }}
+        REFERENCES_FOLDER: ${{ inputs.references_folder }}
+        RESULTS_FOLDER: ${{ inputs.results_folder }}
         BATCH_ARCHIVE: .visual/batch.tar
       run: |
         set -euo pipefail
