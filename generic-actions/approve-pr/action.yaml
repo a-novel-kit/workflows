@@ -50,7 +50,7 @@ runs:
             ;;
         esac
 
-    # Fail closed unless the dispatching actor is a repo admin: workflow_dispatch is
+    # Fail closed unless the invoking actor is a repo admin, including on reruns: workflow_dispatch is
     # open to anyone with write access. The collaborator-permission endpoint needs
     # only Metadata:read, so the default token suffices.
     - name: Require admin
@@ -58,12 +58,11 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         REPO_FULL: ${{ github.repository }}
-        ACTOR: ${{ github.actor }}
+        ACTOR: ${{ github.triggering_actor }}
       run: |
         set -euo pipefail
-        # `|| echo ""` keeps a failed lookup from tripping `set -e` — an empty
-        # permission then falls through to the admin check and fails closed.
-        perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
+        # Discard even partial output when the permission lookup fails.
+        perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null) || perm=""
         if [ "$perm" != "admin" ]; then
           echo "::error::approve-pr is admin-only; @${ACTOR} has permission '${perm:-none}'."
           exit 1
@@ -79,6 +78,7 @@ runs:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
         permission-pull-requests: write
 
     - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.35.0

@@ -237,9 +237,6 @@ runs:
           exit 1
         fi
 
-        # Marker file for the conflict-placeholder fallback (a ruleset may reject an empty commit).
-        MARKER="ROLLBACK-HELD.md"
-
         # ---- Shared GraphQL + read helpers ----------------------------------------------------
 
         # PR search node. mergeCommit{oid} cross-checks the squash SHA and closingIssuesReferences

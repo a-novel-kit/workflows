@@ -18,7 +18,7 @@ inputs:
       empty for the legacy tag-push flow, which keeps the ref-derived tags.
   run_args:
     required: false
-    description: Args to use for the test run of the image.
+    description: Docker flags for the test run. Supports quoted values and $NAME/${NAME} environment references; command substitution is not evaluated.
   timeout:
     required: false
     description: Timeout (in deciseconds) for the container to finish running.
@@ -65,13 +65,17 @@ runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
     # Derive vX.Y and vX from an explicit version. The dispatched release passes one
     # because the workflow runs on the default branch, where the ref is not a tag.
     - id: ver
       if: ${{ inputs.version != '' }}
       shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
       run: |
-        v="${{ inputs.version }}"
+        v="$VERSION"
         echo "minor=${v%.*}" >> "$GITHUB_OUTPUT"
         echo "major=${v%%.*}" >> "$GITHUB_OUTPUT"
     - id: meta
@@ -119,40 +123,12 @@ runs:
       id: local_container
       if: ${{ inputs.skip_healthcheck != 'true' }}
       shell: bash
+      env:
+        IMAGE_NAME: ${{ inputs.image_name }}
+        TIMEOUT: ${{ inputs.timeout }}
+        RUN_ARGS: ${{ inputs.run_args }}
       run: |
-        docker run -d --network="host" ${{ inputs.run_args }} --name test-container \
-          ghcr.io/${{ inputs.image_name }}:test
-
-        state="`docker inspect --type=container -f {{.State.Status}} test-container`"
-
-        until [ "$state" == "exited" ]
-        do
-          state="`docker inspect --type=container -f {{.State.Status}} test-container`"
-          ((c++)) && ((c==${{ inputs.timeout }})) && break
-          sleep 0.1
-        done
-
-        if [ "$state" != "exited" ]
-        then
-          echo "Container did not exit in time"
-          docker stop test-container
-          echo "Extracting logs"
-          docker logs test-container
-          exit 1
-        fi
-
-        if [ "`docker inspect -f {{.State.ExitCode}} test-container`" == 0 ]
-        then
-          echo "Container exited successfully"
-          docker stop test-container
-          exit 0
-        else
-          echo "Container exited with non-zero exit code"
-          docker stop test-container
-          echo "Extracting logs"
-          docker logs test-container
-          exit 1
-        fi
+        node "$GITHUB_ACTION_PATH/../wait-container.mjs" job "$TIMEOUT"
     - uses: docker/build-push-action@v7
       if: ${{ success() }}
       id: build

@@ -38,7 +38,7 @@ runs:
             content=$(gh api "repos/$REPO/contents/$path" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null) || true
             [ -n "$content" ] || continue
             assignees=$(printf '%s\n' "$content" | grep -E '^\*[[:space:]]' | tail -1 \
-              | tr ' \t' '\n\n' | grep -E '^@[A-Za-z0-9-]+$' | sed 's/^@//' | paste -sd, -)
+              | tr ' \t' '\n' | grep -E '^@[A-Za-z0-9-]+$' | sed 's/^@//' | paste -sd, -)
             break
           done
           if [ -z "$assignees" ]; then
