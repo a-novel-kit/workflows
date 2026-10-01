@@ -14,6 +14,16 @@ Pin the preset to the same workflows release as the repository's actions. Renova
 native config manager updates the preset reference in the existing workflows update group.
 Relative references inside presets inherit that release tag.
 
+The base preset enables native lockfile maintenance before 05:00 each day in Renovate's
+configured timezone (UTC by default). Supported lockfiles are refreshed within their
+manifest constraints, so transitive fixes do not have to wait for a direct dependency bump.
+Existing CI checks and repository-specific review rules still apply. This uses the existing
+Renovate schedule; it does not add a workflow or dependency-specific overrides.
+
+For npm lockfiles, the package manager performs the refresh. Enforce transitive-package
+release cooldowns in the package manager (for example, pnpm's `minimumReleaseAge`);
+Renovate's `minimumReleaseAge` alone does not cover lockfile maintenance.
+
 | Class       | Additional configuration                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `service`   | Podman Compose and isolated Go tool modules; standard service regeneration; database dependency detection.                          |
