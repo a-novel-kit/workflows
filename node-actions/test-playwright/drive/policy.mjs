@@ -51,7 +51,13 @@ export class Policy {
     const permission = await this.github.request(`collaborators/${encodeURIComponent(latest.actor.login)}/permission`);
     if (!["admin", "maintain", "write"].includes(permission.permission)) return false;
     const receipt = await this.latestStatus(pr.head.sha, APPROVAL, before);
-    if (!receipt || receipt.state !== "success" || receipt.created_at < latest.created_at) return false;
+    if (
+      !receipt ||
+      receipt.state !== "success" ||
+      receipt.description !== "Approved current PR head" ||
+      receipt.created_at < latest.created_at
+    )
+      return false;
     const match = this.runTarget(receipt);
     if (!match) return false;
     const run = await this.github.request(`actions/runs/${match[1]}/attempts/${match[2]}`);
@@ -152,11 +158,12 @@ export class Policy {
       );
       approved = ["admin", "maintain", "write"].includes(permission.permission);
     }
+    // Browser comparisons block unapproved changes; this receipt only records approval state.
     await this.status(
       pr.head.sha,
       APPROVAL,
-      approved ? "success" : "failure",
-      approved ? "Approved current PR head" : "Apply the label after reviewing this head",
+      "success",
+      approved ? "Approved current PR head" : "No approval recorded; screenshot changes remain blocked",
       this.target()
     );
     const rerun = ["labeled", "unlabeled"].includes(action);
