@@ -25,12 +25,24 @@ test("native comparison, approval and functional failure boundaries", async (t) 
     assert.equal(result.status === 0, expected, result.stdout + result.stderr);
   }
   const snapshot = (name) => join(work, ".visual/snapshots/desktop", name);
+  const review = async () => JSON.parse(await readFile(join(work, ".visual/review/manifest.json"), "utf8"));
+  const image = (name) => readFile(join(work, ".visual/review", name));
   await run(true, { VISUAL_SEED: "true" });
   const original = await readFile(snapshot("one.png"));
   await run(true);
+  assert.deepEqual(await review(), []);
   await run(false, { PROBE_CHANGED: "true" });
   assert.deepEqual(await readFile(snapshot("one.png")), original);
+  const differences = await review();
+  assert.equal(differences.length, 2);
+  assert.deepEqual(Object.keys(differences[0].images), ["expected", "actual", "diff"]);
+  assert.deepEqual(await image(differences[0].images.expected), original);
+  const actual = await image(differences[0].images.actual);
+  assert.notDeepEqual(actual, original);
+  assert.notDeepEqual(await image(differences[0].images.diff), actual);
   await run(true, { PROBE_CHANGED: "true", VISUAL_APPROVED: "true" });
+  assert.deepEqual(await image((await review())[0].images.expected), original);
+  assert.deepEqual(await image((await review())[0].images.actual), actual);
   const changed = await readFile(snapshot("one.png"));
   assert.notDeepEqual(changed, original);
   await run(false, { PROBE_CHANGED: "true", PROBE_FUNCTIONAL_FAILURE: "true", VISUAL_APPROVED: "true" });
@@ -39,11 +51,25 @@ test("native comparison, approval and functional failure boundaries", async (t) 
   await run(false, { PROBE_CAPTURE_ONCE: "true", VISUAL_APPROVED: "true" });
   assert.deepEqual(await readFile(snapshot("one.png")), changed);
   await run(false, { PROBE_CHANGED: "true", PROBE_ADD: "true" });
+  assert.deepEqual(Object.keys((await review())[0].images), ["actual"]);
+  assert.deepEqual(await readFile(snapshot("one.png")), changed);
+  await rm(snapshot("three.png"));
+  await run(false, {
+    PROBE_CHANGED: "true",
+    PROBE_ADD: "true",
+    PROBE_FUNCTIONAL_FAILURE: "true",
+    VISUAL_APPROVED: "true",
+  });
+  await rm(snapshot("three.png"));
   await run(true, { PROBE_CHANGED: "true", PROBE_ADD: "true", VISUAL_APPROVED: "true" });
+  assert.deepEqual(Object.keys((await review())[0].images), ["actual"]);
   assert.ok(existsSync(snapshot("three.png")));
   await rm(join(work, ".visual"), { recursive: true, force: true });
   await run(true, { VISUAL_SEED: "true" });
   await run(false, { PROBE_REMOVE: "true" });
+  assert.equal((await review())[0].removed, true);
+  const removed = await image((await review())[0].images.expected);
   await run(true, { PROBE_REMOVE: "true", VISUAL_APPROVED: "true" });
+  assert.deepEqual(await image((await review())[0].images.expected), removed);
   assert.equal(existsSync(snapshot("two.png")), false);
 });

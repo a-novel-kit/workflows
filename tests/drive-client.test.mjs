@@ -9,6 +9,7 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 import { Failure } from "../node-actions/test-playwright/drive/common.mjs";
 import { CHUNK, Drive, PROTOCOL, digest } from "../node-actions/test-playwright/drive/storage.mjs";
+import { REVIEW_PROTOCOL } from "../node-actions/test-playwright/drive/review.mjs";
 const require = createRequire(new URL("../node-actions/test-playwright/drive/package.json", import.meta.url));
 const { Gaxios } = require("gaxios");
 const repository = "a-novel/platform-studio";
@@ -68,6 +69,8 @@ async function sparse(path, size) {
 async function result(archive) {
   return {
     id: "batch-id",
+    name: "playwright-2-1.tar",
+    mimeType: "application/x-tar",
     parents: ["results"],
     size: String((await stat(archive)).size),
     md5Checksum: await digest(archive),
@@ -206,7 +209,13 @@ test("unknown creation outcomes recover the preallocated file and verify provena
     (await client([{ status: 409 }, { data: metadata }]).drive.upload("results", archive, props, identity)).id,
     "batch-id"
   );
-  for (const invalid of [{ parents: ["another-platform-results"] }, { md5Checksum: "0".repeat(32) }, { size: "1" }]) {
+  for (const invalid of [
+    { parents: ["another-platform-results"] },
+    { md5Checksum: "0".repeat(32) },
+    { size: "1" },
+    { mimeType: "image/png" },
+    { name: "wrong.tar" },
+  ]) {
     await assert.rejects(
       client([{ status: 409 }, { data: { ...metadata, ...invalid } }]).drive.upload(
         "results",
@@ -237,6 +246,41 @@ test("expired upload sessions and untrusted session URLs cannot publish", async 
     client([{ headers: { location: session } }, { status: 404 }]).drive.upload("results", archive, props, identity),
     (error) => error.status === 404
   );
+});
+test("review PNG uploads use image MIME types and stay separate from reference archives", async (t) => {
+  const dir = await directory(t),
+    path = join(dir, "image.png");
+  await writeFile(path, "png");
+  const metadata = { ...(await result(path)), name: "old.png", mimeType: "image/png" };
+  metadata.properties = { ...metadata.properties, protocol: REVIEW_PROTOCOL, batch_id: "archive-id" };
+  const { drive, calls } = client([
+    { data: { ids: ["batch-id"] } },
+    {
+      headers: { location: session },
+      check: (options) => {
+        assert.equal(options.headers.get("x-upload-content-type"), "image/png");
+        const body = JSON.parse(options.body);
+        assert.equal(body.mimeType, "image/png");
+        assert.deepEqual(body.parents, ["results"]);
+        assert.equal(body.properties.batch_id, "archive-id");
+      },
+    },
+    {
+      data: metadata,
+      check: async (options) => {
+        assert.equal(options.headers.get("content-type"), "image/png");
+        await streamed(options, "bytes 0-2/3", 3);
+      },
+    },
+    { data: { files: [metadata] } },
+  ]);
+  await drive.upload("results", path, { ...props, batch_id: "archive-id" }, join(dir, "id"), {
+    name: "old.png",
+    mimeType: "image/png",
+    protocol: REVIEW_PROTOCOL,
+  });
+  assert.equal((await drive.batches("results", REVIEW_PROTOCOL))[0].id, "batch-id");
+  assert.ok(new URL(calls.at(-1).url).searchParams.get("q").includes(`value='${REVIEW_PROTOCOL}'`));
 });
 test("streams a 4 GiB batch with bounded chunks and offsets beyond 32 bits", async (t) => {
   const dir = await directory(t),

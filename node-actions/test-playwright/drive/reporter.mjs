@@ -8,6 +8,7 @@ export default class VisualReporter {
   errors = [];
   visualErrors = new WeakMap();
   screenshots = new WeakMap();
+  comparisons = new WeakMap();
 
   onBegin(_config, suite) {
     this.expected = suite.allTests().length;
@@ -16,8 +17,22 @@ export default class VisualReporter {
   onStepEnd(_test, result, step) {
     if (step.category !== "expect" || !/\btoHaveScreenshot\b/.test(step.title)) return;
     this.screenshots.set(result, (this.screenshots.get(result) ?? 0) + 1);
+    const images = {};
+    let name;
+    for (const attachment of step.attachments) {
+      const match = attachment.name.match(/^(.*)-(expected|actual|diff)\.png$/);
+      if (match && attachment.contentType === "image/png" && attachment.path) {
+        name = match[1];
+        images[match[2]] = attachment.path;
+      }
+    }
+    if (name) {
+      const comparisons = this.comparisons.get(result) ?? [];
+      comparisons.push({ name, images });
+      this.comparisons.set(result, comparisons);
+    }
     const message = stripVTControlCharacters(step.error?.message ?? "").replace(/^Error: /, "");
-    const missing = message.startsWith("A snapshot doesn't exist at ") && message.endsWith(".png.");
+    const missing = message.startsWith("A snapshot doesn't exist at ") && /\.png(?:, writing actual)?\.$/.test(message);
     // Stable mismatch evidence distinguishes a reviewable diff from capture/timeout failures.
     const stableDifference =
       message.includes("captured a stable screenshot") &&
@@ -30,6 +45,11 @@ export default class VisualReporter {
       const errors = this.visualErrors.get(result) ?? [];
       errors.push(step.error.message);
       this.visualErrors.set(result, errors);
+    } else if (!step.error && images.expected && images.actual && !images.diff) {
+      // Missing-mode soft errors belong to the test; Playwright leaves the step error empty.
+      const errors = this.visualErrors.get(result) ?? [];
+      errors.push(`Error: A snapshot doesn't exist at ${images.expected}, writing actual.`);
+      this.visualErrors.set(result, errors);
     }
   }
 
@@ -38,6 +58,8 @@ export default class VisualReporter {
       id: test.id,
       expectedStatus: test.expectedStatus,
       status: result.status,
+      title: test.titlePath().join(" › "),
+      comparisons: this.comparisons.get(result) ?? [],
       errors: result.errors.map((error) => error.message),
       visualErrors: this.visualErrors.get(result) ?? [],
       screenshotCount: this.screenshots.get(result) ?? 0,

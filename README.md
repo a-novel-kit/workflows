@@ -145,6 +145,12 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 configured, browser evidence instead stays in each platform's private reference and results folders in a
 Shared Drive: the latest successful
 master reference and one completed batch per live branch. Coverage continues using GitHub artifacts.
+Changed screenshots also appear as private PNG files with **Old / New / Diff** Drive links in the
+Actions run summary. Added and removed screenshots identify the missing side. These images are kept
+with their result batch and deleted when it is replaced or its branch is merged/deleted. Approved
+regeneration preserves the original comparison images for review.
+Upgrade `test-playwright` and `maintain-playwright` together so image uploads and cleanup use the
+same version. Existing Drive configuration needs no changes.
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).
