@@ -9,11 +9,10 @@ import { isDeepStrictEqual } from "node:util";
 import { Gaxios } from "gaxios";
 import * as tar from "tar";
 import { Failure, GitHub, runCli } from "./common.mjs";
-import { REVIEW_PROTOCOL, uploadReview } from "./review.mjs";
 
 export const PROTOCOL = "playwright-v1";
 export const CHUNK = 16 * 1024 * 1024;
-const FIELDS = "id,name,mimeType,size,md5Checksum,properties,createdTime,parents";
+const FIELDS = "id,name,size,md5Checksum,properties,createdTime,parents";
 const API = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 
@@ -94,7 +93,7 @@ export class Drive {
     }
   }
 
-  async batches(folderId, protocol = PROTOCOL) {
+  async batches(folderId) {
     const batches = [];
     let pageToken;
     do {
@@ -104,7 +103,7 @@ export class Drive {
         includeItemsFromAllDrives: true,
         pageSize: 1000,
         pageToken,
-        q: `'${folderId}' in parents and trashed = false and properties has { key='protocol' and value='${protocol}' } and properties has { key='repository' and value='${this.repository}' }`,
+        q: `'${folderId}' in parents and trashed = false and properties has { key='protocol' and value='${PROTOCOL}' } and properties has { key='repository' and value='${this.repository}' }`,
         fields: `nextPageToken,incompleteSearch,files(${FIELDS})`,
       });
       if (result.incompleteSearch) throw new Failure("Drive returned an incomplete batch list");
@@ -128,17 +127,7 @@ export class Drive {
     batch.properties = properties;
   }
 
-  async upload(
-    folderId,
-    archive,
-    props,
-    identityFile,
-    {
-      name = `playwright-${props.run_number}-${props.attempt}.tar`,
-      mimeType = "application/x-tar",
-      protocol = PROTOCOL,
-    } = {}
-  ) {
+  async upload(folderId, archive, props, identityFile) {
     let fileId;
     if (existsSync(identityFile)) fileId = (await readFile(identityFile, "utf8")).trim();
     else {
@@ -147,10 +136,9 @@ export class Drive {
     }
     const metadata = {
       id: fileId,
-      name,
-      mimeType,
+      name: `playwright-${props.run_number}-${props.attempt}.tar`,
       parents: [folderId],
-      properties: { ...props, protocol, repository: this.repository, state: "pending" },
+      properties: { ...props, protocol: PROTOCOL, repository: this.repository, state: "pending" },
     };
     const size = (await stat(archive)).size;
     if (!Number.isSafeInteger(size) || size <= 0) throw new Failure("Invalid archive size");
@@ -160,13 +148,13 @@ export class Drive {
         method: "POST",
         params: { uploadType: "resumable", supportsAllDrives: true, fields: FIELDS },
         data: metadata,
-        headers: { "X-Upload-Content-Type": mimeType, "X-Upload-Content-Length": String(size) },
+        headers: { "X-Upload-Content-Type": "application/x-tar", "X-Upload-Content-Length": String(size) },
       });
       const session = new URL(response.headers.get("location"));
       if (session.origin !== "https://www.googleapis.com" || !session.pathname.startsWith("/upload/drive/")) {
         throw new Failure("Unexpected Drive upload session destination");
       }
-      batch = await this.sendArchive(session.href, archive, size, mimeType);
+      batch = await this.sendArchive(session.href, archive, size);
     } catch (error) {
       if (error.status !== 409) throw error;
       batch = await this.files(`/${fileId}`, { fields: FIELDS });
@@ -175,8 +163,6 @@ export class Drive {
       throw new Failure("Uploaded batch checksum or size does not match");
     }
     if (
-      batch.name !== name ||
-      batch.mimeType !== mimeType ||
       !isDeepStrictEqual({ ...batch.properties, state: "pending" }, metadata.properties) ||
       !isDeepStrictEqual(batch.parents, [folderId])
     ) {
@@ -185,7 +171,7 @@ export class Drive {
     return batch;
   }
 
-  async sendArchive(session, archive, size, mimeType = "application/x-tar") {
+  async sendArchive(session, archive, size) {
     let offset = 0,
       failures = 0,
       probe = false;
@@ -199,7 +185,7 @@ export class Drive {
           retry: false,
           data,
           headers: {
-            "Content-Type": mimeType,
+            "Content-Type": "application/x-tar",
             "Content-Length": String(probe ? 0 : end - offset),
             "Content-Range": probe ? `bytes */${size}` : `bytes ${offset}-${end - 1}/${size}`,
           },
@@ -317,13 +303,6 @@ export async function cleanup(drive, github, resultsId, referencesId) {
     if (branch !== null && completed) await drive.markCurrent(newest);
     for (const batch of batches) if (branch === null || batch.id !== newest.id) await drive.remove(batch);
   }
-  const retained = new Set((await drive.batches(resultsId)).map((batch) => batch.id));
-  for (const image of await drive.batches(resultsId, REVIEW_PROTOCOL)) {
-    if (!retained.has(image.properties.batch_id)) {
-      const [, completed] = await github.branch(image);
-      if (completed) await drive.remove(image);
-    }
-  }
 }
 
 /** Extract regular PNGs into a fresh destination, rejecting links and path traversal. */
@@ -419,8 +398,6 @@ async function main() {
       env.GITHUB_STEP_SUMMARY,
       `\n[Private Playwright batch](https://drive.google.com/file/d/${batch.id}/view)\n`
     );
-    if (mode === "upload")
-      await appendFile(env.GITHUB_STEP_SUMMARY, await uploadReview(drive, results, batch, workspace));
   } else if (mode === "cleanup") await cleanup(drive, github, results, references);
   else throw new Failure("Unknown storage operation");
 }

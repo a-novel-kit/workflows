@@ -13,7 +13,6 @@ import {
   promote,
 } from "../node-actions/test-playwright/drive/storage.mjs";
 import { archiveBatch, inspectReport } from "../node-actions/test-playwright/drive/runner.mjs";
-import { REVIEW_PROTOCOL } from "../node-actions/test-playwright/drive/review.mjs";
 const require = createRequire(new URL("../node-actions/test-playwright/drive/package.json", import.meta.url));
 const tar = require("tar");
 
@@ -24,12 +23,12 @@ function batch(id, number, state = "current", attempt = 1) {
   };
 }
 class Store {
-  constructor(references = [], results = [], reviews = []) {
-    this.records = { references, results, reviews };
+  constructor(references = [], results = []) {
+    this.records = { references, results };
     this.removed = [];
   }
-  async batches(id, protocol) {
-    return [...this.records[protocol === REVIEW_PROTOCOL ? "reviews" : id]];
+  async batches(id) {
+    return [...this.records[id]];
   }
   async remove(batch) {
     this.removed.push(batch.id);
@@ -137,36 +136,6 @@ test("master results deduplicate while newer failures remain", async () => {
 });
 test("pending references are never selected", () =>
   assert.equal(currentReference([batch("unfinished", 5, "pending")]), null));
-
-test("review PNGs follow replacement and deletion while partial running uploads survive", async () => {
-  const review = (id, parent, run) => ({
-    ...batch(id, run),
-    properties: { ...batch(id, run).properties, batch_id: parent },
-  });
-  const store = new Store(
-    [batch("master", 1)],
-    [batch("old", 2), batch("new", 3), batch("deleted", 4)],
-    [
-      review("old-png", "old", 2),
-      review("new-png", "new", 3),
-      review("deleted-png", "deleted", 4),
-      review("partial-running-png", "unfinished", 5),
-      review("partial-failed-png", "failed", 6),
-    ]
-  );
-  const github = {
-    branch: async (value) => [value.properties.run_id === "4" ? null : "branch", value.properties.run_id !== "5"],
-  };
-  await cleanup(store, github, "results", "references");
-  assert.deepEqual(
-    store.records.reviews.map((value) => value.id),
-    ["new-png", "partial-running-png"]
-  );
-  assert.equal(currentReference(store.records.references).id, "master");
-  github.branch = async () => [null, true];
-  await cleanup(store, github, "results", "references");
-  assert.deepEqual(store.records.reviews, []);
-});
 
 test("archive round-trip includes declared PNGs and rejects symlink evidence", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "drive-archive-"));

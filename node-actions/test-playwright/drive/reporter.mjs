@@ -26,11 +26,6 @@ export default class VisualReporter {
         images[match[2]] = attachment.path;
       }
     }
-    if (name) {
-      const comparisons = this.comparisons.get(result) ?? [];
-      comparisons.push({ name, images });
-      this.comparisons.set(result, comparisons);
-    }
     const message = stripVTControlCharacters(step.error?.message ?? "").replace(/^Error: /, "");
     const missing = message.startsWith("A snapshot doesn't exist at ") && /\.png(?:, writing actual)?\.$/.test(message);
     // Stable mismatch evidence distinguishes a reviewable diff from capture/timeout failures.
@@ -41,6 +36,11 @@ export default class VisualReporter {
           (attachment) => attachment.contentType === "image/png" && attachment.name.endsWith(suffix)
         )
       );
+    if (name) {
+      const comparisons = this.comparisons.get(result) ?? [];
+      comparisons.push({ name, images, drift: stableDifference });
+      this.comparisons.set(result, comparisons);
+    }
     if (step.error && (missing || stableDifference)) {
       const errors = this.visualErrors.get(result) ?? [];
       errors.push(step.error.message);
