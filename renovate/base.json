@@ -63,6 +63,11 @@
       "allowedVersions": "<26"
     },
     {
+      "description": "Give GitHub releases time to finish publishing binary assets and checksums before CI installs them. Apply the same delay to all release-backed tools instead of maintaining version-specific exceptions.",
+      "matchDatasources": ["github-releases"],
+      "minimumReleaseAge": "1 hour"
+    },
+    {
       "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to the npm manager (which is what Renovate uses for pnpm: pnpm-lock.yaml, workspaces, catalogs) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
       "matchManagers": ["npm"],
       "minimumReleaseAge": "3 days"
