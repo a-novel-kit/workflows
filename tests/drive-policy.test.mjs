@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { APPROVAL, COMPARISON, LABEL, Policy } from "../node-actions/test-playwright/drive/policy.mjs";
+import { root, succeeds, workspace } from "./helpers.mjs";
 
 function fixture() {
   const pr = {
@@ -134,21 +135,135 @@ test("label reruns the completed head and synchronize invalidates approval", asy
     pull_request: f.pr,
     sender: { type: "User", login: "reviewer" },
   };
+  const run = {
+    id: 42,
+    run_number: 4,
+    head_sha: "head",
+    event: "push",
+    path: ".github/workflows/main.yaml",
+    status: "completed",
+  };
   f.github.request = async (path) =>
     path.startsWith("pulls/")
       ? f.pr
       : path.startsWith("collaborators/")
         ? { permission: "write" }
         : path.includes("workflows/")
-          ? { workflow_runs: [{ id: 42, run_number: 4 }] }
-          : { id: 42, status: "completed" };
+          ? { workflow_runs: [run] }
+          : path.includes("/artifacts?")
+            ? { artifacts: [], total_count: 0 }
+            : run;
   const posts = [];
   f.policy.post = async (...args) => posts.push(args);
   await f.policy.labelEvent(event);
   assert.equal(posts[0][1].state, "success");
+  assert.equal(posts[0][1].target_url, "https://github.com/example/studio/actions/runs/41/attempts/1");
   assert.equal(posts[1][0], "actions/runs/42/rerun");
   posts.length = 0;
   await f.policy.labelEvent({ ...event, action: "synchronize" });
   assert.equal(posts[0][1].state, "failure");
   assert.equal(posts.length, 1);
+});
+
+function reviewFixture() {
+  const f = fixture();
+  const run = {
+    id: 42,
+    run_number: 4,
+    run_attempt: 2,
+    head_sha: "head",
+    event: "push",
+    path: ".github/workflows/main.yaml",
+    status: "completed",
+    conclusion: "failure",
+    run_started_at: "2026-09-01T12:00:00Z",
+  };
+  const artifact = { id: 9, name: "playwright-drift.html", expired: false, created_at: "2026-09-01T12:01:00Z" };
+  const artifacts = [artifact];
+  f.github.request = async (path) => {
+    if (path.startsWith("pulls/")) return f.pr;
+    if (path.includes("workflows/")) return { workflow_runs: [run] };
+    if (path.includes("/artifacts?")) return { artifacts, total_count: artifacts.length };
+    return run;
+  };
+  const posts = [];
+  f.policy.post = async (...args) => posts.push(args);
+  return {
+    ...f,
+    run,
+    artifact,
+    artifacts,
+    posts,
+    labelEvent: { action: "synchronize", number: 1, pull_request: f.pr },
+  };
+}
+
+test("unapproved heads attach only a current, unexpired drift report without rerunning main", async () => {
+  for (const [mutate, expected] of [
+    [() => {}, true],
+    [(f) => (f.artifact.expired = true), false],
+    [(f) => (f.artifact.created_at = "2026-09-01T11:00:00Z"), false],
+    [(f) => (f.artifact.name = "coverage"), false],
+    [(f) => f.artifacts.pop(), false],
+  ]) {
+    const f = reviewFixture();
+    mutate(f);
+    const result = await f.policy.labelEvent(f.labelEvent);
+    assert.equal(result.run.id, 42);
+    assert.equal(Boolean(result.artifact), expected);
+    assert.equal(f.posts.length, 1);
+    assert.equal(f.posts[0][1].state, "failure");
+  }
+});
+
+test("a new PR head stops an older approval run from attaching evidence", async () => {
+  const f = reviewFixture();
+  const request = f.github.request;
+  let reads = 0;
+  f.github.request = async (path) => {
+    if (path.startsWith("pulls/") && ++reads > 1) return { ...f.pr, head: { ...f.pr.head, sha: "new-head" } };
+    return request(path);
+  };
+  assert.equal(await f.policy.labelEvent(f.labelEvent), undefined);
+  assert.equal(f.posts.length, 1);
+});
+
+test("approval waits when the main run has not appeared yet", async () => {
+  const f = reviewFixture();
+  const request = f.github.request;
+  let listings = 0;
+  f.github.request = async (path) => {
+    if (path.includes("workflows/") && listings++ === 0) return { workflow_runs: [] };
+    return request(path);
+  };
+  assert.equal((await f.policy.labelEvent(f.labelEvent)).artifact.id, 9);
+});
+
+test("approval CLI exposes the exact report for native artifact transfer and reviewer navigation", (t) => {
+  const f = reviewFixture(),
+    ws = workspace(t);
+  ws.write("event.json", JSON.stringify(f.labelEvent));
+  const stub = ws.write(
+    "github.mjs",
+    `
+    const pr = ${JSON.stringify(f.pr)}, run = ${JSON.stringify(f.run)}, artifact = ${JSON.stringify(f.artifact)};
+    globalThis.fetch = async (url, options) => new Response(JSON.stringify(
+      options.method === 'POST' ? {} : url.includes('/pulls/') ? pr :
+      url.includes('/workflows/') ? {workflow_runs: [run]} :
+      url.includes('/artifacts?') ? {artifacts: [artifact], total_count: 1} : run
+    ));
+  `
+  );
+  succeeds(
+    ws.run(process.execPath, ["--import", stub, `${root}node-actions/test-playwright/drive/policy.mjs`, "label"], {
+      GITHUB_REPOSITORY: "example/studio",
+      GITHUB_EVENT_PATH: `${ws.cwd}/event.json`,
+      GITHUB_RUN_ID: "41",
+      GITHUB_RUN_ATTEMPT: "1",
+    })
+  );
+  assert.equal(ws.read("output"), "run_id=42\nartifact_id=9\n");
+  assert.match(ws.read("summary"), /Artifacts/);
+  assert.match(ws.read("summary"), /Old \/ New \/ Diff/);
+  assert.match(ws.read("summary"), /actions\/runs\/42\/attempts\/2/);
 });
