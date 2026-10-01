@@ -25,6 +25,11 @@ manifest constraints, so transitive fixes do not have to wait for a direct depen
 Existing CI checks and repository-specific review rules still apply. This uses the existing
 Renovate schedule; it does not add a workflow or dependency-specific overrides.
 
+Updates from GitHub releases wait at least one hour after publication before Renovate selects
+them. This gives binary assets and checksums time to finish uploading; the default strict
+release-age filter keeps premature versions out of update branches. The delay applies to all
+`github-releases` dependencies and inherits Renovate's release-age buffer.
+
 For npm lockfiles, the package manager performs the refresh. Enforce transitive-package
 release cooldowns in the package manager (for example, pnpm's `minimumReleaseAge`);
 Renovate's `minimumReleaseAge` alone does not cover lockfile maintenance.
