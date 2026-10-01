@@ -114,7 +114,7 @@ runs:
         # `go build` runs. The scope is per image, so the parallel jobs building
         # different images keep separate caches.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
-        cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0}', inputs.image_name) || '' }}
+        cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0},ignore-error=true', inputs.image_name) || '' }}
         load: true
         tags: ghcr.io/${{ inputs.image_name }}:test
         file: ${{ inputs.file }}
