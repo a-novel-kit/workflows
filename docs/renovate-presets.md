@@ -14,6 +14,11 @@ Pin the preset to the same workflows release as the repository's actions. Renova
 native config manager updates the preset reference in the existing workflows update group.
 Relative references inside presets inherit that release tag.
 
+The base preset rebases branches whenever they fall behind the target branch. This brings
+fixes already merged into the target into failing update PRs, including repositories with a
+merge queue, where Renovate otherwise defaults to rebasing only conflicts. It may trigger
+additional CI runs when the target branch changes.
+
 The base preset enables native lockfile maintenance before 05:00 each day in Renovate's
 configured timezone (UTC by default). Supported lockfiles are refreshed within their
 manifest constraints, so transitive fixes do not have to wait for a direct dependency bump.
