@@ -1,5 +1,5 @@
 name: approve playwright
-description: Bind a human screenshot-change label to the current PR head and refresh its browser checks.
+description: Bind screenshot approval to the PR head, refresh browser checks and attach pending drift reviews to this run.
 
 inputs:
   github_token:
@@ -13,7 +13,8 @@ runs:
       with:
         node-version: "24"
         package-manager-cache: false
-    - name: Verify the label and refresh checks
+    - name: Verify the label and collect screenshot review
+      id: review
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
@@ -21,3 +22,20 @@ runs:
       run: |
         set -euo pipefail
         node "$ACTION_PATH/../../node-actions/test-playwright/drive/policy.mjs" label
+    - name: Download screenshot drift review
+      if: ${{ steps.review.outputs.artifact_id != '' }}
+      uses: actions/download-artifact@v8
+      with:
+        artifact-ids: ${{ steps.review.outputs.artifact_id }}
+        run-id: ${{ steps.review.outputs.run_id }}
+        github-token: ${{ inputs.github_token }}
+        path: ${{ runner.temp }}/visual-review
+    - name: Attach screenshot drift review to this run
+      if: ${{ steps.review.outputs.artifact_id != '' }}
+      uses: actions/upload-artifact@v7
+      with:
+        path: ${{ runner.temp }}/visual-review/playwright-drift.html
+        archive: false
+        if-no-files-found: error
+        retention-days: 3
+        overwrite: true

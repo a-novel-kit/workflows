@@ -159,23 +159,43 @@ export class Policy {
       approved ? "Approved current PR head" : "Apply the label after reviewing this head",
       this.target()
     );
-    if (!["labeled", "unlabeled"].includes(action)) return;
-    const runs = (
-      await this.github.request(`actions/workflows/main.yaml/runs?head_sha=${pr.head.sha}&event=push&per_page=100`)
-    ).workflow_runs;
-    if (!runs.length) throw new Failure("No main run exists for the labeled PR head");
-    let run = runs.sort((a, b) => a.run_number - b.run_number).at(-1);
+    const rerun = ["labeled", "unlabeled"].includes(action);
+    let run;
     for (let attempt = 0; attempt < 240; attempt++) {
       const current = await this.github.request(`pulls/${pr.number}`);
       if (current.state !== "open" || current.head.sha !== pr.head.sha) return;
-      run = await this.github.request(`actions/runs/${run.id}`);
-      if (run.status === "completed") {
-        await this.post(`actions/runs/${run.id}/rerun`);
-        return;
+      if (!run) {
+        const { workflow_runs: runs } = await this.github.request(
+          `actions/workflows/main.yaml/runs?head_sha=${pr.head.sha}&event=push&per_page=100`
+        );
+        run = runs
+          .filter(
+            (candidate) =>
+              candidate.head_sha === pr.head.sha &&
+              candidate.event === "push" &&
+              candidate.path === ".github/workflows/main.yaml"
+          )
+          .sort((a, b) => a.run_number - b.run_number)
+          .at(-1);
+      } else run = await this.github.request(`actions/runs/${run.id}`);
+      if (run?.status === "completed") {
+        let artifact;
+        if (!approved) {
+          const result = await this.github.request(`actions/runs/${run.id}/artifacts?per_page=100`);
+          if (result.total_count > 100) throw new Failure("Too many artifacts to locate screenshot review");
+          artifact = result.artifacts.find(
+            (entry) =>
+              entry.name === "playwright-drift.html" &&
+              !entry.expired &&
+              Date.parse(entry.created_at) >= Date.parse(run.run_started_at)
+          );
+        }
+        if (rerun) await this.post(`actions/runs/${run.id}/rerun`);
+        return { run, artifact, approved };
       }
       await setTimeout(5000);
     }
-    throw new Failure("Label approval recorded; main is still running and needs a rerun");
+    throw new Failure("Main is still running; rerun visual approval after it finishes to collect screenshot review");
   }
 
   target() {
@@ -188,8 +208,25 @@ async function main() {
   const policy = new Policy(new GitHub(env.GITHUB_REPOSITORY, env.GH_TOKEN));
   const event = JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8"));
   const mode = process.argv[2];
-  if (mode === "label") await policy.labelEvent(event);
-  else if (mode === "allow") {
+  if (mode === "label") {
+    const review = await policy.labelEvent(event);
+    if (!review) return;
+    const { run, artifact, approved } = review;
+    const url = `https://github.com/${env.GITHUB_REPOSITORY}/actions/runs/${run.id}/attempts/${run.run_attempt}`;
+    await appendFile(
+      env.GITHUB_STEP_SUMMARY,
+      `## Screenshot review\n\n[Main CI for this commit](${url})\n\n${
+        artifact
+          ? "Download **playwright-drift.html** from this run’s **Artifacts** section for Old / New / Diff images."
+          : approved
+            ? "Screenshot changes are approved for this commit."
+            : run.conclusion === "success"
+              ? "Main CI passed. No screenshot-change approval is needed."
+              : "No current drift report is available. Check main CI; if it reports screenshot differences, rerun it to regenerate the review."
+      }\n`
+    );
+    if (artifact) await appendFile(env.GITHUB_OUTPUT, `run_id=${run.id}\nartifact_id=${artifact.id}\n`);
+  } else if (mode === "allow") {
     const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
     const allowed =
       Boolean(baseline) &&
