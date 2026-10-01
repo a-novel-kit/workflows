@@ -14,6 +14,21 @@ Pin the preset to the same workflows release as the repository's actions. Renova
 native config manager updates the preset reference in the existing workflows update group.
 Relative references inside presets inherit that release tag.
 
+The base preset rebases branches whenever they fall behind the target branch. This brings
+fixes already merged into the target into failing update PRs, including repositories with a
+merge queue, where Renovate otherwise defaults to rebasing only conflicts. It may trigger
+additional CI runs when the target branch changes.
+
+The base preset enables native lockfile maintenance before 05:00 each day in Renovate's
+configured timezone (UTC by default). Supported lockfiles are refreshed within their
+manifest constraints, so transitive fixes do not have to wait for a direct dependency bump.
+Existing CI checks and repository-specific review rules still apply. This uses the existing
+Renovate schedule; it does not add a workflow or dependency-specific overrides.
+
+For npm lockfiles, the package manager performs the refresh. Enforce transitive-package
+release cooldowns in the package manager (for example, pnpm's `minimumReleaseAge`);
+Renovate's `minimumReleaseAge` alone does not cover lockfile maintenance.
+
 | Class       | Additional configuration                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `service`   | Podman Compose and isolated Go tool modules; standard service regeneration; database dependency detection.                          |
@@ -69,8 +84,10 @@ Presets request regeneration tasks; the runner's allowlist grants permission to 
 
 ## Validation
 
-Run `node --test tests/renovate.test.mjs` for the shipped manager and policy fixtures. Before
-releasing a preset change, validate the files with Renovate's strict configuration validator
-and resolve representative consumer configurations with the supported Renovate version.
+Run `node --test tests/renovate.test.mjs` for the shipped manager and policy fixtures.
+The `test-actions` CI job also runs Renovate's strict configuration validator on every preset
+and the runner configuration, using the same Renovate action version as production. It resolves
+each preset's full inheritance from the exact tested commit, including all six repository classes.
+Before release, also check consumer-specific overrides when they interact with the changed policy.
 Check group precedence, local exceptions, command permissions, duplicate managers and preset-tag
 updates. The runner's compatibility base reference is stamped by the release workflow.

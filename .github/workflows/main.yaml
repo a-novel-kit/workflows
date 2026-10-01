@@ -72,6 +72,37 @@ jobs:
           npm ci --prefix node-actions/test-playwright/drive --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
       - name: Run action regression suites
         run: pnpm test
+      - name: Prepare Renovate validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/validate-renovate.sh" <<'BASH'
+          #!/bin/bash
+          set -euo pipefail
+          cd /workspace
+          renovate-config-validator --strict --no-global renovate/*.json
+          renovate-config-validator --strict generic-actions/renovate/config.json
+          for preset in renovate/*.json; do
+            name="${preset#renovate/}"
+            name="${name%.json}"
+            printf 'Resolving %s at %s\n' "$name" "$GITHUB_SHA"
+            RENOVATE_GLOBAL_EXTENDS="[\"github>${GITHUB_REPOSITORY}//renovate/${name}#${GITHUB_SHA}\"]" \
+              renovate-config-validator --strict --no-global "$preset"
+          done
+          BASH
+          bash -n "$RUNNER_TEMP/validate-renovate.sh"
+          chmod +x "$RUNNER_TEMP/validate-renovate.sh"
+      - name: Validate Renovate presets and inheritance
+        uses: renovatebot/github-action@v46.3.6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          docker-cmd-file: ${{ runner.temp }}/validate-renovate.sh
+          docker-volumes: ${{ github.workspace }}:/workspace:ro
+          additional-env-list: |
+            GITHUB_REPOSITORY
+            GITHUB_SHA
+        env:
+          GITHUB_COM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Check the shipped Bash run blocks, which are embedded in YAML.
   lint-shell:
