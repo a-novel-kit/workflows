@@ -20,6 +20,7 @@ function fixture() {
   };
   const receipt = {
     context: APPROVAL,
+    description: "Approved current PR head",
     creator: { login: "github-actions[bot]" },
     state: "success",
     created_at: "2026-09-01T10:00:01Z",
@@ -59,6 +60,8 @@ test("approval requires human write access and a current-head receipt", async ()
     (f) => (f.event.actor.type = "Bot"),
     (f) => (f.event.performed_via_github_app = {}),
     (f) => (f.receipt.state = "failure"),
+    (f) => (f.receipt.description = "No approval recorded; screenshot changes remain blocked"),
+    (f) => delete f.receipt.description,
     (f) => (f.receipt.target_url = "another-pr"),
     (f) => (f.receipt.created_at = "2026-09-01T09:00:00Z"),
     (f) => (f.github.request = async () => ({ permission: "read" })),
@@ -161,7 +164,8 @@ test("label reruns the completed head and synchronize invalidates approval", asy
   assert.equal(posts[1][0], "actions/runs/42/rerun");
   posts.length = 0;
   await f.policy.labelEvent({ ...event, action: "synchronize" });
-  assert.equal(posts[0][1].state, "failure");
+  assert.equal(posts[0][1].state, "success");
+  assert.equal(posts[0][1].description, "No approval recorded; screenshot changes remain blocked");
   assert.equal(posts.length, 1);
 });
 
@@ -212,7 +216,22 @@ test("unapproved heads attach only a current, unexpired drift report without rer
     assert.equal(result.run.id, 42);
     assert.equal(Boolean(result.artifact), expected);
     assert.equal(f.posts.length, 1);
-    assert.equal(f.posts[0][1].state, "failure");
+    assert.equal(f.posts[0][1].state, "success");
+  }
+});
+
+test("green approval receipts cannot authorize screenshot regeneration", async () => {
+  for (const action of ["opened", "reopened", "synchronize", "unlabeled"]) {
+    const f = reviewFixture();
+    await f.policy.labelEvent({ ...f.labelEvent, action, label: { name: LABEL } });
+    const receipt = f.posts[0][1];
+    assert.equal(receipt.state, "success");
+    const proof = fixture();
+    Object.assign(proof.receipt, receipt);
+    assert.equal(await proof.policy.approved(proof.pr), false);
+    assert.equal(await proof.policy.proof(proof.pr, "base"), null);
+    proof.comparison.description = "matched:base";
+    assert.equal(await proof.policy.proof(proof.pr, "base"), "matched");
   }
 });
 

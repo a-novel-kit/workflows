@@ -84,8 +84,10 @@ Presets request regeneration tasks; the runner's allowlist grants permission to 
 
 ## Validation
 
-Run `node --test tests/renovate.test.mjs` for the shipped manager and policy fixtures. Before
-releasing a preset change, validate the files with Renovate's strict configuration validator
-and resolve representative consumer configurations with the supported Renovate version.
+Run `node --test tests/renovate.test.mjs` for the shipped manager and policy fixtures.
+The `test-actions` CI job also runs Renovate's strict configuration validator on every preset
+and the runner configuration, using the same Renovate action version as production. It resolves
+each preset's full inheritance from the exact tested commit, including all six repository classes.
+Before release, also check consumer-specific overrides when they interact with the changed policy.
 Check group precedence, local exceptions, command permissions, duplicate managers and preset-tag
 updates. The runner's compatibility base reference is stamped by the release workflow.
