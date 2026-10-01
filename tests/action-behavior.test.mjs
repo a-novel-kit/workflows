@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { functions, root, step, succeeds, workspace } from "./helpers.mjs";
+import { functions, manifest, root, step, succeeds, workspace } from "./helpers.mjs";
 
 test("credential classification distinguishes rejection, transport failure and expiry", (t) => {
   const w = workspace(t);
@@ -150,6 +150,21 @@ test("browser action passes script names as data and preserves failures and coll
     "--remove-orphans",
   ]);
   assert.equal(w.bash(cleanup, { ...env, TOOL_EXIT: "23" }).status, 23);
+});
+
+test("drift review is one short-lived unzipped file linked even after a journey failure", (t) => {
+  const w = workspace(t);
+  const path = "node-actions/test-playwright/action.yaml";
+  const upload = manifest(path).runs.steps.find((entry) => entry.id === "drift-upload");
+  assert.match(upload.if, /always\(\).*steps.journeys.outputs.drift == 'true'/);
+  assert.equal(upload.with.path, ".visual/review/playwright-drift.html");
+  assert.equal(upload.with.archive, false);
+  assert.equal(upload.with["retention-days"], 3);
+  assert.equal(upload.with["overwrite"], true);
+  const url = "https://github.com/a-novel/platform-studio/actions/runs/123/artifacts/456";
+  succeeds(w.bash(step(path, "Link screenshot drift review"), { DRIFT_URL: url }));
+  assert.ok(w.read("summary").includes(`](${url})`));
+  assert.match(w.read("summary"), /Old \/ New \/ Diff/);
 });
 
 test("append-only gate checks real history, validates the base and honors only the configured override", (t) => {

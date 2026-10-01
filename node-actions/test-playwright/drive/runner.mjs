@@ -1,11 +1,12 @@
 // Run native comparisons and regenerate only after a reviewed visual-only failure.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { glob, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, glob, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, posix, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import * as tar from "tar";
 import { Failure, runCli } from "./common.mjs";
+import { captureReview } from "./review.mjs";
 
 /** Require a complete, unique inventory and distinguish visual failures from functional errors. */
 export function inspectReport(report) {
@@ -60,6 +61,7 @@ export async function archiveBatch(paths, target) {
     "test-results",
     ".visual/comparison-report",
     ".visual/comparison-results",
+    ".visual/review",
   ]) {
     if (existsSync(folder) && (await lstat(folder)).isSymbolicLink())
       throw new Failure("Evidence contains an unsafe file path");
@@ -103,9 +105,31 @@ export async function compare(script, { approved = false, seed = false } = {}) {
   const snapshots = ".visual/snapshots";
   const previous = new Set();
   for await (const path of glob(`${snapshots}/**/*.png`)) previous.add(relative(snapshots, path));
-  const [code, report] = await runTests(script, seed ? "all" : "none");
-  const { paths, visualOnly } = inspectReport(report);
-  const changed = code !== 0 || !isDeepStrictEqual(previous, paths);
+  // Missing mode captures new images without overwriting any existing reference.
+  let [code, report] = await runTests(script, seed ? "all" : "missing");
+  let inspection;
+  try {
+    inspection = inspectReport(report);
+    const added = [...inspection.paths].some((path) => !previous.has(path));
+    const existingDrift = report.tests.some((test) => test.comparisons?.some((comparison) => comparison.drift));
+    if (!seed && added && inspection.visualOnly && !existingDrift) {
+      const inventory = inspection.paths;
+      // A fresh comparison gives additions a normal passing report; real failures are never retried.
+      [code, report] = await runTests(script, "none");
+      inspection = inspectReport(report);
+      if (!isDeepStrictEqual(inspection.paths, inventory))
+        throw new Failure("New screenshot capture changed the test inventory");
+    }
+  } finally {
+    const drift = await captureReview(
+      report,
+      inspection?.visualOnly ? [...previous].filter((path) => !inspection.paths.has(path)) : [],
+      [...(inspection?.paths ?? [])].filter((path) => !previous.has(path))
+    );
+    if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `drift=${drift}\n`);
+  }
+  const { paths, visualOnly } = inspection;
+  const changed = code !== 0 || [...previous].some((path) => !paths.has(path));
   if (!visualOnly || (code && report.tests.every((test) => test.status === "passed")))
     throw new Failure("Test execution or screenshot capture failed; approval cannot waive it");
   if (seed) {

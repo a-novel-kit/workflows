@@ -145,6 +145,17 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 configured, browser evidence instead stays in each platform's private reference and results folders in a
 Shared Drive: the latest successful
 master reference and one completed batch per live branch. Coverage continues using GitHub artifacts.
+Only existing screenshots that change or disappear produce an additional GitHub artifact:
+`playwright-drift.html`, a self-contained **Old / New / Diff** review page linked from the run summary.
+It uses an [unzipped artifact](https://github.com/actions/upload-artifact#upload-an-individual-file-unzipped) for direct
+browser viewing and expires after three days. New screenshots pass without visual approval or a
+drift artifact; unchanged runs also produce no drift artifact. Approved regeneration preserves the
+original drift evidence. This small artifact still counts toward GitHub storage usage.
+
+The complete Playwright report, including drift, stays in the Drive archive. After extracting it,
+open `playwright-report/` with `pnpm exec playwright show-report`; an approved regeneration also keeps
+the original failing report under `.visual/comparison-report/`. Drive previews files but does not host
+the interactive HTML report. Existing Drive configuration and batch cleanup need no changes.
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).

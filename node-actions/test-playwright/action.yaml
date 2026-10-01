@@ -200,13 +200,32 @@ runs:
           node "$ACTION_PATH/drive/runner.mjs" --archive
         fi
         node "$ACTION_PATH/drive/storage.mjs" upload
+    - name: Upload screenshot drift review
+      id: drift-upload
+      if: ${{ always() && inputs.drive_ci_provider != '' && steps.journeys.outputs.drift == 'true' }}
+      uses: actions/upload-artifact@v7
+      with:
+        path: .visual/review/playwright-drift.html
+        archive: false
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 3
+        overwrite: true
+    - name: Link screenshot drift review
+      if: ${{ always() && steps.drift-upload.outcome == 'success' }}
+      shell: bash
+      env:
+        DRIFT_URL: ${{ steps.drift-upload.outputs.artifact-url }}
+      run: |
+        set -euo pipefail
+        printf '\n[Review screenshot drift (Old / New / Diff)](%s) — retained for 3 days.\n' "$DRIFT_URL" >> "$GITHUB_STEP_SUMMARY"
     - name: Record the visual comparison result
       if: ${{ always() && steps.reference.outcome == 'success' }}
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ inputs.github_token }}
-        VISUAL_OUTCOME: ${{ steps.journeys.outcome == 'success' && steps.drive-upload.outcome == 'success' && 'success' || 'failure' }}
+        VISUAL_OUTCOME: ${{ steps.journeys.outcome == 'success' && steps.drive-upload.outcome == 'success' && steps.drift-upload.outcome != 'failure' && 'success' || 'failure' }}
       run: |
         set -euo pipefail
         node "$ACTION_PATH/drive/policy.mjs" record
