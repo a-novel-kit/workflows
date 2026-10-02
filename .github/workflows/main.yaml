@@ -82,12 +82,18 @@ jobs:
           cd /workspace
           renovate-config-validator --strict --no-global renovate/*.json
           renovate-config-validator --strict generic-actions/renovate/config.json
+          # globalExtends resolves before authentication; check inheritance as a local consumer.
+          validation=$(mktemp -d)
+          trap 'rm -rf -- "$validation"' EXIT
+          git -C "$validation" init --quiet
           for preset in renovate/*.json; do
             name="${preset#renovate/}"
             name="${name%.json}"
             printf 'Resolving %s at %s\n' "$name" "$GITHUB_SHA"
-            RENOVATE_GLOBAL_EXTENDS="[\"github>${GITHUB_REPOSITORY}//renovate/${name}#${GITHUB_SHA}\"]" \
-              renovate-config-validator --strict --no-global "$preset"
+            printf '{"extends":["github>%s//renovate/%s#%s"]}\n' \
+              "$GITHUB_REPOSITORY" "$name" "$GITHUB_SHA" > "$validation/renovate.json"
+            git -C "$validation" add renovate.json
+            (cd "$validation" && renovate --platform=local --dry-run=extract --config-validation-error=true)
           done
           BASH
           bash -n "$RUNNER_TEMP/validate-renovate.sh"
@@ -102,7 +108,7 @@ jobs:
             GITHUB_REPOSITORY
             GITHUB_SHA
         env:
-          GITHUB_COM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RENOVATE_GITHUB_COM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Check the shipped Bash run blocks, which are embedded in YAML.
   lint-shell:
