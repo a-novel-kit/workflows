@@ -310,3 +310,29 @@ test("claim index keeps de-labeled members held and honors paused or unrelated i
     assert.equal(posted[0].args[2], expected);
   }
 });
+
+test("membership reads a missing Epic as no snapshot but fails on an unreadable one", (t) => {
+  const resolve = step("generic-actions/epic-membership/action.yaml", "resolve");
+  for (const [status, expected, reads] of [
+    ["404", 0, 1],
+    ["502", 1, 3],
+  ]) {
+    const w = workspace(t);
+    w.stub("sleep", "");
+    w.stub(
+      "gh",
+      `
+      import * as fs from 'node:fs'; const args = process.argv.slice(2);
+      if (args[1] === 'graphql') {
+        console.log(JSON.stringify({ data: { search: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
+      } else {
+        fs.appendFileSync('reads', '1');
+        console.error('gh: request failed (HTTP ${status})'); process.exit(1);
+      }`
+    );
+    const env = { OWNER: "a-novel-kit", EPIC: "900", PLANNING_REPO: ".github", RUNNER_TEMP: w.cwd };
+    assert.equal(w.bash(resolve, env).status, expected);
+    assert.equal(w.read("reads").length, reads);
+    assert.equal(existsSync(join(w.cwd, "output")) && w.read("output").includes("members=[]"), expected === 0);
+  }
+});
