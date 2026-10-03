@@ -187,7 +187,6 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         DRIVE_TOKEN: ${{ steps.drive-auth.outputs.access_token }}
-        GH_TOKEN: ${{ inputs.github_token }}
         REFERENCES_FOLDER: ${{ inputs.references_folder }}
         RESULTS_FOLDER: ${{ inputs.results_folder }}
         BATCH_ARCHIVE: .visual/batch.tar
