@@ -26,8 +26,8 @@ runs:
         path: |
           ~/go/pkg/mod
           ~/.cache/go-build
-        key: go-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
-        restore-keys: go-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
+        key: go-lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
+        restore-keys: go-lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-
     # golangci-lint.mod is the single source of truth for the version developers run
     # locally (`go tool -modfile=golangci-lint.mod golangci-lint`): Renovate bumps it
     # and CI follows, with no version literal here to drift.

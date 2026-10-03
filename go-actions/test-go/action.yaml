@@ -59,8 +59,8 @@ runs:
         path: |
           ~/go/pkg/mod
           ~/.cache/go-build
-        key: go-test-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
-        restore-keys: go-test-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
+        key: go-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
+        restore-keys: go-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-
     - name: download go packages
       if: ${{ inputs.skip_setup != 'true' }}
       shell: bash

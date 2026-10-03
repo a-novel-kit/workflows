@@ -29,8 +29,8 @@ runs:
         path: |
           ~/go/pkg/mod
           ~/.cache/go-build
-        key: go-generate-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
-        restore-keys: go-generate-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
+        key: go-generate-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
+        restore-keys: go-generate-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-
     - name: Generate Go code
       shell: bash
       env:
