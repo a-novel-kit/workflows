@@ -98,12 +98,18 @@ runs:
           type=raw,value=latest,enable=${{ inputs.version != '' }}
         flavor: latest=auto
     - uses: docker/setup-buildx-action@v4
+      with:
+        # Hosted runners are discarded after the job; removing a large builder took 10s.
+        cleanup: false
     - uses: docker/login-action@v4
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ inputs.github_token }}
     - uses: docker/build-push-action@v7
+      env:
+        # The job summary still reports the build; the record artifact only clutters the run.
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
       with:
         context: ${{ inputs.context }}
         # Persist the module and go-build cache across runs, so an image whose Go
@@ -112,7 +118,9 @@ runs:
         # `go build` runs. The scope is per image, so the parallel jobs building
         # different images keep separate caches.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
-        cache-to: ${{ inputs.cache == 'true' && format('type=gha,mode=max,scope={0},ignore-error=true', inputs.image_name) || '' }}
+        # Only the default branch writes the cache: other refs read it, and a merge-queue
+        # branch's cache is unreachable once the branch is deleted.
+        cache-to: ${{ inputs.cache == 'true' && github.ref_name == github.event.repository.default_branch && format('type=gha,mode=max,scope={0},ignore-error=true', inputs.image_name) || '' }}
         load: true
         tags: ghcr.io/${{ inputs.image_name }}:test
         file: ${{ inputs.file }}
@@ -132,6 +140,8 @@ runs:
     - uses: docker/build-push-action@v7
       if: ${{ success() }}
       id: build
+      env:
+        DOCKER_BUILD_RECORD_UPLOAD: "false"
       with:
         context: ${{ inputs.context }}
         # Restore only: the push build shares this job's warm buildx cache from the
