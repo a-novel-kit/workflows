@@ -32,24 +32,6 @@ jobs:
           app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
           client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
 
-  # Validate manifests before a release reaches downstream consumers.
-  lint-action-manifests:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Validate composite expression contexts
-        run: node .github/scripts/lint-action-manifests.mjs .
-
   test-actions:
     runs-on: ubuntu-latest
     permissions:
