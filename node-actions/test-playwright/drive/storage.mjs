@@ -386,8 +386,16 @@ async function main() {
       run_number: env.GITHUB_RUN_NUMBER,
       attempt: env.GITHUB_RUN_ATTEMPT,
     };
-    if (mode === "stage" && !(await github.current(props.sha, props.run_id, props.attempt)))
-      throw new Failure("Superseded master run cannot stage references");
+    if (mode === "stage" && !(await github.current(props.sha, props.run_id, props.attempt))) {
+      // Master moving on mid-run is routine: the newer run stages its own reference.
+      if ((await github.request("git/ref/heads/master")).object.sha === props.sha)
+        throw new Failure("Only the latest main.yaml push run on master can stage references");
+      await appendFile(
+        env.GITHUB_STEP_SUMMARY,
+        "\nMaster moved on during this run; the newer run stages the reference.\n"
+      );
+      return;
+    }
     const batch = await drive.upload(
       mode === "stage" ? references : results,
       env.BATCH_ARCHIVE,
