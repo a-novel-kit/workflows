@@ -77,20 +77,14 @@ export async function archiveBatch(paths, target) {
   for (const path of sources) {
     if (!existsSync(path) || !(await lstat(path)).isFile())
       throw new Failure("Screenshot inventory contains a missing file");
-    const resolved = await realpath(path);
-    if (
-      (await lstat(path)).isSymbolicLink() ||
-      relative(workspace, resolved).startsWith("..") ||
-      isAbsolute(relative(workspace, resolved))
-    )
-      throw new Failure("Evidence contains an unsafe file path");
+    const resolved = relative(workspace, await realpath(path));
+    if (resolved.startsWith("..") || isAbsolute(resolved)) throw new Failure("Evidence contains an unsafe file path");
   }
   await tar.c(
     {
       file: target,
       portable: true,
       noDirRecurse: true,
-      filter: (path) => sources.includes(path),
       onWriteEntry(entry) {
         if (entry.path.startsWith(".visual/snapshots/")) entry.path = entry.path.slice(".visual/".length);
       },
