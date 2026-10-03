@@ -44,10 +44,23 @@ runs:
   steps:
     - uses: actions/checkout@v7
       if: ${{ inputs.skip_setup != 'true' }}
-    - uses: actions/setup-go@v7.0.0
+    - id: setup-go
+      uses: actions/setup-go@v7.0.0
       if: ${{ inputs.skip_setup != 'true' }}
       with:
         go-version-file: "go.mod"
+        # setup-go keys one cache on go.sum for every Go job in the repo, so the first
+        # job to finish decided whether the dependencies arrived compiled.
+        cache: false
+    - id: go-cache
+      uses: actions/cache/restore@v6
+      if: ${{ inputs.skip_setup != 'true' }}
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: go-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
+        restore-keys: go-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-
     - name: download go packages
       if: ${{ inputs.skip_setup != 'true' }}
       shell: bash
@@ -110,6 +123,16 @@ runs:
           -- -count=1 -cover -coverprofile=${{ inputs.coverage_file }} -json ${{ env.MODULES }}
 
         go tool cover -func ${{ inputs.coverage_file }}
+    # Only pushes to the default branch save: other refs restore its cache, a merge-queue
+    # branch's cache is unreachable once the branch is deleted, and a pull_request_target run
+    # reports the base branch as its ref.
+    - if: inputs.skip_setup != 'true' && steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ steps.go-cache.outputs.cache-primary-key }}
     - name: archive code coverage results
       id: upload-artifact
       uses: actions/upload-artifact@v7

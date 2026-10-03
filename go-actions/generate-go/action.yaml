@@ -16,9 +16,21 @@ runs:
     - uses: actions/checkout@v7
       with:
         persist-credentials: false
-    - uses: actions/setup-go@v7
+    - id: setup-go
+      uses: actions/setup-go@v7
       with:
         go-version-file: ${{ inputs.working_directory && format('{0}/go.mod', inputs.working_directory) || 'go.mod' }}
+        # setup-go keys one cache on go.sum for every Go job in the repo, so the first
+        # job to finish decided whether the generator tools arrived compiled.
+        cache: false
+    - id: go-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: go-generate-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
+        restore-keys: go-generate-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-
     - name: Generate Go code
       shell: bash
       env:
@@ -48,6 +60,16 @@ runs:
         }
 
         generate
+    # Only pushes to the default branch save: other refs restore its cache, a merge-queue
+    # branch's cache is unreachable once the branch is deleted, and a pull_request_target run
+    # reports the base branch as its ref.
+    - if: steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ steps.go-cache.outputs.cache-primary-key }}
     - uses: a-novel-kit/workflows/generic-actions/check-changes@v1.36.3
       with:
         pathspec: ${{ inputs.working_directory || '.' }}
