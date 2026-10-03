@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { functions, step, succeeds, workspace } from "./helpers.mjs";
@@ -309,6 +309,79 @@ test("claim index keeps de-labeled members held and honors paused or unrelated i
     assert.equal(posted.length, 1);
     assert.equal(posted[0].args[2], expected);
   }
+});
+
+test("the sweep enumerates open pull requests once, shared with the enqueue-token scope", (t) => {
+  const w = workspace(t);
+  const pr = (repo, number, ...labels) => ({
+    number,
+    headRefOid: `sha${number}`,
+    mergedAt: null,
+    baseRefName: "master",
+    isDraft: false,
+    repository: { nameWithOwner: `a-novel-kit/${repo}` },
+    labels: { nodes: labels.map((name) => ({ name })) },
+  });
+  const pages = [
+    [pr("repo-b", 1, "epic:900"), {}],
+    [pr("repo-c", 2, "bug"), pr("repo-a", 3, "epic:901")],
+  ];
+  w.write("pages.json", JSON.stringify(pages));
+  w.stub(
+    "gh",
+    `
+    import * as fs from 'node:fs';
+    if (process.env.GH_FAIL) process.exit(1);
+    const pages = JSON.parse(fs.readFileSync('pages.json'));
+    const page = Number(process.argv.find((arg) => arg.startsWith('cursor='))?.slice(7) ?? 0);
+    console.log(JSON.stringify({ data: { search: {
+      pageInfo: { hasNextPage: page + 1 < pages.length, endCursor: String(page + 1) }, nodes: pages[page] } } }));
+  `
+  );
+  w.stub(
+    "search_prs",
+    `
+    import * as fs from 'node:fs'; fs.appendFileSync('searches', process.argv[2] + '\\n');
+    if (process.env.SEARCH_FAIL) process.exit(1);
+    process.stdout.write(fs.readFileSync(process.env.ENUMERATION));
+  `
+  );
+  const outputs = () =>
+    Object.fromEntries(
+      w
+        .read("output")
+        .trim()
+        .split("\n")
+        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)])
+    );
+  const scope = step("generic-actions/detect-partial-landing/action.yaml", "scope");
+  succeeds(w.bash(scope, { ORG: "a-novel-kit", RUNNER_TEMP: w.cwd }));
+  const { repos, open_prs } = outputs();
+  assert.equal(repos, "repo-a,repo-b");
+  const enumeration = readFileSync(open_prs, "utf8");
+  assert.deepEqual(JSON.parse(enumeration), [pages[0][0], ...pages[1]]);
+
+  const sweep = `set -euo pipefail\n${functions(script, ["sweep_main"])}
+    standalone_sweep() { printf '%s' "$all_open" > enumerated.json; }
+    build_claim_index() { CLAIM_EPICS=''; }
+    sweep_epic() { printf '%s\\n' "$1" >> epics; }
+    sweep_main`;
+  for (const [OPEN_PRS, SEARCH_FAIL, searches] of [
+    [open_prs, "", ""],
+    ["", "", "org:a-novel-kit is:pr is:open\n"],
+    ["", "1", "org:a-novel-kit is:pr is:open\n"],
+  ]) {
+    for (const file of ["searches", "epics", "enumerated.json"]) w.write(file, "");
+    const result = w.bash(sweep, { ORG: "a-novel-kit", OPEN_PRS, SEARCH_FAIL, ENUMERATION: open_prs });
+    assert.equal(result.status, SEARCH_FAIL ? 1 : 0, result.stderr);
+    assert.equal(w.read("searches"), searches);
+    assert.equal(w.read("enumerated.json"), SEARCH_FAIL ? "" : enumeration);
+    assert.equal(w.read("epics"), SEARCH_FAIL ? "" : "900\n901\n");
+  }
+
+  w.write("output", "");
+  succeeds(w.bash(scope, { ORG: "a-novel-kit", RUNNER_TEMP: w.cwd, GH_FAIL: "1" }));
+  assert.deepEqual(outputs(), { repos: "" });
 });
 
 test("membership reads a missing Epic as no snapshot but fails on an unreadable one", (t) => {

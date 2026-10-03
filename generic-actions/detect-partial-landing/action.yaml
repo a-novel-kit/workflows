@@ -184,13 +184,13 @@ runs:
         permission-checks: write
 
     # Discover the repos with an open epic:<N> PR — the bound on the enqueue token's scope, so a leak
-    # cannot reach a repo that is not mid-landing. It reads the same open-PR + label view the run step
-    # enumerates (labels first:100), which makes it a superset of the roll-forward targets (a stray is an
-    # open Epic member). It stays a superset because the roll-forward skips strays the label search no
-    # longer returns: the frozen activation snapshot widens membership past this query, so a snapshot-only
-    # member's repo can be absent here, and sweep_post_clear keeps that member out of reenqueue's reach.
-    # A PR opened in the seconds between self-heals on the next sweep. A partial page failure abandons
-    # the token, so the scope is never partial.
+    # cannot reach a repo that is not mid-landing. This is the sweep's own enumeration: the page set is
+    # saved in search_prs' node shape and sweep_main reuses it, so the scope and the roll-forward
+    # targets come from one read and every stray (an open Epic member) is inside the scope. The
+    # roll-forward also skips strays the label search no longer returns: the frozen activation snapshot
+    # widens membership past this query, so a snapshot-only member's repo can be absent here, and
+    # sweep_post_clear keeps that member out of reenqueue's reach. A partial page failure abandons the
+    # token and saves nothing, so the scope is never partial.
     - name: Discover active-Epic repos (scope for the enqueue token)
       id: scope
       if: ${{ steps.mode.outputs.mode == 'sweep' }}
@@ -205,8 +205,11 @@ runs:
         fi
         Q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:100, after:$cursor){
           pageInfo{ hasNextPage endCursor }
-          nodes{ ... on PullRequest{ repository{ name } labels(first:100){ nodes{ name } } } } } }'
-        cursor=""; names=""; failed=0
+          nodes{ ... on PullRequest{
+            number headRefOid mergedAt baseRefName isDraft
+            repository{ nameWithOwner }
+            labels(first:100){ nodes{ name } } } } } }'
+        cursor=""; prs='[]'; failed=0
         while :; do
           args=(-f query="$Q" -f q="org:${ORG} is:pr is:open")
           [ -n "$cursor" ] && args+=(-f cursor="$cursor")
@@ -216,23 +219,27 @@ runs:
             || ! printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
             failed=1; break
           fi
-          names+=$(printf '%s' "$data" | jq -r '
-            .data.search.nodes[]? | select([.labels.nodes[]?.name] | any(test("^epic:[0-9]+$"))) | .repository.name')
-          names+=$'\n'
+          prs=$(jq -cs '.[0] + [(.[1].data.search.nodes // [])[] | select(.number != null)]' \
+            <(printf '%s' "$prs") <(printf '%s' "$data"))
           [ "$(printf '%s' "$data" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
           cursor=$(printf '%s' "$data" | jq -r '.data.search.pageInfo.endCursor')
         done
         if [ "$failed" = 1 ]; then
           # A discovery blip abandons the enqueue token for this sweep: a partial scope 403s any
-          # reenqueue in an uncovered repo. Freeze detection (checks token) is unaffected, and the next
-          # sweep re-discovers and rolls the stray forward.
+          # reenqueue in an uncovered repo. Freeze detection (checks token) is unaffected, because
+          # sweep_main enumerates again when nothing was saved, and the next sweep rolls the stray
+          # forward.
           echo "::warning::active-Epic repo discovery failed — not minting the enqueue token this sweep (roll-forward waits for the next); freeze detection is unaffected."
           echo "repos=" >> "$GITHUB_OUTPUT"
         else
-          # sed drops the blank lines and still exits 0 when it drops every one, which is the common
-          # no-active-Epic case; under set -e/pipefail a non-zero exit here aborts the whole sweep.
-          csv=$(printf '%s' "$names" | sed '/^$/d' | sort -u | paste -sd, -)
-          echo "repos=${csv}" >> "$GITHUB_OUTPUT"
+          open_prs=$(mktemp "${RUNNER_TEMP}/open-prs.XXXXXX")
+          printf '%s' "$prs" > "$open_prs"
+          csv=$(printf '%s' "$prs" | jq -r '[.[] | select([.labels.nodes[]?.name] | any(test("^epic:[0-9]+$")))
+            | .repository.nameWithOwner | split("/")[1]] | unique | join(",")')
+          {
+            echo "repos=${csv}"
+            echo "open_prs=${open_prs}"
+          } >> "$GITHUB_OUTPUT"
           echo "Enqueue-token scope (repos with an open Epic PR): ${csv:-<none>}"
         fi
 
@@ -261,6 +268,8 @@ runs:
         GH_TOKEN: ${{ steps.read.outputs.token }}
         CHECKS_TOKEN: ${{ steps.checks.outputs.token }}
         WRITE_TOKEN: ${{ steps.write.outputs.token }}
+        # The open-PR enumeration the scope step saved; empty in per-PR mode or when its read failed.
+        OPEN_PRS: ${{ steps.scope.outputs.open_prs }}
         MODE: ${{ steps.mode.outputs.mode }}
         ORG: ${{ inputs.org }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
@@ -351,7 +360,8 @@ runs:
 
         # ---- Shared GraphQL documents ----------------------------------------------------
 
-        # PR search node — one shape reused by enumeration and the three per-Epic resolve passes.
+        # PR search node — one shape reused by enumeration and the three per-Epic resolve passes. The
+        # scope step saves its enumeration in this shape, so a field added here is added there too.
         SEARCH_Q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
@@ -1224,7 +1234,12 @@ runs:
           # max_freeze_repos. Checked at the end, so the whole sweep run ends red.
           blast_cap_tripped=false
           echo "Enumerating active Epics (epic:<N> labels on open PRs ∪ frozen snapshots, org=${ORG})…" | tee -a "$GITHUB_STEP_SUMMARY"
-          if ! all_open=$(search_prs "org:${ORG} is:pr is:open"); then
+          # The scope step's read, so the enqueue token covers every stray this pass rolls forward.
+          # When that read failed nothing was saved and no enqueue token exists, so detection
+          # enumerates afresh.
+          if [ -n "${OPEN_PRS:-}" ]; then
+            all_open=$(cat "$OPEN_PRS")
+          elif ! all_open=$(search_prs "org:${ORG} is:pr is:open"); then
             echo "::error::could not enumerate open PRs (GraphQL search failed after retries) — nothing done this sweep"
             exit 1
           fi
