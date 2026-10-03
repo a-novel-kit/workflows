@@ -10,45 +10,51 @@ runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v7
-    - uses: actions/setup-go@v7.0.0
+    - id: setup-go
+      uses: actions/setup-go@v7.0.0
       with:
         # Resolve go.mod relative to working-directory so the action works when the
         # Go module is not at the repo root. An empty working-directory falls back
         # to the repo-root go.mod.
         go-version-file: ${{ inputs.working-directory && format('{0}/go.mod', inputs.working-directory) || 'go.mod' }}
-    # Resolve the golangci-lint version from the repo's own tool modfile, so CI
-    # lints with the version developers run locally (`go tool -modfile=
-    # golangci-lint.mod golangci-lint`). That modfile is the single source of
-    # truth: Renovate bumps it and CI follows on the next run, with no version
-    # literal here to drift, and no fleet-wide cache-busting from `latest` on
-    # every upstream release.
+        # setup-go keys one cache on go.sum for every Go job in the repo, so the first
+        # job to finish decided what the others restored. Each Go action keeps its own.
+        cache: false
+    - id: go-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: go-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
+        restore-keys: go-lint-${{ runner.os }}-${{ steps.setup-go.outputs.go-version }}-
+    # golangci-lint.mod is the single source of truth for the version developers run
+    # locally (`go tool -modfile=golangci-lint.mod golangci-lint`): Renovate bumps it
+    # and CI follows, with no version literal here to drift.
+    #
+    # The prebuilt binary below never reads golangci-lint.sum, so an incomplete one
+    # would rot until the local command fails with `missing go.sum entry`. Loading the
+    # tool's import graph fails on exactly those entries without compiling the tool.
     - id: golangci-version
-      shell: bash
-      run: |
-        dir='${{ inputs.working-directory }}'
-        version="$(cd "${dir:-.}" && go list -modfile=golangci-lint.mod -m -f '{{.Version}}' github.com/golangci/golangci-lint/v2)"
-        if [ -z "$version" ]; then
-          echo "::error::could not resolve golangci-lint version from golangci-lint.mod" >&2
-          exit 1
-        fi
-        echo "version=$version" >> "$GITHUB_OUTPUT"
-    # Prove the golangci-lint tool module actually resolves from its modfile, so
-    # golangci-lint.sum completeness is exercised by CI. The lint step below runs a
-    # prebuilt binary for speed and reads golangci-lint.mod only for a version
-    # string, so nothing here otherwise touches the .sum. Without this step it can
-    # rot until `pnpm lint:go` (go tool -modfile=golangci-lint.mod golangci-lint)
-    # breaks locally with `missing go.sum entry` while master stays green — the
-    # exact drift that sat unnoticed across three repos. Running the tool the same
-    # way developers do forces every module-content hash to be present.
-    - name: Verify the golangci-lint tool module resolves
       shell: bash
       env:
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
         cd "${WORKING_DIRECTORY:-.}"
-        go tool -modfile=golangci-lint.mod golangci-lint version
+        go list -modfile=golangci-lint.mod -deps github.com/golangci/golangci-lint/v2/cmd/golangci-lint >/dev/null
+        version="$(go list -modfile=golangci-lint.mod -m -f '{{.Version}}' github.com/golangci/golangci-lint/v2)"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
     - uses: golangci/golangci-lint-action@v9
       with:
         version: ${{ steps.golangci-version.outputs.version }}
         working-directory: ${{ inputs.working-directory }}
+    # Only the default branch saves: other refs restore its cache, and a merge-queue
+    # branch's cache is unreachable once the branch is deleted.
+    - if: steps.go-cache.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ steps.go-cache.outputs.cache-primary-key }}
