@@ -65,7 +65,7 @@ runs:
   using: "composite"
   steps:
     - id: build
-      uses: a-novel-kit/workflows/build-actions/docker@v1.36.3
+      uses: a-novel-kit/workflows/build-actions/docker@v1.37.0
       with:
         mode: job
         file: ${{ inputs.file }}
