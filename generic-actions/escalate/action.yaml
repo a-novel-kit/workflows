@@ -330,7 +330,7 @@ runs:
         list_state=open
         [ "$STATE" = "resolve" ] && list_state=all
         if ! existing_json=$(gh issue list --repo "$PLANNING_REPO" --label "$ESC_LABEL" \
-          --state "$list_state" --json number,url,body,state --limit 200 2>"$RUNNER_TEMP/list.err"); then
+          --state "$list_state" --json id,number,url,body,state --limit 200 2>"$RUNNER_TEMP/list.err"); then
           echo "::error::could not list escalations in $PLANNING_REPO ($(tr '\n' ' ' < "$RUNNER_TEMP/list.err")) — failing rather than risk a duplicate ticket or a false resolve."
           exit 1
         fi
@@ -369,7 +369,7 @@ runs:
             fi
             if [ -z "$first_num" ]; then
               first_num="$num"; first_url="$url"
-              first_node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
+              first_node=$(printf '%s' "$row" | jq -r '.id')
             fi
           done <<< "$matches"
           emit resolved "$([ "$DRY_RUN" = "true" ] && echo false || echo true)" "$first_num" "$first_node" "$first_url"
@@ -401,6 +401,7 @@ runs:
 
         num=$(printf '%s' "$match" | jq -r '.number')
         url=$(printf '%s' "$match" | jq -r '.url')
+        node=$(printf '%s' "$match" | jq -r '.id')
         ebody=$(printf '%s' "$match" | jq -r '.body // ""')
         # Guard both parses with a fallback: under set -e a grep that matches nothing returns
         # non-zero and aborts the step before the default below applies.
@@ -415,7 +416,6 @@ runs:
           note="[dry-run] would UPDATE #$num (occurrence $count) and drive board Status → \"$TARGET_STATUS\""
           [ "$DO_MENTION" = "true" ] && note="$note; re-notify ${MENTION:-<no mention set>}"
           echo "$note." | tee -a "$GITHUB_STEP_SUMMARY"
-          node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
           emit updated false "$num" "$node" "$url"
           exit 0
         fi
@@ -429,7 +429,6 @@ runs:
           gh issue comment "$num" --repo "$PLANNING_REPO" \
             --body "🔁 Recurred (occurrence ${count}) — ${RUN_URL}.${ping}" >/dev/null
         fi
-        node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
         echo "Updated escalation #$num (occurrence $count)." | tee -a "$GITHUB_STEP_SUMMARY"
         emit updated true "$num" "$node" "$url"
 
