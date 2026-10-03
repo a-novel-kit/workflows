@@ -183,7 +183,7 @@ jobs:
             fi
             echo "  - ${name} (${login}): ${status} — PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
 
-            # ── Message shape, following generic-actions/token-expiry-notify ────────────────────
+            # ── Message shape ───────────────────────────────────────────────────────────────────
             # The whole message is one embed description with no title field: a heading with the days
             # left, a `-#` grey subtext, a blank line, then the masked regen link. The org-wide sweep
             # adds the owner login to the subtext, since the owner is not the runner, and @mentions
