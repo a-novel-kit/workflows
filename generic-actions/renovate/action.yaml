@@ -22,11 +22,13 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.38.0
+    # Renovate reads the repository through the API and its config from this action's folder, so
+    # the run needs the bot token and no checkout.
+    - uses: actions/create-github-app-token@v3
       id: app_token
       with:
-        client_id: ${{ inputs.client_id }}
-        app_private_key: ${{ inputs.app_private_key }}
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
     - name: self-hosted renovate
       uses: renovatebot/github-action@v46.3.6
       with:
