@@ -197,26 +197,28 @@ runs:
           # 2. Resolve the content's item in this project, adding it if missing so a derived
           #    write on an un-boarded Task boards it. Page through projectItems so a content
           #    sitting on many projects still matches when the target board is not on the
-          #    first page.
-          item_q='query($c:ID!,$cursor:String){ node(id:$c){
-            ... on Issue{ projectItems(first:100, after:$cursor){
-              pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } }
-            ... on PullRequest{ projectItems(first:100, after:$cursor){
-              pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } } } }'
-          item_id=""
+          #    first page. Each item carries its current value for this field, which the
+          #    compare-before-write reads, so it costs no request of its own.
+          item_sel="id project{ id } fieldValueByName(name:\$field){ $cur_frag }"
+          item_q="query(\$c:ID!,\$cursor:String,\$field:String!){ node(id:\$c){
+            ... on Issue{ projectItems(first:100, after:\$cursor){
+              pageInfo{ hasNextPage endCursor } nodes{ $item_sel } } }
+            ... on PullRequest{ projectItems(first:100, after:\$cursor){
+              pageInfo{ hasNextPage endCursor } nodes{ $item_sel } } } } }"
+          item=""
           cursor=""
           while :; do
-            args=(-F c="$content_id")
+            args=(-F c="$content_id" -F field="$FIELD")
             [ -n "$cursor" ] && args+=(-F cursor="$cursor")
             iresp=$(gh api graphql -f query="$item_q" "${args[@]}")
-            item_id=$(echo "$iresp" | jq -r --arg p "$PROJECT_ID" \
-              '[.data.node.projectItems.nodes[] | select(.project.id==$p) | .id][0] // empty')
-            [ -n "$item_id" ] && break
+            item=$(echo "$iresp" | jq -c --arg p "$PROJECT_ID" \
+              '[.data.node.projectItems.nodes[] | select(.project.id==$p)][0] // empty')
+            [ -n "$item" ] && break
             [ "$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.hasNextPage')" = "true" ] || break
             cursor=$(echo "$iresp" | jq -r '.data.node.projectItems.pageInfo.endCursor')
           done
 
-          if [ -z "$item_id" ]; then
+          if [ -z "$item" ]; then
             if [ "$ADD_IF_MISSING" != "true" ]; then
               echo "::error::content $content_id is not on the board and add_if_missing=false"
               exit 1
@@ -226,21 +228,19 @@ runs:
                 | tee -a "$GITHUB_STEP_SUMMARY"
               continue
             fi
-            add_m='mutation($proj:ID!,$c:ID!){
-              addProjectV2ItemById(input:{projectId:$proj,contentId:$c}){ item{ id } } }'
-            item_id=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$content_id" \
-              | jq -r '.data.addProjectV2ItemById.item.id')
-            echo "Added content to the board (item $item_id)." | tee -a "$GITHUB_STEP_SUMMARY"
+            add_m="mutation(\$proj:ID!,\$c:ID!,\$field:String!){
+              addProjectV2ItemById(input:{projectId:\$proj,contentId:\$c}){ item{ $item_sel } } }"
+            item=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$content_id" -F field="$FIELD" \
+              | jq -c '.data.addProjectV2ItemById.item')
+            echo "Added content to the board (item $(echo "$item" | jq -r '.id'))." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
+          item_id=$(echo "$item" | jq -r '.id')
           last_item="$item_id"
 
-          # 3. Compare-before-write: read the item's current value for this field. An equal
-          #    value means a re-run or an overlapping trigger, so nothing is mutated.
-          cur_q="query(\$item:ID!,\$field:String!){ node(id:\$item){ ... on ProjectV2Item{
-            fieldValueByName(name:\$field){ $cur_frag } } } }"
-          cur=$(gh api graphql -f query="$cur_q" -F item="$item_id" -F field="$FIELD" \
-            | jq -r '.data.node.fieldValueByName.current // empty')
+          # 3. Compare-before-write against the value read with the item. An equal value means
+          #    a re-run or an overlapping trigger, so nothing is mutated.
+          cur=$(echo "$item" | jq -r '.fieldValueByName.current // empty')
 
           # A set-once field such as Start date keeps whatever it already holds, so a re-run
           # or the sweep cannot overwrite the original stamp.
