@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "packageRules": [
+    {
+      "description": "Regenerate root-module protobuf output when the direct generator dependency changes, keeping generated headers and code synchronized with go.mod.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["google.golang.org/protobuf"],
+      "matchDepTypes": ["require"],
+      "matchFileNames": ["/^go\\.mod$/"],
+      "postUpgradeTasks": {
+        "commands": ["go tool -modfile=buf.mod buf generate"],
+        "executionMode": "branch"
+      }
+    }
+  ]
+}

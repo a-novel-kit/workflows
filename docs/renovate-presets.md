@@ -43,6 +43,26 @@ Renovate's `minimumReleaseAge` alone does not cover lockfile maintenance.
 | `infra`     | Common base; deployment-specific policy remains in the repository.                                                                  |
 | `meta`      | Common base for organization configuration repositories.                                                                            |
 
+## Protobuf regeneration
+
+A repository that generates protobuf code with a `buf.mod` tool module adds the `protobuf` preset
+beside its class, pinned to the same release:
+
+```json
+{
+  "extends": [
+    "github>a-novel-kit/workflows//renovate/service#v1.38.0",
+    "github>a-novel-kit/workflows//renovate/protobuf#v1.38.0"
+  ]
+}
+```
+
+When a root `go.mod` update moves `google.golang.org/protobuf`, the preset runs
+`go tool -modfile=buf.mod buf generate` in the update branch, so generated headers and code stay in
+step with the generator. The repository's `allowed_commands` must permit it. The preset is opt-in
+because a class does not say whether a repository generates protobuf code, and the command fails
+in one without `buf.mod`.
+
 ## Runner configuration
 
 The shared action loads its operator settings from `generic-actions/renovate/config.json`.
