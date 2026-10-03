@@ -44,6 +44,8 @@ runs:
   steps:
     - uses: actions/checkout@v7
       if: ${{ inputs.skip_setup != 'true' }}
+      with:
+        persist-credentials: false
     - id: setup-go
       uses: actions/setup-go@v7.0.0
       if: ${{ inputs.skip_setup != 'true' }}
@@ -61,19 +63,17 @@ runs:
           ~/.cache/go-build
         key: go-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
         restore-keys: go-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-
-    - name: download go packages
-      if: ${{ inputs.skip_setup != 'true' }}
-      shell: bash
-      run: go mod download
     - name: discover modules
       shell: bash
       id: discover
+      env:
+        PACKAGES: ${{ runner.temp }}/go-test-packages.txt
       run: |
         # Enumerate every package across every module. Iterating modules from
         # `go list -m` is what makes this work in a Go workspace, where packages
         # span more than one module and a single `go list ./...` reaches only one.
         #
-        # Every read is checked, and the resulting set has to be non-empty. An empty MODULES is
+        # Every read is checked, and the resulting set has to be non-empty. An empty list is
         # passed to gotestsum as no package arguments at all, which makes it default to `.` — a
         # directory that in most of these modules holds no test files. It reports `DONE 0 tests`
         # and exits 0, coverage comes out as the bare `mode: set` header, and the job goes green
@@ -91,7 +91,7 @@ runs:
             return 1
           fi
 
-          : >modules.txt
+          : >"$PACKAGES"
 
           for mod in $modules; do
             if ! packages=$(go list "${mod//$root/.}/..."); then
@@ -104,25 +104,32 @@ runs:
             # the whole set is a failure, so it is checked once, below.
             [ -n "$packages" ] || continue
 
-            printf '%s\n' "$packages" ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }} >>modules.txt
+            printf '%s\n' "$packages" ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }} >>"$PACKAGES"
           done
 
-          if [ ! -s modules.txt ]; then
+          if [ ! -s "$PACKAGES" ]; then
             echo "::error::discovery produced no packages — the test run would report success having run nothing"
             return 1
           fi
         }
 
         discover_modules || exit 1
-
-        echo "MODULES=$(tr '\n' ' ' <modules.txt)" >>"$GITHUB_ENV"
     - name: run tests
       shell: bash
+      env:
+        PACKAGES: ${{ runner.temp }}/go-test-packages.txt
+        MODFILE: ${{ inputs.modfile }}
+        TEST_FILE: ${{ inputs.test_file }}
+        COVERAGE_FILE: ${{ inputs.coverage_file }}
       run: |
-        go tool -modfile=${{ inputs.modfile }} gotestsum --jsonfile ${{ inputs.test_file }} --format pkgname \
-          -- -count=1 -cover -coverprofile=${{ inputs.coverage_file }} -json ${{ env.MODULES }}
+        set -euo pipefail
+        # A read loop rather than mapfile, which macOS runners' Bash 3.2 lacks.
+        packages=()
+        while IFS= read -r package; do packages+=("$package"); done <"$PACKAGES"
+        go tool -modfile="$MODFILE" gotestsum --jsonfile "$TEST_FILE" --format pkgname \
+          -- -count=1 -cover -coverprofile="$COVERAGE_FILE" -json "${packages[@]}"
 
-        go tool cover -func ${{ inputs.coverage_file }}
+        go tool cover -func "$COVERAGE_FILE"
     # Only pushes to the default branch save: other refs restore its cache, a merge-queue
     # branch's cache is unreachable once the branch is deleted, and a pull_request_target run
     # reports the base branch as its ref.

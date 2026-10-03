@@ -152,9 +152,7 @@ test("release train distinguishes read failure, empty history and release types"
     "gh",
     `
     if (process.env.API_FAIL === 'true') process.exit(1);
-    const messages = JSON.parse(process.env.MESSAGES);
-    const filter = process.argv[process.argv.indexOf('--jq') + 1];
-    console.log(messages.map(m => filter.includes('split') ? m.split('\\n')[0] : m).join('\\n'));
+    for (const message of JSON.parse(process.env.MESSAGES)) console.log(JSON.stringify(message));
   `
   );
   for (const [messages, tag, failed, expected] of [

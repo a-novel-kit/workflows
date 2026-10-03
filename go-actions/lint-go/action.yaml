@@ -10,6 +10,8 @@ runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
     - id: setup-go
       uses: actions/setup-go@v7.0.0
       with:
