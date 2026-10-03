@@ -48,6 +48,7 @@ function fixture() {
               display_title: "Visual approval 1 head master labeled",
             }
           : { head_sha: "head", path: ".github/workflows/main.yaml", event: "push" },
+    graphql: async () => ({ repository: { mergeQueue: { entries: { nodes: [] } } } }),
     successfulJob: async () => true,
     successfulBrowserRun: async () => true,
   };
@@ -126,6 +127,47 @@ test("unassociated direct commits cannot borrow another PR approval", async () =
   assert.deepEqual(await f.policy.associated("base", "unreviewed", false), []);
   commits[1] = { sha: "queue-merge", parents: [{ sha: "base" }, { sha: "head" }] };
   assert.deepEqual(await f.policy.associated("base", "queue-merge", false), [f.pr]);
+});
+test("squash queue commits are attributed through their queue entries, never by default", async () => {
+  const f = fixture();
+  const commits = [
+    { sha: "squash-1", parents: [{ sha: "base" }] },
+    { sha: "squash-2", parents: [{ sha: "squash-1" }] },
+  ];
+  const entry = (oid, number, overrides = {}) => ({
+    headCommit: { oid },
+    pullRequest: {
+      number,
+      isCrossRepository: false,
+      baseRefName: "master",
+      headRefOid: `head-${number}`,
+      ...overrides,
+    },
+  });
+  let nodes = [entry("squash-1", 1), entry("squash-2", 2)];
+  f.github.request = async () => ({ commits });
+  f.github.pages = async () => [];
+  f.github.graphql = async () => ({ repository: { mergeQueue: { entries: { nodes } } } });
+  assert.deepEqual(
+    (await f.policy.associated("base", "squash-2", false)).map((pr) => [pr.number, pr.head.sha]),
+    [
+      [1, "head-1"],
+      [2, "head-2"],
+    ]
+  );
+  for (nodes of [
+    [entry("squash-1", 1)],
+    [entry("squash-1", 1), entry("squash-2", 2, { isCrossRepository: true })],
+    [entry("squash-1", 1), entry("squash-2", 2, { baseRefName: "release" })],
+  ])
+    assert.deepEqual(await f.policy.associated("base", "squash-2", false), []);
+  f.github.graphql = async () => {
+    throw new Error("Resource not accessible by integration");
+  };
+  assert.deepEqual(await f.policy.associated("base", "squash-2", false), []);
+  nodes = [entry("squash-1", 1), entry("squash-2", 2)];
+  f.github.graphql = async () => ({ repository: { mergeQueue: { entries: { nodes } } } });
+  assert.deepEqual(await f.policy.associated("base", "squash-2", true), []);
 });
 test("label reruns the completed head and synchronize invalidates approval", async () => {
   const f = fixture();

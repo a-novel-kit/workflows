@@ -93,6 +93,28 @@ export class Policy {
     return status.description === `matched:${baseline}` ? "matched" : null;
   }
 
+  /** Same-repository PRs queued for master, by the merge-queue commit GitHub built for each. */
+  async queued() {
+    const [owner, name] = this.github.repository.split("/");
+    try {
+      const data = await this.github.graphql(
+        `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
+          mergeQueue(branch: "master") { entries(first: 100) { nodes {
+            headCommit { oid } pullRequest { number isCrossRepository baseRefName headRefOid } } } } } }`,
+        { owner, name }
+      );
+      const entries = new Map();
+      for (const { headCommit, pullRequest: pr } of data.repository?.mergeQueue?.entries.nodes ?? [])
+        if (headCommit && pr && !pr.isCrossRepository && pr.baseRefName === "master")
+          entries.set(headCommit.oid, { number: pr.number, head: { sha: pr.headRefOid } });
+      return entries;
+    } catch (error) {
+      // Without the queue, attribution falls back to commit ancestry, which never grants more.
+      console.warn(`::warning::Could not read the merge queue: ${error.message}`);
+      return new Map();
+    }
+  }
+
   async associated(base, head, merged) {
     const commits = [];
     for (let page = 1; ; page++) {
@@ -102,9 +124,17 @@ export class Policy {
       if (data.commits.length < 100) break;
     }
     const commitIds = new Set(commits.map((commit) => commit.sha));
+    const queued = merged ? new Map() : await this.queued();
     const pulls = new Map(),
       covered = new Set();
     for (const commit of commits) {
+      // A squash queue builds a fresh commit for each entry, so only the queue knows its PR.
+      const entry = queued.get(commit.sha);
+      if (entry) {
+        pulls.set(entry.number, entry);
+        covered.add(commit.sha);
+        continue;
+      }
       for (const pr of await this.github.pages(`commits/${commit.sha}/pulls`)) {
         if (pr.base.ref !== "master" || pr.head.repo?.full_name !== this.github.repository) continue;
         if (
