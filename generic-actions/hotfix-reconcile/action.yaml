@@ -156,17 +156,19 @@ runs:
         range_commits=$(git -C "$dir" log --oneline --reverse "${BASELINE}..${FIX_HEAD}" 2>/dev/null | sed 's/^/- /')
 
         # Cherry-pick the fix range. It carries the fix diff alone, since the version bump sits past
-        # fix_head. -x records "(cherry picked from …)", one of the reached-master signals. A conflict
-        # does not abort: stage what is there and commit it, so a human resolves it in the PR.
+        # fix_head. -x records "(cherry picked from …)", one of the reached-master signals. A commit
+        # `git cherry` already found on the default branch becomes empty and is dropped, so the rest of
+        # the range still applies. A conflict does not abort: stage what is there and commit it, so a
+        # human resolves it in the PR.
         conflicted=false
-        if git -C "$dir" cherry-pick -x "${BASELINE}..${FIX_HEAD}" >/dev/null 2>&1; then
+        if git -C "$dir" cherry-pick -x --empty=drop "${BASELINE}..${FIX_HEAD}" >/dev/null 2>&1; then
           conflicted=false
         else
           conflicted=true
           conflict_paths=$(git -C "$dir" diff --name-only --diff-filter=U | tr '\n' ' ')
-          # Commit whatever the cherry-pick left: conflict markers on unmerged paths, or nothing when
-          # an already-applied intermediate commit stopped it empty. --allow-empty keeps the empty
-          # case from failing under set -e. The remaining range is abandoned and listed in the draft.
+          # Commit whatever the cherry-pick left, conflict markers included. --allow-empty keeps a
+          # stop with nothing staged from failing under set -e. The remaining range is abandoned and
+          # listed in the draft.
           git -C "$dir" add -A
           git -C "$dir" commit --quiet --allow-empty --no-edit \
             -m "hotfix reconcile v${LINE} (INCOMPLETE — resolve/finish before merge)" \
