@@ -37,18 +37,27 @@ runs:
         # committed one.
         npm_config_frozen_lockfile: "false"
       run: |
+        set -euo pipefail
+        pnpm audit --fix=override
+        # The overrides are all audit changes. Without one there is nothing to reconcile, format
+        # or commit, and a repo's format script can otherwise take minutes (go mod tidy, lint fixes).
+        if [ -z "$(git status --porcelain -- pnpm-workspace.yaml)" ]; then
+          echo "No audit fixes."
+          exit 0
+        fi
         # `pnpm audit --fix` rewrites the overrides but leaves the lockfile stale, so
         # reconcile it before `pnpm format`: pnpm 11 runs a verify-deps-before-run
         # pre-hook on any `pnpm <script>`, which spawns a frozen install and aborts
         # with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
-        pnpm audit --fix=override
         pnpm i --no-frozen-lockfile
         pnpm format
+    # Only the files the audit owns are committed: whatever else the format script touches
+    # (a go.sum tidy, lint fixes) would otherwise reach master unreviewed under this message.
     - name: check diff
       id: check_diff
       shell: bash
       run: |
-        if [ -z "$(git status --porcelain)" ];
+        if [ -z "$(git status --porcelain -- pnpm-workspace.yaml pnpm-lock.yaml)" ];
         then
           echo "diff=0" >> "$GITHUB_OUTPUT"
         else
@@ -58,12 +67,14 @@ runs:
       if: steps.check_diff.outputs.diff == '1'
       shell: bash
       run: |
-        git config url."https:///x-access-token:${{ steps.app_token.outputs.token }}@github.com/".insteadOf https://github.com/
-        git config user.name "${{ steps.app_token.outputs.app_login }}"
-        git config user.email "${{ steps.app_user_id.outputs.user_id }}+${{ steps.app_token.outputs.app_login }}@users.noreply.github.com"
+        git config url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf https://github.com/
+        git config user.name "$APP_LOGIN"
+        git config user.email "${APP_USER_ID}+${APP_LOGIN}@users.noreply.github.com"
 
-        git add .
+        git add pnpm-workspace.yaml pnpm-lock.yaml
         git commit -m "chore(security): audit fix"
         git push
       env:
         GH_TOKEN: ${{ steps.app_token.outputs.token }}
+        APP_LOGIN: ${{ steps.app_token.outputs.app_login }}
+        APP_USER_ID: ${{ steps.app_user_id.outputs.user_id }}
