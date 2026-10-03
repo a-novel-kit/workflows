@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
+import { buffer } from "node:stream/consumers";
 import { pipeline } from "node:stream/promises";
 import { setTimeout } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { Gaxios } from "gaxios";
 import * as tar from "tar";
 import { Failure, GitHub, runCli } from "./common.mjs";
 
@@ -32,22 +32,42 @@ function rank(a, b) {
 
 /** Keep all requests scoped to the configured platform and repository. */
 export class Drive {
-  constructor(token, repository, client = new Gaxios()) {
+  constructor(token, repository) {
     this.repository = repository;
-    this.client = client;
     this.token = token;
   }
 
-  request(url, options = {}) {
-    return this.client.request({
-      url,
-      timeout: 60_000,
-      maxRedirects: 0,
-      retry: true,
-      retryConfig: { retry: 5, httpMethodsToRetry: ["GET", "POST", "PATCH", "DELETE"] },
-      ...options,
-      headers: { Authorization: `Bearer ${this.token}`, ...options.headers },
-    });
+  /** Return status, headers and parsed JSON, or the body stream when requested. */
+  async request(
+    url,
+    { params = {}, headers, retry = true, stream = false, ok = (status) => status >= 200 && status < 300, ...init } = {}
+  ) {
+    url = new URL(url);
+    for (const [key, value] of Object.entries(params)) if (value !== undefined) url.searchParams.append(key, value);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await fetch(url, {
+          ...init,
+          headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json", ...headers },
+          // Manual mode never follows a redirect, yet still exposes Drive's 308 upload progress.
+          redirect: "manual",
+          signal: AbortSignal.timeout(60_000),
+        });
+        const { status } = response;
+        if (!ok(status)) {
+          await response.body?.cancel();
+          throw Object.assign(new Error(`Drive request failed (HTTP ${status})`), { status });
+        }
+        if (stream) return { status, headers: response.headers, data: response.body };
+        const text = await response.text();
+        return { status, headers: response.headers, data: text ? JSON.parse(text) : null };
+      } catch (error) {
+        // Transient statuses retry five times; failures without a status, including timeouts, twice.
+        const transient = error.status ? [408, 429].includes(error.status) || error.status >= 500 : attempt < 2;
+        if (!retry || !transient || attempt >= 5) throw error;
+        await setTimeout(2 ** attempt * 500);
+      }
+    }
   }
 
   async files(path = "", params = {}, options = {}) {
@@ -123,7 +143,7 @@ export class Drive {
 
   async markCurrent(batch) {
     const properties = { ...batch.properties, state: "current" };
-    await this.files(`/${batch.id}`, {}, { method: "PATCH", data: { properties } });
+    await this.files(`/${batch.id}`, {}, { method: "PATCH", body: JSON.stringify({ properties }) });
     batch.properties = properties;
   }
 
@@ -147,7 +167,7 @@ export class Drive {
       const response = await this.request(UPLOAD, {
         method: "POST",
         params: { uploadType: "resumable", supportsAllDrives: true, fields: FIELDS },
-        data: metadata,
+        body: JSON.stringify(metadata),
         headers: { "X-Upload-Content-Type": "application/x-tar", "X-Upload-Content-Length": String(size) },
       });
       const session = new URL(response.headers.get("location"));
@@ -177,19 +197,21 @@ export class Drive {
       probe = false;
     for (;;) {
       const end = Math.min(offset + CHUNK, size);
-      const data = probe ? undefined : createReadStream(archive, { start: offset, end: end - 1 });
+      // A buffered chunk gives fetch an exact Content-Length; a probe sends an empty body.
+      const body = probe
+        ? undefined
+        : await buffer(createReadStream(archive, { start: offset, end: end - 1, highWaterMark: CHUNK }));
       let response;
       try {
         response = await this.request(session, {
           method: "PUT",
           retry: false,
-          data,
+          body,
           headers: {
             "Content-Type": "application/x-tar",
-            "Content-Length": String(probe ? 0 : end - offset),
             "Content-Range": probe ? `bytes */${size}` : `bytes ${offset}-${end - 1}/${size}`,
           },
-          validateStatus: (status) => status === 200 || status === 201 || status === 308,
+          ok: (status) => status === 200 || status === 201 || status === 308,
         });
       } catch (error) {
         if ((error.status && error.status !== 429 && error.status < 500) || failures++ >= 5) throw error;
@@ -197,8 +219,6 @@ export class Drive {
         // A failed request may already have persisted bytes; ask Drive for the committed offset.
         probe = true;
         continue;
-      } finally {
-        data?.destroy();
       }
       if (response.status !== 308) return response.data;
       const range = response.headers.get("range");
@@ -224,7 +244,7 @@ export class Drive {
         try {
           const response = await this.request(`${API}/${batch.id}`, {
             params: { alt: "media", supportsAllDrives: true },
-            responseType: "stream",
+            stream: true,
             headers: { Range: `bytes=${offset}-${end}` },
           });
           const partial =
@@ -235,7 +255,7 @@ export class Drive {
             end === size - 1 &&
             Number(response.headers.get("content-length")) === size;
           if (!partial && !whole) {
-            response.data.destroy();
+            await response.data?.cancel();
             throw new Failure("Invalid Drive download range");
           }
           await pipeline(response.data, createWriteStream(target, { flags: offset ? "r+" : "w", start: offset }));
