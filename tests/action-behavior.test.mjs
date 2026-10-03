@@ -150,6 +150,44 @@ test("drift review is one short-lived unzipped file linked even after a journey 
   assert.match(w.read("summary"), /Old \/ New \/ Diff/);
 });
 
+test("watchdog pages a missing or silent fail-safe but fails the scan on an unreadable one", (t) => {
+  const w = workspace(t);
+  w.stub(
+    "gh",
+    `
+    const args = process.argv.slice(2), fail = (status) => { console.error('HTTP ' + status + ': failed'); process.exit(1); };
+    if (args[1] === 'graphql') console.log(JSON.stringify({ data: { search: { pageInfo: { hasNextPage: false }, nodes: [] } } }));
+    else if (args[0] === 'api') process.env.REPOS === 'FAIL' ? fail(502) : console.log('repo-a');
+    else if (args.includes('hotfix.yaml')) console.log('[]');
+    else if (/^\\d+$/.test(process.env.HEARTBEAT)) fail(process.env.HEARTBEAT);
+    else console.log(process.env.HEARTBEAT);
+  `
+  );
+  const scan = step(".github/workflows/watchdog.yaml", "scan");
+  const env = {
+    ORG: "a-novel-kit",
+    REPO: "a-novel-kit/.github",
+    STALE_MIN: "30",
+    STUCK_MIN: "60",
+    HEARTBEAT_WORKFLOWS: "watchdog.yaml",
+    HEARTBEAT_MAX: "120",
+    TMPDIR: w.cwd,
+  };
+  for (const [changes, status, severities] of [
+    [{ HEARTBEAT: new Date().toISOString() }, 0, []],
+    [{ HEARTBEAT: new Date(Date.now() - 180 * 60_000).toISOString() }, 0, ["sev1"]],
+    [{ HEARTBEAT: "" }, 0, ["sev1"]],
+    [{ HEARTBEAT: "404" }, 0, ["sev1"]],
+    [{ HEARTBEAT: "502" }, 1, null],
+    [{ HEARTBEAT: new Date().toISOString(), REPOS: "FAIL" }, 1, null],
+  ]) {
+    w.write("output", "");
+    assert.equal(w.bash(scan, { ...env, ...changes }).status, status, JSON.stringify(changes));
+    const findings = w.read("output").match(/^findings=(.*)$/m)?.[1];
+    assert.deepEqual(findings && JSON.parse(findings).map((finding) => finding.severity), severities ?? undefined);
+  }
+});
+
 test("append-only gate checks real history, validates the base and honors only the configured override", (t) => {
   const w = workspace(t);
   const git = (...args) => succeeds(w.run("git", args));
