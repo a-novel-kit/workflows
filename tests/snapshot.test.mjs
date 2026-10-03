@@ -202,3 +202,11 @@ test("malformed fences are repaired without discarding human prose", (t) => {
     assert.equal(output.text.split("\n").filter((line) => line === end).length, 1);
   }
 });
+
+test("a fully merged wave retires after a member repository is renamed", (t) => {
+  // The frozen marker keeps the old name, while epic-membership reports the live one.
+  const renamed = members.map((m, i) => ({ ...m, repo: i ? m.repo : "a-novel-kit/a-renamed", state: "MERGED" }));
+  const output = fixture(t, { before: marker("frozen"), members: renamed });
+  succeeds(output.result);
+  assert.equal(output.payload.status, "retired");
+});

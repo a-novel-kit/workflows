@@ -720,8 +720,8 @@ runs:
             && [ "$(since_of "$1")" = "$(since_of "$2")" ]
         }
 
-        write_marker() { # $1 = region file. 0 = our marker is in place, 2 = yielded, 1 = gave up
-          local regionf="$1" bodyf outf attempt body marker err rc=1
+        write_marker() { # $1 = region file, $2 = the marker the decision read. 0 = in place, 2 = yielded, 1 = gave up
+          local regionf="$1" decided="$2" bodyf outf attempt body marker err rc=1
           bodyf=$(mktemp); outf=$(mktemp)
           for attempt in 1 2 3; do
             # Re-read every attempt, the first included.
@@ -744,14 +744,14 @@ runs:
             fi
 
             if [ "$do" = "retire" ]; then
-              # Re-derive the retirement: only the frozen set this pass judged landed may be ended. A
-              # marker that is no longer frozen, or whose members moved, means a peer has opened the
-              # next wave, and a tombstone written now would discard it and redraw the boundary at the
-              # wrong instant. The member comparison is character-for-character the one the freeze
-              # guard below makes, so neither guard can accept what the other rejects.
-              if ! jq -e -n --argjson m "${marker:-null}" --argjson cur "$cur" \
-                   '($m | type == "object") and $m.status == "frozen"
-                    and (($m.members // []) | sort_by((.repo | ascii_downcase), .number)) == $cur' >/dev/null 2>&1; then
+              # Re-derive the retirement: only the frozen marker this pass judged landed may be ended.
+              # Any other marker means a peer has opened the next wave, and a tombstone written now
+              # would discard it and redraw the boundary at the wrong instant. The check compares that
+              # marker itself rather than the live member set: a frozen marker is never rewritten, so
+              # a renamed member repository would differ from the live set on every pass, and the
+              # wave could never retire.
+              if ! jq -e -n --argjson m "${marker:-null}" --argjson decided "${decided:-null}" \
+                   '($m | type == "object") and $m.status == "frozen" and $m == $decided' >/dev/null 2>&1; then
                 echo "Epic #${EPIC}: the snapshot moved on before this pass could retire it — leaving it." \
                   | tee -a "$GITHUB_STEP_SUMMARY"
                 rc=2
@@ -833,7 +833,7 @@ runs:
           exit 0
         fi
 
-        write_marker "$regionf" && wm=0 || wm=$?
+        write_marker "$regionf" "$marker" && wm=0 || wm=$?
         if [ "$wm" = 0 ] && [ "$do" = "retire" ]; then
           echo "Epic #${EPIC}: the wave landed — activation snapshot retired at ${now}; the next ready set captures its own." \
             | tee -a "$GITHUB_STEP_SUMMARY"
