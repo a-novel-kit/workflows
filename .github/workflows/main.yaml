@@ -45,13 +45,12 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-      - name: Install browser and Drive test dependencies
+      - name: Install browser test dependencies
         shell: bash
         run: |
           set -euo pipefail
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps --only-shell chromium
-          npm ci --prefix node-actions/test-playwright/drive --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
       - name: Run action regression suites
         run: pnpm test
 

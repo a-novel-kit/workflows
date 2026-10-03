@@ -25,13 +25,6 @@ runs:
       with:
         node-version: "24"
         package-manager-cache: false
-    - name: Install the Drive client
-      shell: bash
-      env:
-        ACTION_PATH: ${{ github.action_path }}
-      run: |
-        set -euo pipefail
-        npm ci --prefix "$ACTION_PATH/../../node-actions/test-playwright/drive" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
     - name: Authenticate trusted cleanup
       id: auth
       uses: google-github-actions/auth@v3

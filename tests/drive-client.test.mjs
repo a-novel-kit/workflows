@@ -1,42 +1,35 @@
-// Exercise the real HTTP client with deterministic Drive responses and streamed request bodies.
+// Exercise the real HTTP client with deterministic Drive responses and buffered request bodies.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { Failure } from "../node-actions/test-playwright/drive/common.mjs";
 import { CHUNK, Drive, PROTOCOL, digest } from "../node-actions/test-playwright/drive/storage.mjs";
-const require = createRequire(new URL("../node-actions/test-playwright/drive/package.json", import.meta.url));
-const { Gaxios } = require("gaxios");
 const repository = "a-novel/platform-studio";
 const session = "https://www.googleapis.com/upload/drive/v3/files?upload_id=private-session";
 const props = { run_id: "10", run_number: "2", attempt: "1", sha: "a".repeat(40) };
 
 function client(responses) {
   const calls = [];
-  const drive = new Drive(
-    "private-token",
-    repository,
-    new Gaxios({
-      adapter: async (options) => {
-        const response = responses.shift();
-        assert.ok(response, `Unexpected ${options.method} ${new URL(options.url).pathname}`);
-        calls.push(options);
-        await response.check?.(options);
-        if (response.error) throw response.error;
-        return {
-          status: response.status ?? 200,
-          data: response.data ?? {},
-          headers: new Headers(response.headers),
-          config: options,
-        };
-      },
-    })
-  );
-  return { drive, calls, responses };
+  // Each client replaces the previous stub, so a test sees only its own responses.
+  mock.restoreAll();
+  mock.method(globalThis, "fetch", async (url, init) => {
+    const response = responses.shift();
+    assert.ok(response, `Unexpected ${init.method ?? "GET"} ${url.pathname}`);
+    const call = { ...init, url, headers: new Headers(init.headers) };
+    calls.push(call);
+    await response.check?.(call);
+    if (response.error) throw response.error;
+    return new Response(response.body ?? JSON.stringify(response.data ?? {}), {
+      status: response.status ?? 200,
+      headers: response.headers,
+    });
+  });
+  return { drive: new Drive("private-token", repository), calls, responses };
 }
 function folders(maintenance = false) {
   return ["references", "results"].map((id) => ({
@@ -74,20 +67,11 @@ async function result(archive) {
     properties: { ...props, state: "pending", protocol: PROTOCOL, repository },
   };
 }
-async function streamed(options, expectedRange, expectedLength) {
-  assert.equal(options.headers.get("content-range"), expectedRange);
-  assert.equal(options.headers.get("content-length"), String(expectedLength));
-  if (!expectedLength) {
-    assert.equal(options.data, undefined);
-    return;
-  }
-  assert.ok(options.data instanceof Readable);
-  let length = 0;
-  for await (const chunk of options.data) {
-    assert.ok(chunk.length <= CHUNK);
-    length += chunk.length;
-  }
-  assert.equal(length, expectedLength);
+function sent(call, expectedRange, expectedLength) {
+  assert.equal(call.headers.get("content-range"), expectedRange);
+  // fetch derives Content-Length from a Buffer, and a probe sends no body.
+  assert.ok(expectedLength ? Buffer.isBuffer(call.body) && call.body.length <= CHUNK : call.body === undefined);
+  assert.equal(call.body?.length ?? 0, expectedLength);
 }
 
 test("folder-only candidate and maintenance access is accepted", async () => {
@@ -171,6 +155,18 @@ test("listing is scoped to platform, protocol and repository, including every pa
   assert.equal(new URL(calls[1].url).searchParams.get("pageToken"), "next");
   await assert.rejects(client([{ data: { incompleteSearch: true, files: [] } }]).drive.batches("results"), Failure);
 });
+test("transient failures retry within a bounded budget while others fail at once", async () => {
+  const recovered = client([{ status: 503 }, { status: 429 }, { data: { ids: ["batch-id"] } }]);
+  assert.deepEqual(await recovered.drive.files("/generateIds"), { ids: ["batch-id"] });
+  // Failures without a response share the attempt count and stop after two retries.
+  const network = new TypeError("fetch failed");
+  const offline = client([{ error: network }, { status: 503 }, { error: network }]);
+  await assert.rejects(offline.drive.files(""), network);
+  assert.equal(offline.responses.length, 0);
+  const denied = client([{ status: 403 }, { data: {} }]);
+  await assert.rejects(denied.drive.files(""), (error) => error.status === 403);
+  assert.equal(denied.responses.length, 1);
+});
 test("resumes at the server-confirmed offset after an ambiguous chunk failure", async (t) => {
   const dir = await directory(t),
     archive = join(dir, "batch.tar"),
@@ -180,15 +176,15 @@ test("resumes at the server-confirmed offset after an ambiguous chunk failure", 
   const { drive, responses } = client([
     { data: { ids: ["batch-id"] } },
     { headers: { location: session } },
-    { status: 503, check: (options) => streamed(options, `bytes 0-${CHUNK - 1}/${size}`, CHUNK) },
+    { status: 503, check: (call) => sent(call, `bytes 0-${CHUNK - 1}/${size}`, CHUNK) },
     {
       status: 308,
       headers: { range: `bytes=0-${CHUNK / 2 - 1}` },
-      check: (options) => streamed(options, `bytes */${size}`, 0),
+      check: (call) => sent(call, `bytes */${size}`, 0),
     },
     {
       data: metadata,
-      check: (options) => streamed(options, `bytes ${CHUNK / 2}-${size - 1}/${size}`, size - CHUNK / 2),
+      check: (call) => sent(call, `bytes ${CHUNK / 2}-${size - 1}/${size}`, size - CHUNK / 2),
     },
   ]);
   assert.equal((await drive.upload("results", archive, props, join(dir, "id"))).md5Checksum, metadata.md5Checksum);
@@ -238,7 +234,7 @@ test("expired upload sessions and untrusted session URLs cannot publish", async 
     (error) => error.status === 404
   );
 });
-test("streams a 4 GiB batch with bounded chunks and offsets beyond 32 bits", async (t) => {
+test("uploads a 4 GiB batch in bounded chunks with offsets beyond 32 bits", async (t) => {
   const dir = await directory(t),
     archive = join(dir, "large.tar"),
     size = 4 * 1024 ** 3 + 1024;
@@ -251,17 +247,40 @@ test("streams a 4 GiB batch with bounded chunks and offsets beyond 32 bits", asy
       status: end === size ? 200 : 308,
       data: { id: "large" },
       headers: { range: `bytes=0-${end - 1}` },
-      check: (options) => streamed(options, `bytes ${start}-${end - 1}/${size}`, end - start),
+      check: (call) => sent(call, `bytes ${start}-${end - 1}/${size}`, end - start),
     });
   }
   const { drive } = client(responses);
   assert.equal((await drive.sendArchive(session, archive, size)).id, "large");
   assert.equal(responses.length, 0);
 });
+test("native fetch exposes resumable progress and sends exact chunk lengths", async (t) => {
+  mock.restoreAll();
+  const dir = await directory(t),
+    archive = join(dir, "batch.tar");
+  await writeFile(archive, "0123456789");
+  const received = [];
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    received.push([request.headers["content-length"], request.headers["content-range"], body]);
+    // Drive answers an incomplete upload with 308 and no Location header.
+    if (received.length === 1) response.writeHead(308, { range: "bytes=0-4" }).end();
+    else response.writeHead(200, { "content-type": "application/json" }).end('{"id":"batch-id"}');
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/upload`;
+  assert.deepEqual(await new Drive("private-token", repository).sendArchive(url, archive, 10), { id: "batch-id" });
+  assert.deepEqual(received, [
+    ["10", "bytes 0-9/10", "0123456789"],
+    ["5", "bytes 5-9/10", "56789"],
+  ]);
+});
 test("downloads resume after interrupted bodies and verify checksum", async (t) => {
   const dir = await directory(t),
     target = join(dir, "reference.tar");
-  const broken = Readable.from(
+  const broken = ReadableStream.from(
     (async function* () {
       yield Buffer.from("p");
       throw new Error("connection reset");
@@ -269,15 +288,16 @@ test("downloads resume after interrupted bodies and verify checksum", async (t) 
   );
   const checksum = createHash("md5").update("png").digest("hex");
   const { drive } = client([
-    { status: 206, headers: { "content-range": "bytes 0-2/3" }, data: broken },
-    { status: 206, headers: { "content-range": "bytes 0-2/3" }, data: Readable.from([Buffer.from("png")]) },
+    { status: 206, headers: { "content-range": "bytes 0-2/3" }, body: broken },
+    { status: 206, headers: { "content-range": "bytes 0-2/3" }, body: "png" },
   ]);
   await drive.download({ id: "reference", size: "3", md5Checksum: checksum }, target);
   assert.equal(await readFile(target, "utf8"), "png");
   await assert.rejects(
-    client([
-      { status: 206, headers: { "content-range": "bytes 0-2/3" }, data: Readable.from([Buffer.from("bad")]) },
-    ]).drive.download({ id: "reference", size: "3", md5Checksum: checksum }, target),
+    client([{ status: 206, headers: { "content-range": "bytes 0-2/3" }, body: "bad" }]).drive.download(
+      { id: "reference", size: "3", md5Checksum: checksum },
+      target
+    ),
     /checksum/
   );
 });
@@ -286,13 +306,13 @@ test("whole-file responses are accepted only within the requested chunk", async 
   const dir = await directory(t),
     target = join(dir, "reference.tar");
   const checksum = createHash("md5").update("png").digest("hex");
-  await client([{ headers: { "content-length": "3" }, data: Readable.from([Buffer.from("png")]) }]).drive.download(
+  await client([{ headers: { "content-length": "3" }, body: "png" }]).drive.download(
     { id: "reference", size: "3", md5Checksum: checksum },
     target
   );
   const body = Readable.from([Buffer.from("unrequested data")]);
   await assert.rejects(
-    client([{ headers: { "content-length": String(CHUNK + 1) }, data: body }]).drive.download(
+    client([{ headers: { "content-length": String(CHUNK + 1) }, body: Readable.toWeb(body) }]).drive.download(
       { id: "reference", size: String(CHUNK + 1), md5Checksum: checksum },
       target
     ),

@@ -1,9 +1,10 @@
 // Retention, publication and evidence contracts for the shipped Drive implementation.
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { link, mkdtemp, readdir, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRequire } from "node:module";
 import { test } from "node:test";
 import { Failure } from "../node-actions/test-playwright/drive/common.mjs";
 import {
@@ -13,8 +14,6 @@ import {
   promote,
 } from "../node-actions/test-playwright/drive/storage.mjs";
 import { archiveBatch, inspectReport } from "../node-actions/test-playwright/drive/runner.mjs";
-const require = createRequire(new URL("../node-actions/test-playwright/drive/package.json", import.meta.url));
-const tar = require("tar");
 
 function batch(id, number, state = "current", attempt = 1) {
   return {
@@ -145,44 +144,37 @@ test("archive round-trip includes declared PNGs and rejects symlink evidence", a
   t.after(() => process.chdir(previous));
   await mkdir(".visual/snapshots/desktop", { recursive: true });
   await writeFile(".visual/snapshots/desktop/home.png", "png");
+  await mkdir("playwright-report");
+  await writeFile("playwright-report/index.html", "report");
   await writeFile("secret.env", "private");
   await archiveBatch(new Set(["desktop/home.png"]), "batch.tar");
-  const names = [];
-  await tar.t({
-    file: "batch.tar",
-    onReadEntry(entry) {
-      names.push(entry.path);
-    },
-  });
-  assert.deepEqual(names, ["snapshots/desktop/home.png"]);
+  assert.deepEqual(execFileSync("tar", ["--list", "--file=batch.tar"], { encoding: "utf8" }).trim().split("\n"), [
+    "snapshots/desktop/home.png",
+    "playwright-report/index.html",
+  ]);
   await extractSnapshots("batch.tar", "out");
   assert.equal(await readFile("out/desktop/home.png", "utf8"), "png");
+  assert.deepEqual((await readdir("out", { recursive: true })).sort(), ["desktop", "desktop/home.png"]);
   await symlink(join(directory, "secret.env"), ".visual/snapshots/desktop/leak.png");
   await assert.rejects(archiveBatch(new Set(["desktop/leak.png"]), "unsafe.tar"), Failure);
 });
 test("archive extraction rejects traversal and links", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "drive-malicious-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  await writeFile(join(directory, "image"), "png");
-  for (const [name, type] of [
-    ["snapshots/../escape.png", "File"],
-    ["snapshots/link.png", "SymbolicLink"],
-  ]) {
-    const archive = join(directory, "batch.tar");
-    await tar.c(
-      {
-        cwd: directory,
-        file: archive,
-        onWriteEntry(entry) {
-          entry.path = name;
-          entry.type = type;
-          entry.linkpath = "../escape";
-        },
-      },
-      ["image"]
-    );
-    await assert.rejects(extractSnapshots(archive, join(directory, "out")), /Unsafe|TAR_ENTRY/);
+  await mkdir(join(directory, "snapshots"));
+  await writeFile(join(directory, "snapshots/image.png"), "png");
+  await symlink("../escape", join(directory, "snapshots/link.png"));
+  await link(join(directory, "snapshots/image.png"), join(directory, "snapshots/hard.png"));
+  for (const [index, members] of [
+    ["--transform=s,image,../escape,", "snapshots/image.png"],
+    ["snapshots/link.png"],
+    ["snapshots/image.png", "snapshots/hard.png"],
+  ].entries()) {
+    const archive = join(directory, `batch-${index}.tar`);
+    execFileSync("tar", ["--create", "--absolute-names", `--file=${archive}`, `--directory=${directory}`, ...members]);
+    await assert.rejects(extractSnapshots(archive, join(directory, `out-${index}`)), /Unsafe/);
   }
+  assert.equal(existsSync(join(directory, "escape.png")), false);
 });
 function report(errors, visualErrors, status = "failed") {
   return {
