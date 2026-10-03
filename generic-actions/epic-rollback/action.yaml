@@ -741,6 +741,16 @@ runs:
         done
         echo "All ${prod_count} revert PR(s) verified as epic:${M} members." | tee -a "$GITHUB_STEP_SUMMARY"
 
+        # The rollback resolves epic:#N's frozen wave, which merge-gate retires only once every member
+        # merged, so a wave with a member closed unmerged would hold every later epic:<N> PR forever.
+        # The label lets merge-gate, the snapshot's only writer, retire it once none of its members is
+        # open; an open member keeps it frozen and held, so nothing from the wave lands alone.
+        GH_TOKEN="$WRITE_TOKEN" gh label create rolled-back --repo "${ORG}/${PLANNING_REPO}" --force \
+          --color 5319e7 --description "This Epic's landing was rolled back; its frozen wave retires once no member is open" \
+          >/dev/null 2>&1 || true
+        GH_TOKEN="$WRITE_TOKEN" gh issue edit "$EPIC" --repo "${ORG}/${PLANNING_REPO}" --add-label rolled-back >/dev/null 2>&1 \
+          || echo "::warning::could not label epic:#${EPIC} \`rolled-back\`; add it by hand so its frozen wave can retire."
+
         # ---- Surface the wave for a human to review and approve ---------------------------------
         # The App authors these reverts and GitHub 422s approving your own PR, so it never
         # self-approves, and the merge-gate's approval requirement parks the wave until a human acts.

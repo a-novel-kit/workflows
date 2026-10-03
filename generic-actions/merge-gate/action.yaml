@@ -529,6 +529,18 @@ runs:
         all_landed=$(printf '%s' "$MEMBERS" | jq -c \
           '(length > 0) and all(.[]; .state == "MERGED")' 2>/dev/null || echo false)
 
+        # The human resolution for a wave that cannot land whole is epic-rollback, which labels the
+        # Epic `rolled-back`. That wave also ends, once none of its members is open: the merged ones
+        # are being reverted and the closed ones never landed, so nothing from it can land alone. The
+        # label is read only for a wave in that shape.
+        rolled_back=false
+        if [ "$all_landed" != true ] && printf '%s' "$MEMBERS" | jq -e \
+             '(length > 0) and all(.[]; .state == "MERGED" or .state == "CLOSED")' >/dev/null 2>&1 \
+          && gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '[.labels[].name] | index("rolled-back") != null' \
+               2>/dev/null | grep -qx true; then
+          rolled_back=true
+        fi
+
         # Repository names are canonicalized to lower case, so every pass computes a byte-identical
         # set for the same members. GitHub resolves names case-insensitively and answers with either
         # casing, and the decision reads a byte-different set as "members moved", resets the
@@ -569,13 +581,13 @@ runs:
         # waits. Anything else — missing, malformed, or carrying another status, which includes a
         # `retired` tombstone — gets a fresh pending.
         do=$(jq -rn --argjson cur "$cur" --argjson mk "$marker" --arg now "$now" \
-          --argjson landed "$all_landed" --argjson thr "${STABILIZE_SECONDS}" '
+          --argjson landed "$all_landed" --argjson rolled "$rolled_back" --argjson thr "${STABILIZE_SECONDS}" '
           if ($mk | type) != "object" then "pending"
           # A frozen wave whose members have all merged has discharged its purpose. Retiring it draws
           # the wave boundary and frees the next ready set to capture its own, which is the "joins the
           # next wave" behavior epic-membership documents. A marker left in place holds every pull
           # request labeled after it.
-          elif $mk.status == "frozen" then (if $landed then "retire" else "skip" end)
+          elif $mk.status == "frozen" then (if $landed or $rolled then "retire" else "skip" end)
           elif ($mk.status == "pending" and ($mk.members | type == "array") and ($mk.at | type == "string"))
             then (
               if (($mk.members | sort_by((.repo | ascii_downcase), .number)) != $cur) then "pending"
@@ -607,7 +619,7 @@ runs:
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
             if [ -n "$abandoned" ]; then
-              echo "::warning::Epic #${EPIC}: the frozen wave cannot retire — ${abandoned} closed without merging, so it did not land. It stays frozen because the snapshot is the only record that those were members; resolve it with epic-rollback." \
+              echo "::warning::Epic #${EPIC}: the frozen wave cannot retire — ${abandoned} closed without merging, so it did not land. It stays frozen because the snapshot is the only record that those were members; resolve it with epic-rollback, which lets the wave retire once none of its members is open." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
           fi
@@ -634,7 +646,7 @@ runs:
           # boundary hides no history. The tombstone names no members, and both membership readers
           # select on `status == "frozen"`, so it resolves there as an absent marker does.
           payload=$(jq -cn --arg since "$now" '{status: "retired", since: $since}')
-          note="_Epic membership, RETIRED — the wave frozen here has fully landed. The instant below separates its history from the next wave's; the next ready set captures its own. Do not edit._"
+          note="_Epic membership, RETIRED — the wave frozen here has $([ "$all_landed" = true ] && echo "fully landed" || echo "been rolled back"). The instant below separates its history from the next wave's; the next ready set captures its own. Do not edit._"
         elif [ "$do" = "frozen" ]; then
           # `at` records when the status last changed. A frozen marker never ages into another status;
           # the timestamp is there so a wave that cannot finish can be measured and reported.
@@ -836,9 +848,21 @@ runs:
           exit 0
         fi
 
+        # A rolled-back label belongs to the wave whose rollback set it. Clear one an earlier wave left
+        # before freezing this one, or this wave could later retire on a closed member without a
+        # rollback of its own. If the label cannot be read or cleared, freezing waits for a later pass.
+        if [ "$do" = "frozen" ]; then
+          if ! stale=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '[.labels[].name] | index("rolled-back") != null' 2>/dev/null) \
+            || { [ "$stale" = true ] && ! gh api -X DELETE "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}/labels/rolled-back" >/dev/null 2>&1; }; then
+            echo "::warning::Epic #${EPIC}: could not confirm that no earlier wave's rolled-back label remains — freezing on a later pass." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+        fi
+
         write_marker "$regionf" "$marker" && wm=0 || wm=$?
         if [ "$wm" = 0 ] && [ "$do" = "retire" ]; then
-          echo "Epic #${EPIC}: the wave landed — activation snapshot retired at ${now}; the next ready set captures its own." \
+          echo "Epic #${EPIC}: the wave $([ "$all_landed" = true ] && echo landed || echo "was rolled back") — activation snapshot retired at ${now}; the next ready set captures its own." \
             | tee -a "$GITHUB_STEP_SUMMARY"
         elif [ "$wm" = 0 ]; then
           n=$(printf '%s' "$cur" | jq 'length')

@@ -28,7 +28,12 @@ function fixture(t, options = {}) {
     import * as fs from 'node:fs';
     const args = process.argv.slice(2), state = JSON.parse(fs.readFileSync('state.json'));
     let output = '', status = 0;
-    if (args[0] === 'api') {
+    if (args[0] === 'api' && args.includes('DELETE')) {
+      if (state.clearFailure) status = 1;
+      else state.rolledBack = false;
+    } else if (args[0] === 'api' && args.some((arg) => arg.includes('.labels'))) {
+      output = String(Boolean(state.rolledBack));
+    } else if (args[0] === 'api') {
       state.reads++;
       if (state.peerBefore && state.reads === 2) fs.writeFileSync('body', state.peerBefore);
       if (state.readFailures?.includes(state.reads)) status = 1;
@@ -238,4 +243,30 @@ test("the gate holds a frozen wave whose member closed without merging", (t) => 
     if (conclusion === "failure")
       assert.match(check.output.summary, /1 of 2 member\(s\) not ready[^]*closed without merging/);
   }
+});
+
+test("a rolled-back wave retires once none of its members is open", (t) => {
+  const settled = members.map((m, i) => ({ ...m, state: i ? "CLOSED" : "MERGED" }));
+  const held = fixture(t, { before: marker("frozen"), members: settled });
+  succeeds(held.result);
+  assert.equal(held.writes, 0);
+  const open = members.map((m, i) => ({ ...m, state: i ? "OPEN" : "MERGED" }));
+  const stillOpen = fixture(t, { before: marker("frozen"), members: open, server: { rolledBack: true } });
+  succeeds(stillOpen.result);
+  assert.equal(stillOpen.writes, 0);
+  const retired = fixture(t, { before: marker("frozen"), members: settled, server: { rolledBack: true } });
+  succeeds(retired.result);
+  assert.equal(retired.payload.status, "retired");
+  assert.match(retired.text, /has been rolled back/);
+});
+
+test("freezing a new wave first clears a rolled-back label an earlier wave left", (t) => {
+  const cleared = fixture(t, { before: marker("pending"), server: { rolledBack: true } });
+  succeeds(cleared.result);
+  assert.equal(cleared.payload.status, "frozen");
+  assert.equal(cleared.rolledBack, false);
+  const stuck = fixture(t, { before: marker("pending"), server: { rolledBack: true, clearFailure: true } });
+  succeeds(stuck.result);
+  assert.equal(stuck.writes, 0);
+  assert.equal(stuck.payload.status, "pending");
 });
