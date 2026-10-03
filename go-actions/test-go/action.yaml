@@ -123,7 +123,9 @@ runs:
         COVERAGE_FILE: ${{ inputs.coverage_file }}
       run: |
         set -euo pipefail
-        mapfile -t packages <"$PACKAGES"
+        # A read loop rather than mapfile, which macOS runners' Bash 3.2 lacks.
+        packages=()
+        while IFS= read -r package; do packages+=("$package"); done <"$PACKAGES"
         go tool -modfile="$MODFILE" gotestsum --jsonfile "$TEST_FILE" --format pkgname \
           -- -count=1 -cover -coverprofile="$COVERAGE_FILE" -json "${packages[@]}"
 
