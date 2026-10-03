@@ -423,3 +423,28 @@ test("the enqueue-token scope saves its read in the sweep's search shape", () =>
     normalize(selection(script))
   );
 });
+
+test("a rollback scopes its ledger to the current wave and refuses an unreadable boundary", (t) => {
+  const waveSince = functions(
+    step("generic-actions/epic-rollback/action.yaml", "Reconstruct ledger + plan (read-only)"),
+    ["wave_since"]
+  );
+  const w = workspace(t);
+  const epic = (value) =>
+    `Prose.\n<!-- epic-membership:snapshot:start -->\n_Note._\n${value}\n<!-- epic-membership:snapshot:end -->\n`;
+  for (const [body, status, output] of [
+    ["No snapshot here.", 0, ""],
+    [epic(JSON.stringify({ status: "frozen", members: [] })), 0, ""],
+    [epic(JSON.stringify({ status: "frozen", since: "2026-07-22T10:00:00Z" })), 0, "2026-07-22T10:00:00Z"],
+    [epic(JSON.stringify({ status: "retired", since: "2026-07-22T10:00:00Z" })), 0, "2026-07-22T10:00:00Z"],
+    [epic(JSON.stringify({ status: "frozen", since: "yesterday" })), 1, ""],
+    [epic(JSON.stringify({ status: "frozen", since: "2026-02-30T10:00:00Z" })), 1, ""],
+    [epic(JSON.stringify({ status: "frozen", since: "2999-01-01T00:00:00Z" })), 1, ""],
+    [epic(JSON.stringify({ status: "frozen", since: 1720000000 })), 1, ""],
+    [epic("{ not json"), 1, ""],
+  ]) {
+    const result = w.bash(`${waveSince}\nwave_since "$1"`, { EPIC: "900" }, [body]);
+    assert.equal(result.status, status, body);
+    assert.equal(result.stdout, output, body);
+  }
+});
