@@ -74,18 +74,27 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
     ],
     ["vitest monorepo", ["vitest", "@vitest/browser-playwright"], ["playwright"]],
     ["svelte vite toolchain", ["vite", "@sveltejs/vite-plugin-svelte"], ["svelte"]],
+    ...["json-keys", "authentication", "narrative-engine", "genai"].map((service) => [
+      `service ${service.replace("-", " ")}`,
+      [
+        `github.com/a-novel/service-${service}`,
+        `ghcr.io/a-novel/service-${service}/database`,
+        `@a-novel/service-${service}`,
+      ],
+      ["github.com/a-novel/platform-studio"],
+    ]),
   ]) {
     assert(base.packageRules.indexOf(rule(group)) > catchAll);
     for (const name of yes) assert(matches(rule(group).matchPackageNames, name), name);
     for (const name of no) assert(!matches(rule(group).matchPackageNames, name), name);
   }
-  const jsonKeys = rule("service json keys");
-  for (const name of [
-    "github.com/a-novel/service-json-keys/v2",
-    "ghcr.io/a-novel/service-json-keys/database",
-    "ghcr.io/a-novel/service-json-keys/standalone-grpc",
-  ])
-    assert(matches(jsonKeys.matchPackageNames, name));
+  // A grouped branch runs every artifact update with the config of its first upgrade by
+  // depName, which is an image here, so the image must carry the Go module's tidy.
+  for (const group of base.packageRules.filter(
+    (r) => r.groupName?.startsWith("service ") || r.groupName === "go toolchain"
+  ))
+    if (!group.matchManagers?.includes("gomod"))
+      assert(group.postUpdateOptions?.includes("gomodTidy"), group.groupName);
   assert(matches(rule("a-novel-kit workflows").matchPackageNames, "a-novel-kit/workflows"));
 });
 
