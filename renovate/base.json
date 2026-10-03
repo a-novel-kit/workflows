@@ -112,8 +112,10 @@
       "groupName": "platform narrative engine"
     },
     {
+      "description": "Move every Bun module in one PR. Bun panics at init unless its dialect matches the core version, yet the core module does not require its dialects, so tidy never raises them. Services import pgdialect only through golib, which leaves it `// indirect` and disabled by Renovate's gomod manager unless this rule enables it.",
       "matchPackageNames": ["/.*github.com\\/uptrace\\/bun.*/"],
-      "groupName": "uptrace/bun"
+      "groupName": "uptrace/bun",
+      "enabled": true
     },
     {
       "description": "Consolidate non-major npm updates into one PR per repo. They all edit the shared pnpm-lock.yaml, so as separate PRs they conflict pairwise and the merge queue can only land one per cycle. This rule follows the recommended preset so it supersedes its per-name and monorepo groups; exact fleet rules below may override it.",

@@ -97,6 +97,10 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
     if (!group.matchManagers?.includes("gomod"))
       assert(group.postUpdateOptions?.includes("gomodTidy"), group.groupName);
   assert(matches(rule("a-novel-kit workflows").matchPackageNames, "a-novel-kit/workflows"));
+  // Renovate disables `// indirect` requires; Bun's version guard needs them re-enabled.
+  for (const name of ["github.com/uptrace/bun", "github.com/uptrace/bun/dialect/pgdialect"])
+    assert(matches(rule("uptrace/bun").matchPackageNames, name), name);
+  assert.equal(rule("uptrace/bun").enabled, true);
 });
 
 test("Renovate discovers tool modules and compose files while excluding unrelated formats", () => {
