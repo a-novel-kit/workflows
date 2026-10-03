@@ -577,11 +577,10 @@ runs:
           total=$(printf '%s' "$nodes" | jq '[.[] | select(has("pull_request") | not)] | length' 2>/dev/null || echo 0)
           # fd 4 isolates this feed from the gh calls the loop body would otherwise consume; the body
           # runs in this shell, so CLAIM_EPICS and the cache primes persist. The list endpoint returns
-          # pull requests too, filtered by the `pull_request` key an issue never carries.
-          while IFS= read -r n <&4; do
-            [ -n "$n" ] || continue
-            elem=$(printf '%s' "$nodes" | jq -c --argjson n "$n" 'map(select(.number == $n))[0] // empty' 2>/dev/null)
-            [ -n "$elem" ] || continue
+          # pull requests too, filtered by the `pull_request` key an issue never carries. jq -c puts
+          # each issue on one line, its body's newlines escaped.
+          while IFS= read -r elem <&4; do
+            n=$(printf '%s' "$elem" | jq -r '.number')
             # Prime epic_issue's cache: a later pause or snapshot read of this number reuses this body.
             printf '%s' "$elem" > "${EPIC_CACHE}/$n.json"
             : > "${EPIC_CACHE}/$n.err"
@@ -602,7 +601,7 @@ runs:
                   | select((.repo | type) == "string" and (.number | type) == "number")
                   | {epic: $epic, repo: (.repo | ascii_downcase), number} ]' 2>/dev/null || printf '%s' "$CLAIM_MEMBERS")
             fi
-          done 4< <(printf '%s' "$nodes" | jq -r '.[] | select(has("pull_request") | not) | .number' 2>/dev/null)
+          done 4< <(printf '%s' "$nodes" | jq -c '.[] | select(has("pull_request") | not)' 2>/dev/null)
           echo "Claim index: ${total} open issue(s) in ${ORG}/${PLANNING_REPO}, ${added} carrying a frozen snapshot." \
             | tee -a "$GITHUB_STEP_SUMMARY"
         }

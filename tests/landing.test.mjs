@@ -284,6 +284,9 @@ test("strays require elapsed grace and REST confirmation; no merge means no part
 test("claim index keeps de-labeled members held and honors paused or unrelated issues", (t) => {
   const issue = { number: 900, body: frozen(), labels: [] };
   assert.equal(evaluate(t, { issues: [issue] }, "claims").output, "900");
+  const several = evaluate(t, { issues: [{ ...issue, number: 899, body: "" }, issue, { number: 901 }] }, "claims");
+  assert.equal(several.output, "900");
+  assert.match(several.summary, /3 open issue\(s\) .*, 1 carrying a frozen snapshot/);
   for (const issues of [
     [],
     "FAIL",
