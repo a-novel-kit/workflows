@@ -23,7 +23,8 @@ export class GitHub {
   }
 
   async request(path, { missing = false, method = "GET", body } = {}) {
-    const response = await fetch(`https://api.github.com/repos/${this.repository}/${path}`, {
+    const url = path.startsWith("https://") ? path : `https://api.github.com/repos/${this.repository}/${path}`;
+    const response = await fetch(url, {
       method,
       headers: {
         Authorization: `Bearer ${this.token}`,
@@ -38,6 +39,12 @@ export class GitHub {
     if (!response.ok) throw new Failure(`GitHub request failed (HTTP ${response.status})`);
     const text = await response.text();
     return text ? JSON.parse(text) : null;
+  }
+
+  async graphql(query, variables) {
+    const result = await this.request("https://api.github.com/graphql", { method: "POST", body: { query, variables } });
+    if (result.errors) throw new Failure("GitHub GraphQL request failed");
+    return result.data;
   }
 
   async pages(path) {
