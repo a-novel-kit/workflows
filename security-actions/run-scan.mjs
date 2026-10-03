@@ -25,7 +25,7 @@ for (let attempt = 1; attempt <= 3; attempt++) {
   // Docker's 125 means no scanner ran. Findings and scanner errors are never retried.
   if (command !== "docker" || code !== 125 || attempt === 3) break;
   console.warn(`::warning::docker could not run ${name} (attempt ${attempt}/3); retrying`);
-  await setTimeout(attempt * 5000);
+  await setTimeout(attempt * Number(process.env.SCAN_RETRY_DELAY_MS ?? 5000));
 }
 
 const summary = (text) => appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`);

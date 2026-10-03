@@ -105,7 +105,7 @@ test("scanner retries only container launch failures and never masks a missing e
   ]) {
     w.write("exits", JSON.stringify(exits));
     w.write("attempts", "");
-    assert.equal(w.run(process.execPath, [runner, "scanner", "docker"]).status, expected);
+    assert.equal(w.run(process.execPath, [runner, "scanner", "docker"], { SCAN_RETRY_DELAY_MS: "0" }).status, expected);
     assert.equal(w.read("attempts").length, exits.length);
   }
   assert.equal(
