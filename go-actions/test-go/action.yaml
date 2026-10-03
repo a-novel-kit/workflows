@@ -44,6 +44,8 @@ runs:
   steps:
     - uses: actions/checkout@v7
       if: ${{ inputs.skip_setup != 'true' }}
+      with:
+        persist-credentials: false
     - id: setup-go
       uses: actions/setup-go@v7.0.0
       if: ${{ inputs.skip_setup != 'true' }}
