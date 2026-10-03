@@ -51,8 +51,8 @@ runs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
-        key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
-        restore-keys: pnpm-${{ runner.os }}-
+        key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
     - name: setup github registry
       shell: bash
       env:
