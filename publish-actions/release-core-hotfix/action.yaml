@@ -96,10 +96,6 @@ runs:
       uses: actions/setup-node@v7
       with:
         node-version: lts/*
-    - name: Enable pnpm
-      shell: bash
-      run: corepack enable
-
     # Only repos that stamp docs, through a prepublish:doc script, need the a-novel CLI. The
     # working-directory points the read at the ephemeral tree's package.json.
     - name: Detect prepublish:doc
@@ -112,6 +108,13 @@ runs:
         else
           echo "needed=false" >> "$GITHUB_OUTPUT"
         fi
+    # prepublish:doc scripts call pnpm themselves. Corepack used to provide it from the
+    # packageManager pin, but Node stopped bundling it in v25 and lts/* follows Node's releases.
+    - name: Setup pnpm
+      if: ${{ steps.stamp.outputs.needed == 'true' }}
+      uses: pnpm/action-setup@v6
+      with:
+        package_json_file: __hotfix/package.json
     - name: Setup Go
       if: ${{ steps.stamp.outputs.needed == 'true' }}
       uses: actions/setup-go@v7.0.0
