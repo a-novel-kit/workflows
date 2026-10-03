@@ -41,14 +41,38 @@ runs:
       with:
         package-manager-cache: false
         node-version: "lts/*"
-        cache: pnpm
         registry-url: "https://npm.pkg.github.com"
+    - id: pnpm-store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    # setup-node's pnpm cache matched the exact lockfile only, so every lockfile change
+    # installed cold on its branch, again in the merge queue, and again on master.
+    - id: pnpm-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+        restore-keys: pnpm-${{ runner.os }}-
     - name: setup github registry
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
         pnpm config set "@a-novel-kit:registry" "https://npm.pkg.github.com"
-        pnpm config set "//npm.pkg.github.com/:_authToken" "${{ inputs.github_token }}"
+        pnpm config set "//npm.pkg.github.com/:_authToken" "$GITHUB_TOKEN"
     - name: install dependencies
       shell: bash
       run: pnpm i --frozen-lockfile
+    # Only the default branch saves: other refs restore its cache, and a merge-queue
+    # branch's cache is unreachable once the branch is deleted. Pruning drops packages
+    # the lockfile no longer uses, which the fallback key would otherwise carry forever.
+    - id: pnpm-prune
+      if: steps.pnpm-cache.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
+      shell: bash
+      run: pnpm store prune
+    - if: steps.pnpm-prune.outcome == 'success'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
