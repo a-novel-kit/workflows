@@ -82,10 +82,11 @@
       "groupName": "go toolchain"
     },
     {
-      "description": "Keep the golang base image in the same PR as the go directive",
+      "description": "Keep the golang base image in the same PR as the go directive. Renovate runs the branch's artifact updates with the config of its first upgrade by depName, which is this image, so it carries go.mod's tidy.",
       "matchManagers": ["dockerfile", "docker-compose"],
       "matchDepNames": ["docker.io/library/golang"],
-      "groupName": "go toolchain"
+      "groupName": "go toolchain",
+      "postUpdateOptions": ["gomodTidy"]
     },
     {
       "description": "Keep every Google Terraform provider constraint and lockfile update in one PR. Pinning reusable modules separately from root provider upgrades leaves the roots locked to a version that no longer satisfies those modules.",
@@ -114,18 +115,6 @@
       "groupName": "a-novel-kit workflows"
     },
     {
-      "matchPackageNames": ["/.*a-novel\\/service-json-keys.*/"],
-      "groupName": "service json keys"
-    },
-    {
-      "matchPackageNames": ["/.*a-novel\\/service-authentication.*/"],
-      "groupName": "service authentication"
-    },
-    {
-      "matchPackageNames": ["/.*a-novel\\/service-narrative-engine.*/"],
-      "groupName": "service narrative engine"
-    },
-    {
       "matchPackageNames": ["/.*a-novel\\/platform-authentication.*/"],
       "groupName": "platform authentication"
     },
@@ -144,6 +133,27 @@
       "groupName": "javascript dependencies"
     },
     {
+      "description": "Ship each service's Go module, npm client and images in one PR, since the module must match its images. Renovate runs every artifact update with the config of the branch's first upgrade by depName, usually an image, so each member carries the options its siblings need; the rules follow the npm catch-all so the client keeps its group.",
+      "matchPackageNames": ["/.*a-novel\\/service-json-keys.*/"],
+      "groupName": "service json keys",
+      "postUpdateOptions": ["gomodTidy", "pnpmDedupe"]
+    },
+    {
+      "matchPackageNames": ["/.*a-novel\\/service-authentication.*/"],
+      "groupName": "service authentication",
+      "postUpdateOptions": ["gomodTidy", "pnpmDedupe"]
+    },
+    {
+      "matchPackageNames": ["/.*a-novel\\/service-narrative-engine.*/"],
+      "groupName": "service narrative engine",
+      "postUpdateOptions": ["gomodTidy", "pnpmDedupe"]
+    },
+    {
+      "matchPackageNames": ["/.*a-novel\\/service-genai.*/"],
+      "groupName": "service genai",
+      "postUpdateOptions": ["gomodTidy", "pnpmDedupe"]
+    },
+    {
       "description": "Keep the pre-1.0 uikit package family together and require review because minor releases may break consumers.",
       "matchPackageNames": ["/^@a-novel-kit\\/uikit(?:-|$)/"],
       "matchCurrentVersion": "/^0\\./",
@@ -151,9 +161,10 @@
       "automerge": false
     },
     {
-      "description": "Keep Playwright packages and CI container images on the same runtime version.",
+      "description": "Keep Playwright packages and CI container images on the same runtime version. The image sorts first and lends the branch its artifact config, so the group carries npm's dedupe.",
       "matchPackageNames": ["playwright", "/^@playwright\\//", "mcr.microsoft.com/playwright"],
-      "groupName": "playwright runtime"
+      "groupName": "playwright runtime",
+      "postUpdateOptions": ["pnpmDedupe"]
     },
     {
       "description": "Keep the Vitest core and scoped packages on one runnable version.",

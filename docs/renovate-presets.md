@@ -30,6 +30,12 @@ them. This gives binary assets and checksums time to finish uploading; the defau
 release-age filter keeps premature versions out of update branches. The delay applies to all
 `github-releases` dependencies and inherits Renovate's release-age buffer.
 
+Each service's Go module, npm client and images update in one PR, because a module must ship with
+its matching images. Renovate runs every artifact update in a grouped branch with the configuration
+of its first upgrade by name, usually an image, so these groups carry both `go mod tidy` and
+`pnpm dedupe` for their members. The same applies to the golang image in the `go toolchain` group
+and the Playwright image in `playwright runtime`.
+
 For npm lockfiles, the package manager performs the refresh. Enforce transitive-package
 release cooldowns in the package manager (for example, pnpm's `minimumReleaseAge`);
 Renovate's `minimumReleaseAge` alone does not cover lockfile maintenance.
