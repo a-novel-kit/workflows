@@ -97,11 +97,10 @@ runs:
         name: ${{ inputs.coverage_artifact }}
         path: ${{ inputs.coverage_file }}
         if-no-files-found: error
-    - name: Install the Drive client
+    - name: Validate the Drive configuration
       if: ${{ inputs.drive_ci_provider != '' }}
       shell: bash
       env:
-        ACTION_PATH: ${{ github.action_path }}
         CI_ACCOUNT: ${{ inputs.drive_ci_account }}
         MAINTENANCE_PROVIDER: ${{ inputs.drive_maintenance_provider }}
         MAINTENANCE_ACCOUNT: ${{ inputs.drive_maintenance_account }}
@@ -110,7 +109,6 @@ runs:
       run: |
         set -euo pipefail
         : "${CI_ACCOUNT:?Missing drive_ci_account}" "${MAINTENANCE_PROVIDER:?Missing drive_maintenance_provider}" "${MAINTENANCE_ACCOUNT:?Missing drive_maintenance_account}" "${REFERENCES_FOLDER:?Missing references_folder}" "${RESULTS_FOLDER:?Missing results_folder}"
-        npm ci --prefix "$ACTION_PATH/drive" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
     - name: Authenticate candidate Drive access
       id: drive-auth
       if: ${{ inputs.drive_ci_provider != '' }}
