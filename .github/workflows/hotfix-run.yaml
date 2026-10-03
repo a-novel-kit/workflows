@@ -183,11 +183,6 @@ jobs:
           fix_head=$(git rev-parse HEAD)
           git push origin "$ephemeral"
 
-          # Restore the main workspace to the triggering commit, so the local `./` actions in the
-          # cut, reconcile and escalate steps resolve from the current ref; this step left it on the
-          # baseline. release-core-hotfix re-checks-out the ephemeral branch from the remote.
-          git checkout --force "$GITHUB_SHA" >/dev/null 2>&1
-
           {
             echo "baseline=$baseline"
             echo "ephemeral=$ephemeral"
