@@ -65,12 +65,15 @@ test("Go package discovery propagates failed reads and rejects an empty filtered
     { packages: "" },
     { packages: "example.org/repo/mocks\nexample.org/repo/test\nexample.org/repo/proto" },
   ]) {
-    assert.notEqual(w.bash(script, { GO_FIXTURE: JSON.stringify({ ...fixture, ...changes }) }).status, 0);
+    assert.notEqual(
+      w.bash(script, { PACKAGES: "packages.txt", GO_FIXTURE: JSON.stringify({ ...fixture, ...changes }) }).status,
+      0
+    );
   }
   const packages =
     "example.org/repo\nexample.org/repo/internal/dao\nexample.org/repo/mocks\nexample.org/repo/test\nexample.org/repo/proto";
-  succeeds(w.bash(script, { GO_FIXTURE: JSON.stringify({ ...fixture, packages }) }));
-  assert.equal(w.read("modules.txt"), "example.org/repo\nexample.org/repo/internal/dao\n");
+  succeeds(w.bash(script, { PACKAGES: "packages.txt", GO_FIXTURE: JSON.stringify({ ...fixture, packages }) }));
+  assert.equal(w.read("packages.txt"), "example.org/repo\nexample.org/repo/internal/dao\n");
 });
 
 test("Dockerfile discovery accepts fleet naming conventions without claiming source files", () => {
