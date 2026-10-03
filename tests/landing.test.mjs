@@ -412,3 +412,14 @@ test("membership reads a missing Epic as no snapshot but fails on an unreadable 
     assert.equal(existsSync(join(w.cwd, "output")) && w.read("output").includes("members=[]"), expected === 0);
   }
 });
+
+test("the enqueue-token scope saves its read in the sweep's search shape", () => {
+  // sweep_main reuses the scope step's enumeration, so a field read by one query and not the
+  // other would silently be missing from every swept pull request.
+  const selection = (source) => source.match(/nodes\{\s*\.\.\. on PullRequest\{([^]*?)\}\s*\}\s*\}\s*\}'/)[1];
+  const normalize = (text) => text.replace(/\s+/g, " ").trim();
+  assert.equal(
+    normalize(selection(step("generic-actions/detect-partial-landing/action.yaml", "scope"))),
+    normalize(selection(script))
+  );
+});
