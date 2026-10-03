@@ -68,10 +68,19 @@ jobs:
         run: |
           set -euo pipefail
           pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright install --with-deps --only-shell chromium
           npm ci --prefix node-actions/test-playwright/drive --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
       - name: Run action regression suites
         run: pnpm test
+
+  lint-renovate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Prepare Renovate validation
         shell: bash
         run: |
