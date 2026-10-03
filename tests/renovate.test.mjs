@@ -5,6 +5,7 @@ import { read } from "./helpers.mjs";
 const preset = (name) => JSON.parse(read(`renovate/${name}.json`));
 const base = preset("base"),
   database = preset("database"),
+  goTools = preset("go-tools"),
   service = preset("service");
 const regex = (value) => new RegExp(value.slice(1, value.lastIndexOf("/")), value.slice(value.lastIndexOf("/") + 1));
 const matches = (patterns, value) =>
@@ -105,7 +106,8 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
     ["docker-compose", ["builds/podman-compose.go.test.yaml", "compose.yml"], true],
     ["docker-compose", ["builds/database.apko.yaml"], false],
   ])
-    for (const file of files) assert.equal(matches(service[manager].managerFilePatterns, file), expected, file);
+    for (const file of files)
+      assert.equal(matches((goTools[manager] ?? service[manager]).managerFilePatterns, file), expected, file);
   const go = base.packageRules.find(
     (r) => r.groupName === "go toolchain" && r.matchManagers?.includes("gomod") && r.matchDepNames?.includes("go")
   );

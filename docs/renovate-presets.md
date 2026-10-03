@@ -99,7 +99,7 @@ generation paths in the consumer. Matching package rules merge in order, with re
 rules applied after presets. Remove the rules and managers transferred to the class preset;
 retaining them would apply the same configuration twice.
 
-The service class includes `database`, which updates apko and pinned APK packages and
+The service and library classes share `go-tools`, which isolates each Go tool module in its own branch. The service class includes `database`, which updates apko and pinned APK packages and
 groups PostgreSQL runtime packages. Its pgBackRest manager updates source version and
 SHA-256 together, accepting only stable releases with a matching asset and valid digest.
 The custom datasource uses Renovate's experimental custom datasource support.
