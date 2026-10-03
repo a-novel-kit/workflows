@@ -194,10 +194,9 @@ release. Annotate it so Renovate can resolve the datasource:
     version: "8.30.1"
 ```
 
-A repo needing its own gitleaks allowlist **extends** the shipped baseline rather than replacing
-it — `scan-secrets` writes the baseline to `.gitleaks-base.toml` in the workspace, and the repo's
-`.gitleaks.toml` opens with `[extend] path = ".gitleaks-base.toml"`. Allowlists from both layers
-apply; a config that omits the block replaces the baseline and the action warns.
+A repo needing its own gitleaks allowlist passes `config`, which **replaces** the shipped baseline:
+gitleaks replaces a base config's allowlists when another config extends it, so the repo copies
+`security-actions/scan-secrets/gitleaks.toml` and adds its entries.
 
 Call the three as separate jobs, not through one reusable workflow. A reusable-workflow caller's
 checks are named `<caller-job>/<inner-job>`, but required-check discovery reads the caller's job id

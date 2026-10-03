@@ -62,14 +62,6 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # approve-bot runs `gh pr checkout`, so a base checkout must exist first.
-      - name: Check out
-        if: ${{ steps.guard.outputs.skip != 'true' }}
-        uses: actions/checkout@v7
-        with:
-          token: ${{ steps.token.outputs.token }}
-          persist-credentials: false
-
       - name: Approve
         if: ${{ steps.guard.outputs.skip != 'true' }}
         uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.36.3
