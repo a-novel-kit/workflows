@@ -93,13 +93,18 @@ test("Dockerfile discovery accepts fleet naming conventions without claiming sou
 });
 
 test("Docker provenance uses the published digest and security tools require caller-owned pins", () => {
-  for (const name of ["docker", "docker-job"]) {
-    const steps = manifest(`build-actions/${name}/action.yaml`).runs.steps;
-    const index = steps.findIndex((s) => s.uses?.startsWith("actions/attest@"));
-    assert(index > steps.findIndex((s) => s.id === "build"));
-    assert.equal(steps[index].with["subject-digest"], "${{ steps.build.outputs.digest }}");
-    assert.equal(steps[index].with["push-to-registry"], true);
-  }
+  const steps = manifest("build-actions/docker/action.yaml").runs.steps;
+  const index = steps.findIndex((s) => s.uses?.startsWith("actions/attest@"));
+  assert(index > steps.findIndex((s) => s.id === "build"));
+  assert.equal(steps[index].with["subject-digest"], "${{ steps.build.outputs.digest }}");
+  assert.equal(steps[index].with["push-to-registry"], true);
+  // docker-job publishes through docker, so it inherits the same attestation.
+  const job = manifest("build-actions/docker-job/action.yaml");
+  assert.deepEqual(
+    job.runs.steps.map((s) => [s.uses?.replace(/@.*/, ""), s.with?.mode]),
+    [["a-novel-kit/workflows/build-actions/docker", "job"]]
+  );
+  assert.equal(job.outputs.digest.value, "${{ steps.build.outputs.digest }}");
   for (const action of [
     "generic-actions/lint-shell",
     "generic-actions/lint-dockerfile",
