@@ -78,7 +78,6 @@ SemVer release.
 | `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
 | `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
 | `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
-| `auto-merge-bot`         | Enable auto-merge on a PR.                                                                                        |
 | `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
 | `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                       |
 | `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
@@ -96,7 +95,6 @@ SemVer release.
 | `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
 | `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
-| `token-expiry-notify`    | Remind (Discord) before a fine-grained PAT expires, with the regen steps.                                         |
 
 `check-append-only` needs the full base history. It rejects every change except additions under
 the configured path; the `append-only-override` PR label is the reviewed escape hatch.
@@ -117,7 +115,6 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 | Action              | Purpose                                     |
 | ------------------- | ------------------------------------------- |
 | `publish-storybook` | Build a Storybook site and deploy to Pages. |
-| `publish-vuepress`  | Build a VuePress site and deploy to Pages.  |
 
 ### `go-actions`
 
@@ -206,7 +203,6 @@ verbatim — so the required context would be one GitHub never posts, and the PR
 
 | Action                | Purpose                                                                                        |
 | --------------------- | ---------------------------------------------------------------------------------------------- |
-| `auto-release`        | Turn a pushed tag into a GitHub release with notes.                                            |
 | `npm`                 | Publish the workspace packages to the GitHub registry.                                         |
 | `release-core`        | Cut a release in CI: bump the version, tag, push, release.                                     |
 | `release-core-hotfix` | Cut a hotfix release from an ephemeral branch off a release tag (patch, tag-only, not-latest). |

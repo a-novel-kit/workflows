@@ -4,23 +4,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { functions, manifest, root, step, succeeds, workspace } from "./helpers.mjs";
 
-test("credential classification distinguishes rejection, transport failure and expiry", (t) => {
-  const w = workspace(t);
-  const script = functions(step("generic-actions/token-expiry-notify/action.yaml", "Check expiry and remind"), [
-    "token_state",
-  ]);
-  for (const [exit, http, expiry, expected] of [
-    [0, 401, "", "rejected"],
-    [0, 403, "", "rejected"],
-    [0, 500, "", "rejected"],
-    [6, "000", "", "unreachable"],
-    [28, "000", "", "unreachable"],
-    [0, 200, "", "non-expiring"],
-    [0, 200, "Mon, 01 Jan 2027 00:00:00 UTC", "expiring"],
-  ])
-    assert.equal(succeeds(w.bash(`${script}\ntoken_state "$@"`, {}, [exit, http, expiry].map(String))), expected);
-});
-
 test("generation retries transient failures and propagates exhaustion", (t) => {
   const w = workspace(t);
   const script = functions(step("go-actions/generate-go/action.yaml", "Generate Go code"), ["generate"]);
