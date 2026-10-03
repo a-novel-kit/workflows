@@ -2,6 +2,12 @@ name: build docker service
 description: Build a docker container from a Dockerfile, and make sure it reports healthy when run.
 
 inputs:
+  mode:
+    required: false
+    default: service
+    description: >
+      "service" waits for the test container to report healthy; "job" waits for it to exit 0
+      and also tags scheduled builds `nightly`.
   file:
     required: false
     description: Path of the dockerfile, relative to repository root.
@@ -88,6 +94,7 @@ runs:
         tags: |
           # Ref-derived tags for the tag-push flow, off when a version is passed.
           type=ref,event=pr,enable=${{ inputs.version == '' }}
+          type=schedule,pattern=nightly,enable=${{ inputs.version == '' && inputs.mode == 'job' }}
           type=ref,event=branch,enable=${{ inputs.version == '' }}
           type=ref,event=tag,enable=${{ inputs.version == '' }}
           type=semver,pattern=v{{version}},enable=${{ inputs.version == '' }}
@@ -129,15 +136,16 @@ runs:
         secret-envs: ${{ inputs.secret-envs }}
         secret-files: ${{ inputs.secret-files }}
         secrets: ${{ inputs.secrets }}
-    - name: wait for container to be ready
+    - name: wait for the test container
       if: ${{ inputs.skip_healthcheck != 'true' }}
       shell: bash
       env:
         IMAGE_NAME: ${{ inputs.image_name }}
+        MODE: ${{ inputs.mode }}
         TIMEOUT: ${{ inputs.timeout }}
         RUN_ARGS: ${{ inputs.run_args }}
       run: |
-        node "$GITHUB_ACTION_PATH/../wait-container.mjs" service "$TIMEOUT"
+        node "$GITHUB_ACTION_PATH/../wait-container.mjs" "$MODE" "$TIMEOUT"
     - uses: docker/build-push-action@v7
       if: ${{ success() }}
       id: build
