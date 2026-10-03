@@ -28,7 +28,12 @@ function fixture(t, options = {}) {
     import * as fs from 'node:fs';
     const args = process.argv.slice(2), state = JSON.parse(fs.readFileSync('state.json'));
     let output = '', status = 0;
-    if (args[0] === 'api') {
+    if (args[0] === 'api' && args.includes('DELETE')) {
+      if (state.clearFailure) status = 1;
+      else state.rolledBack = false;
+    } else if (args[0] === 'api' && args.some((arg) => arg.includes('.labels'))) {
+      output = String(Boolean(state.rolledBack));
+    } else if (args[0] === 'api') {
       state.reads++;
       if (state.peerBefore && state.reads === 2) fs.writeFileSync('body', state.peerBefore);
       if (state.readFailures?.includes(state.reads)) status = 1;
@@ -201,4 +206,67 @@ test("malformed fences are repaired without discarding human prose", (t) => {
     assert.equal(output.text.split("\n").filter((line) => line === start).length, 1);
     assert.equal(output.text.split("\n").filter((line) => line === end).length, 1);
   }
+});
+
+test("a fully merged wave retires after a member repository is renamed", (t) => {
+  // The frozen marker keeps the old name, while epic-membership reports the live one.
+  const renamed = members.map((m, i) => ({ ...m, repo: i ? m.repo : "a-novel-kit/a-renamed", state: "MERGED" }));
+  const output = fixture(t, { before: marker("frozen"), members: renamed });
+  succeeds(output.result);
+  assert.equal(output.payload.status, "retired");
+});
+
+test("the gate holds a frozen wave whose member closed without merging", (t) => {
+  const evaluate = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
+  for (const [states, conclusion] of [
+    [["OPEN", "OPEN"], "success"],
+    [["OPEN", "MERGED"], "success"],
+    [["OPEN", "CLOSED"], "failure"],
+  ]) {
+    const w = workspace(t);
+    w.stub(
+      "gh",
+      `import * as fs from 'node:fs'; const input = fs.readFileSync(0, 'utf8'); fs.writeFileSync('check.json', input);`
+    );
+    const ready = members.map((m, i) => ({ ...m, state: states[i], isDraft: false, reviewDecision: "APPROVED" }));
+    succeeds(
+      w.bash(evaluate, {
+        REPO_FULL: ready[0].repo,
+        HEAD_SHA: "head",
+        EPIC: "900",
+        PR_NUMBER: String(ready[0].number),
+        MEMBERS: JSON.stringify(ready),
+      })
+    );
+    const check = JSON.parse(w.read("check.json"));
+    assert.equal(check.conclusion, conclusion, states.join("+"));
+    if (conclusion === "failure")
+      assert.match(check.output.summary, /1 of 2 member\(s\) not ready[^]*closed without merging/);
+  }
+});
+
+test("a rolled-back wave retires once none of its members is open", (t) => {
+  const settled = members.map((m, i) => ({ ...m, state: i ? "CLOSED" : "MERGED" }));
+  const held = fixture(t, { before: marker("frozen"), members: settled });
+  succeeds(held.result);
+  assert.equal(held.writes, 0);
+  const open = members.map((m, i) => ({ ...m, state: i ? "OPEN" : "MERGED" }));
+  const stillOpen = fixture(t, { before: marker("frozen"), members: open, server: { rolledBack: true } });
+  succeeds(stillOpen.result);
+  assert.equal(stillOpen.writes, 0);
+  const retired = fixture(t, { before: marker("frozen"), members: settled, server: { rolledBack: true } });
+  succeeds(retired.result);
+  assert.equal(retired.payload.status, "retired");
+  assert.match(retired.text, /has been rolled back/);
+});
+
+test("freezing a new wave first clears a rolled-back label an earlier wave left", (t) => {
+  const cleared = fixture(t, { before: marker("pending"), server: { rolledBack: true } });
+  succeeds(cleared.result);
+  assert.equal(cleared.payload.status, "frozen");
+  assert.equal(cleared.rolledBack, false);
+  const stuck = fixture(t, { before: marker("pending"), server: { rolledBack: true, clearFailure: true } });
+  succeeds(stuck.result);
+  assert.equal(stuck.writes, 0);
+  assert.equal(stuck.payload.status, "pending");
 });
