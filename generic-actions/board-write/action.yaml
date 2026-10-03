@@ -221,6 +221,11 @@ runs:
               echo "::error::content $content_id is not on the board and add_if_missing=false"
               exit 1
             fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "- [dry-run] would add content $content_id to the board and set \"$FIELD\" = \"$VALUE\"." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
             add_m='mutation($proj:ID!,$c:ID!){
               addProjectV2ItemById(input:{projectId:$proj,contentId:$c}){ item{ id } } }'
             item_id=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$content_id" \
