@@ -121,34 +121,47 @@ runs:
         # pseudo-fence planted in an HTML comment cannot shadow the real region.
         START_M='<!-- epic-membership:snapshot:start -->'
         END_M='<!-- epic-membership:snapshot:end -->'
+        # Retried, and only a 404 (no Epic issue) means "no snapshot": falling through to the live
+        # search on a transient failure would gate on the very set a frozen snapshot overrides. Failing
+        # instead leaves merge-gate an empty output, which it holds on.
+        errf="$RUNNER_TEMP/epic-membership-read.err"
+        for attempt in 1 2 3; do
+          body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>"$errf") && break
+          body=""
+          grep -q 'HTTP 404' "$errf" && break
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::Epic #${EPIC}: could not read its body for the activation snapshot: $(cat "$errf")"
+            exit 1
+          fi
+          sleep 2
+        done
         # GitHub stores bodies with CRLF; strip \r so the marker lines match.
-        if body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
-          # The fenced region holds a human-readable note and then the JSON, so skip to the first line
-          # that opens a value before parsing: the note is not JSON, and the JSON may be pretty-printed
-          # across several lines. `-s .[0]` takes the first value if a hand-edit left several; trailing
-          # prose inside the region voids the whole marker, which fails safe. All three participants
-          # extract this way.
-          marker=$(printf '%s\n' "$body" \
-            | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
-            | sed -n '/^[[:space:]]*[{[]/,$p' \
-            | jq -s -c '.[0] // empty' 2>/dev/null || true)
-          # Only a well-formed frozen marker with a valid member list counts. A pending marker,
-          # hand-edited garbage or the wrong shape yields an empty `frozen` and falls through to the
-          # live search, never a crash or a permanent hold.
-          # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
-          # document below, and the Epic body is writable by anyone with write access to this repo.
-          # The repo pattern excludes quotes and newlines, which are enough to inject fields, and the
-          # number must be a whole integer, since 1.5 is a document-level validation error that
-          # rejects the whole query.
-          [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
-            select(type == "object" and .status == "frozen" and (.members | type == "array"))
-            | .members
-            | select(all(.[]; type == "object"
-                and (.repo | type == "string") and (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
-                and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
-            | unique_by((.repo | ascii_downcase), .number)
-            | select(length > 0 and length <= 50)' 2>/dev/null || true)
-        fi
+        body=$(printf '%s' "$body" | tr -d '\r')
+        # The fenced region holds a human-readable note and then the JSON, so skip to the first line
+        # that opens a value before parsing: the note is not JSON, and the JSON may be pretty-printed
+        # across several lines. `-s .[0]` takes the first value if a hand-edit left several; trailing
+        # prose inside the region voids the whole marker, which fails safe. All three participants
+        # extract this way.
+        marker=$(printf '%s\n' "$body" \
+          | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
+          | sed -n '/^[[:space:]]*[{[]/,$p' \
+          | jq -s -c '.[0] // empty' 2>/dev/null || true)
+        # Only a well-formed frozen marker with a valid member list counts. A pending marker,
+        # hand-edited garbage or the wrong shape yields an empty `frozen` and falls through to the
+        # live search, never a crash or a permanent hold.
+        # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
+        # document below, and the Epic body is writable by anyone with write access to this repo.
+        # The repo pattern excludes quotes and newlines, which are enough to inject fields, and the
+        # number must be a whole integer, since 1.5 is a document-level validation error that
+        # rejects the whole query.
+        [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
+          select(type == "object" and .status == "frozen" and (.members | type == "array"))
+          | .members
+          | select(all(.[]; type == "object"
+              and (.repo | type == "string") and (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
+              and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
+          | unique_by((.repo | ascii_downcase), .number)
+          | select(length > 0 and length <= 50)' 2>/dev/null || true)
         if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
           # Re-read each frozen member's current state (OPEN / MERGED / CLOSED), one GraphQL alias per
           # member in a single call. The response has to account for every member: GitHub answers a

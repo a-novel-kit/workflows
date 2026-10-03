@@ -584,7 +584,8 @@ runs:
           # Only the exit status separates the two, which is why the guard reads the status rather
           # than "$cur". The receipts are a best-effort audit and the same table is already in the run
           # summary, so declining to write costs nothing.
-          if ! cur=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null); then
+          # GitHub stores bodies with CRLF; strip \r so the receipt fences match as whole lines.
+          if ! cur=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
             echo "::warning::could not read epic:#${EPIC} — leaving its body untouched; the receipt table is in the run summary."
           else
             newbody=$(splice_body "$cur" "$block")
