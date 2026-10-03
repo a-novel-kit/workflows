@@ -64,11 +64,13 @@ runs:
     - name: install dependencies
       shell: bash
       run: pnpm i --frozen-lockfile
-    # Only the default branch saves: other refs restore its cache, and a merge-queue
-    # branch's cache is unreachable once the branch is deleted. Pruning drops packages
-    # the lockfile no longer uses, which the fallback key would otherwise carry forever.
+    # Only pushes to the default branch that install its own commit save: other refs restore
+    # its cache, a merge-queue branch's cache is unreachable once the branch is deleted, and a
+    # pull_request_target run reports the base branch as its ref while pull-bot checks out the
+    # PR head. Pruning drops packages the lockfile no longer uses, which the fallback key would
+    # otherwise carry forever.
     - id: pnpm-prune
-      if: steps.pnpm-cache.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
+      if: steps.pnpm-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && inputs.ref == ''
       shell: bash
       run: pnpm store prune
     - if: steps.pnpm-prune.outcome == 'success'
