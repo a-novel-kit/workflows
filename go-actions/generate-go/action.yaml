@@ -60,9 +60,10 @@ runs:
         }
 
         generate
-    # Only the default branch saves: other refs restore its cache, and a merge-queue
-    # branch's cache is unreachable once the branch is deleted.
-    - if: steps.go-cache.outputs.cache-hit != 'true' && github.ref_name == github.event.repository.default_branch
+    # Only pushes to the default branch save: other refs restore its cache, a merge-queue
+    # branch's cache is unreachable once the branch is deleted, and a pull_request_target run
+    # reports the base branch as its ref.
+    - if: steps.go-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
       uses: actions/cache/save@v6
       with:
         path: |
