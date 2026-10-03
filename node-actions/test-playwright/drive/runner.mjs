@@ -1,10 +1,9 @@
 // Run native comparisons and regenerate only after a reviewed visual-only failure.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, glob, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, posix, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import * as tar from "tar";
 import { Failure, runCli } from "./common.mjs";
 import { captureReview } from "./review.mjs";
 
@@ -80,16 +79,19 @@ export async function archiveBatch(paths, target) {
     const resolved = relative(workspace, await realpath(path));
     if (resolved.startsWith("..") || isAbsolute(resolved)) throw new Failure("Evidence contains an unsafe file path");
   }
-  await tar.c(
-    {
-      file: target,
-      portable: true,
-      noDirRecurse: true,
-      onWriteEntry(entry) {
-        if (entry.path.startsWith(".visual/snapshots/")) entry.path = entry.path.slice(".visual/".length);
-      },
-    },
-    sources
+  // A NUL-separated stdin list avoids argument limits, and verbatim names cannot act as options.
+  execFileSync(
+    "tar",
+    [
+      "--create",
+      `--file=${target}`,
+      "--no-recursion",
+      "--transform=s,^\\.visual/snapshots/,snapshots/,",
+      "--null",
+      "--verbatim-files-from",
+      "--files-from=-",
+    ],
+    { input: sources.join("\0") }
   );
 }
 

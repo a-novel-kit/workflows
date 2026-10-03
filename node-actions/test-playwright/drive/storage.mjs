@@ -1,13 +1,13 @@
 // Store immutable Playwright batches in Shared Drive folders with short-lived CI credentials.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { buffer } from "node:stream/consumers";
 import { pipeline } from "node:stream/promises";
 import { setTimeout } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import * as tar from "tar";
 import { Failure, GitHub, runCli } from "./common.mjs";
 
 export const PROTOCOL = "playwright-v1";
@@ -329,31 +329,39 @@ export async function cleanup(drive, github, resultsId, referencesId) {
 export async function extractSnapshots(archive, destination) {
   await mkdir(destination, { recursive: true });
   let count = 0;
-  let unsafe = false;
-  await tar.x({
-    file: archive,
-    cwd: destination,
-    strip: 1,
-    strict: true,
-    filter(name, entry) {
-      const parts = name.split("/");
-      if (parts[0] !== "snapshots" || entry.type === "Directory") return false;
-      if (
-        entry.type !== "File" ||
-        parts.includes("..") ||
-        posix.isAbsolute(name) ||
-        name.includes("\\") ||
-        posix.extname(name) !== ".png"
-      ) {
-        unsafe = true;
-        return false;
-      }
-      count++;
-      return true;
-    },
+  // Escaping keeps one entry per line and C.UTF-8 keeps Unicode literal; any escape adds a rejected backslash.
+  const names = execFileSync("tar", ["--list", "--quoting-style=escape", `--file=${archive}`], {
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C.UTF-8" },
+    maxBuffer: Infinity,
   });
-  if (unsafe) throw new Failure("Unsafe snapshot archive entry");
+  for (const name of names.split("\n")) {
+    const parts = name.split("/");
+    if (parts[0] !== "snapshots" || name.endsWith("/")) continue;
+    if (parts.includes("..") || posix.isAbsolute(name) || name.includes("\\") || posix.extname(name) !== ".png")
+      throw new Failure("Unsafe snapshot archive entry");
+    count++;
+  }
   if (!count) throw new Failure("Reference batch contains no screenshots");
+  execFileSync("tar", [
+    "--extract",
+    `--file=${archive}`,
+    `--directory=${destination}`,
+    "--strip-components=1",
+    "snapshots",
+  ]);
+  await verifyTree(destination);
+}
+
+/** Reject links and special files, which a name listing cannot reveal. */
+async function verifyTree(directory) {
+  for (const name of await readdir(directory)) {
+    const path = join(directory, name);
+    const info = await lstat(path);
+    if (info.isDirectory()) await verifyTree(path);
+    else if (!info.isFile() || info.nlink !== 1 || posix.extname(name) !== ".png")
+      throw new Failure("Unsafe snapshot archive entry");
+  }
 }
 
 async function main() {
