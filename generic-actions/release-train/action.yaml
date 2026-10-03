@@ -289,26 +289,28 @@ runs:
         }
 
         derive_bump() { # $1=owner/repo $2=last_tag ("" = first release) $3=default_branch
-          local repo="$1" last="$2" head="$3" subjects bodies path paginate jq_bodies jq_subjects
+          local repo="$1" last="$2" head="$3" messages subjects bodies path paginate jq_messages
           if [ -z "$last" ]; then
             # First release: scan the recent default-branch history, defaulting to minor when quiet.
             # Unpaginated, since "is there anything here" does not need the whole history.
             path="repos/$repo/commits"; paginate=false
-            jq_bodies='.[].commit.message'; jq_subjects='.[].commit.message | split("\n")[0]'
+            jq_messages='.[].commit.message | @json'
           else
             # Paginated: the compare API pages its commit list, and a feat past the first page would
             # be invisible, shipping a minor as a patch.
             path="repos/$repo/compare/${last}...${head}"; paginate=true
-            jq_bodies='.commits[].commit.message'; jq_subjects='.commits[].commit.message | split("\n")[0]'
+            jq_messages='.commits[].commit.message | @json'
           fi
           # Fail closed, as latest_tag and tag_contains do. A failed read is not an empty range:
           # collapsing the two onto one value makes a transient API error read as "nothing to
           # release", so the repo is skipped and recorded as nochange while the run stays green, and
           # with no failure recorded a re-dispatch recomputes the same skip.
-          if ! bodies=$(commit_messages "$path" "$jq_bodies" "$paginate") \
-            || ! subjects=$(commit_messages "$path" "$jq_subjects" "$paginate"); then
+          if ! messages=$(commit_messages "$path" "$jq_messages" "$paginate"); then
             printf '__ERR__'; return 0
           fi
+          # One JSON string per message keeps multi-line bodies apart, so one read yields both views.
+          bodies=$(printf '%s' "$messages" | jq -r '.')
+          subjects=$(printf '%s' "$messages" | jq -r 'split("\n")[0]')
           if [ -z "$(printf '%s' "$subjects" | tr -d '[:space:]')" ]; then
             [ -z "$last" ] && { printf 'minor'; return 0; }
             printf 'none'; return 0
