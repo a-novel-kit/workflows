@@ -127,9 +127,10 @@ runs:
         # `go build` runs. The scope is per image, so the parallel jobs building
         # different images keep separate caches.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
-        # Only the default branch writes the cache: other refs read it, and a merge-queue
-        # branch's cache is unreachable once the branch is deleted.
-        cache-to: ${{ inputs.cache == 'true' && github.ref_name == github.event.repository.default_branch && format('type=gha,mode=max,scope={0},ignore-error=true', inputs.image_name) || '' }}
+        # Only pushes to the default branch write the cache: other refs read it, a merge-queue
+        # branch's cache is unreachable once the branch is deleted, and a pull_request_target run
+        # reports the base branch as its ref.
+        cache-to: ${{ inputs.cache == 'true' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && format('type=gha,mode=max,scope={0},ignore-error=true', inputs.image_name) || '' }}
         load: true
         tags: ghcr.io/${{ inputs.image_name }}:test
         file: ${{ inputs.file }}
