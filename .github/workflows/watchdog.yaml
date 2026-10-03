@@ -146,7 +146,8 @@ jobs:
 
           # ---- Stuck hotfix runs: a hotfix.yaml run in_progress past the threshold, a hung step
           # holding the per-repo hotfix lock. The run's own 30-minute lock cap covers only the wait.
-          repos=$(gh api "orgs/${ORG}/repos" --paginate --jq '.[].name' 2>/dev/null || true)
+          # A failed repo listing fails the scan: read as an empty org, it would skip this check.
+          repos=$(gh api "orgs/${ORG}/repos" --paginate --jq '.[].name')
           while IFS= read -r repo; do
             [ -n "$repo" ] || continue
             # A repo with no hotfix.yaml errors here, and is skipped quietly.
@@ -172,11 +173,18 @@ jobs:
           # This run catches a fail-safe that stopped and resumed, or a sibling that is down; a
           # fail-safe still down is caught by its sibling's own heartbeat.
           if [ -n "${HEARTBEAT_WORKFLOWS:-}" ]; then
+            errf=$(mktemp)
             IFS=',' read -ra hbwf <<< "$HEARTBEAT_WORKFLOWS"
             for wf in "${hbwf[@]}"; do
               wf=$(printf '%s' "$wf" | tr -d '[:space:]')
               [ -n "$wf" ] || continue
-              last=$(gh run list --repo "$REPO" --workflow "$wf" --limit 1 --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || echo "")
+              # A 404 is an answer: the workflow file is gone, so the fail-safe cannot run. Any other
+              # read error is unknown and fails the scan, rather than paging SEV1 on an API blip.
+              if ! last=$(gh run list --repo "$REPO" --workflow "$wf" --limit 1 --json createdAt \
+                --jq '.[0].createdAt // empty' 2>"$errf") && ! grep -q 'HTTP 404' "$errf"; then
+                echo "::error::could not read the runs of ${wf}: $(tr '\n' ' ' < "$errf")"
+                exit 1
+              fi
               if [ -z "$last" ]; then
                 add sev1 "Fail-safe '${wf}' has NEVER run in ${REPO}" "heartbeat:${REPO}:${wf}" "$REPO" \
                   "The scheduled fail-safe \`${wf}\` has no runs — its cron may be disabled or misconfigured, so the org has lost this backstop."

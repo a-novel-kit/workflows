@@ -161,7 +161,7 @@ jobs:
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number headRefOid repository{ name }
               labels(first:20){ nodes{ name } }
-              closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } } }'
+              closingIssuesReferences(first:5){ nodes{ number } } } } } }'
           # Page every open PR: a fail-safe cannot stop at the first 100.
           nodes='[]'
           cursor=""
