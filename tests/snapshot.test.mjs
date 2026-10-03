@@ -210,3 +210,32 @@ test("a fully merged wave retires after a member repository is renamed", (t) => 
   succeeds(output.result);
   assert.equal(output.payload.status, "retired");
 });
+
+test("the gate holds a frozen wave whose member closed without merging", (t) => {
+  const evaluate = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
+  for (const [states, conclusion] of [
+    [["OPEN", "OPEN"], "success"],
+    [["OPEN", "MERGED"], "success"],
+    [["OPEN", "CLOSED"], "failure"],
+  ]) {
+    const w = workspace(t);
+    w.stub(
+      "gh",
+      `import * as fs from 'node:fs'; const input = fs.readFileSync(0, 'utf8'); fs.writeFileSync('check.json', input);`
+    );
+    const ready = members.map((m, i) => ({ ...m, state: states[i], isDraft: false, reviewDecision: "APPROVED" }));
+    succeeds(
+      w.bash(evaluate, {
+        REPO_FULL: ready[0].repo,
+        HEAD_SHA: "head",
+        EPIC: "900",
+        PR_NUMBER: String(ready[0].number),
+        MEMBERS: JSON.stringify(ready),
+      })
+    );
+    const check = JSON.parse(w.read("check.json"));
+    assert.equal(check.conclusion, conclusion, states.join("+"));
+    if (conclusion === "failure")
+      assert.match(check.output.summary, /1 of 2 member\(s\) not ready[^]*closed without merging/);
+  }
+});

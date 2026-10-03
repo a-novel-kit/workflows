@@ -410,15 +410,18 @@ runs:
         fi
 
         # Readiness covers the still-open members. Under a snapshot the set is frozen and can carry
-        # merged or closed members, which have left or abandoned the landing and belong to the
-        # partial-landing detector. `state == null` tolerates an epic-membership version without
-        # `state`, so a version skew degrades to the all-open live behavior.
+        # merged members, which have landed, and closed ones. A member closed unmerged means the wave
+        # can never land whole, so it holds the rest instead of letting them land as a partial set;
+        # the partial-landing detector only acts once something has merged. `state == null`
+        # tolerates an epic-membership version without `state`, so a version skew degrades to the
+        # all-open live behavior.
         unready=$(printf '%s' "$MEMBERS" | jq -r '.[]
-          | select(.state == "OPEN" or .state == null)
-          | select(.isDraft or (.reviewDecision != "APPROVED"))
-          | "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"')
+          | if .state == "CLOSED" then "  - \(.repo)#\(.number) (closed without merging: the wave cannot land whole)"
+            elif (.state == "OPEN" or .state == null) and (.isDraft or (.reviewDecision != "APPROVED"))
+              then "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"
+            else empty end')
 
-        total=$(printf '%s' "$MEMBERS" | jq '[.[] | select(.state == "OPEN" or .state == null)] | length')
+        total=$(printf '%s' "$MEMBERS" | jq '[.[] | select(.state != "MERGED")] | length')
         if [ -z "$unready" ]; then
           post_check success "Epic #${EPIC} — all ${total} open member(s) merge-ready ${where}. Atomic landing OK."
           # The set is approved and merge-ready, so trigger the two-phase capture below.
