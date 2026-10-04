@@ -280,3 +280,20 @@ rules:
             $R.$MU.Lock()
             ...
           }
+
+  # golib httpf: a tag is part of the public error response, so only the HTTP
+  # handler answering the request chooses one. WithTag also extends a tagged
+  # error in place, which is safe only because a handler never shares the
+  # error it tags.
+  - id: agora-error-tag-in-handler
+    languages: [go]
+    severity: ERROR
+    message: >-
+      httpf.WithTag adds a client-visible tag to an error response, which only
+      the HTTP handler answering the request may choose. Return a sentinel
+      error from this layer and tag it in the handler that maps it to a status.
+    paths:
+      exclude:
+        - "**/internal/handlers/"
+        - "*_test.go"
+    pattern: httpf.WithTag(...)
