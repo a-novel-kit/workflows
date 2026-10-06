@@ -15,5 +15,5 @@
     "prettier-plugin-packagejson": "^3.0.0",
     "yaml": "2.9.1"
   },
-  "packageManager": "pnpm@12.8.2"
+  "packageManager": "pnpm@12.9.0"
 }
