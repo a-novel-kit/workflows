@@ -1,0 +1,96 @@
+name: lint translations
+description: >
+  Check a platform's translation catalogs: structure always, then on a branch push the gaps and drift
+  the branch introduced since its merge base with the default branch. The PR labels
+  allow-incomplete-translations and allow-translation-drift accept those two; a merge group checks
+  structure only. Later checks still run after an earlier finding, so one run reports every problem.
+inputs:
+  github_token:
+    required: true
+    description: Token with contents and packages read for setup, and pull requests read to find the branch's PR labels.
+  app_private_key:
+    required: true
+    description: The GitHub App private key.
+  client_id:
+    required: false
+    description: GitHub App client id (recommended).
+  structure_action:
+    required: false
+    default: i18n:structure
+    description: Package script that checks catalog structure against the code; no label accepts its failure.
+  gaps_action:
+    required: false
+    default: i18n:gaps
+    description: Package script reporting translations the branch left empty; it receives `--base <ref>`.
+  drift_action:
+    required: false
+    default: i18n:drift
+    description: Package script reporting source messages the branch changed without their translations; it receives `--base <ref>`.
+runs:
+  using: composite
+  steps:
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.38.4
+      id: setup
+      with:
+        client_id: ${{ inputs.client_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+        github_token: ${{ inputs.github_token }}
+
+    - name: Check catalog structure
+      id: structure
+      shell: bash
+      env:
+        STRUCTURE_ACTION: ${{ inputs.structure_action }}
+      run: |
+        set -euo pipefail
+        pnpm run "$STRUCTURE_ACTION" || {
+          git diff
+          exit 1
+        }
+
+    - name: Read approval labels
+      id: labels
+      if: ${{ !cancelled() && steps.setup.outcome == 'success' && github.event_name == 'push' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        BRANCH: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        names=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json labels \
+          --jq '[.[0].labels[]?.name]')
+        echo "names=$names" >> "$GITHUB_OUTPUT"
+
+    - name: Fetch the base branch
+      id: base
+      if: ${{ !cancelled() && steps.setup.outcome == 'success' && github.event_name == 'push' }}
+      shell: bash
+      env:
+        BASE: ${{ github.event.repository.default_branch }}
+      run: |
+        set -euo pipefail
+        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch --no-tags --quiet --unshallow origin; fi
+        git fetch --no-tags --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+        echo "ref=origin/$BASE" >> "$GITHUB_OUTPUT"
+
+    - name: Check translation gaps
+      id: gaps
+      if: >-
+        ${{ !cancelled() && steps.labels.outcome == 'success' && steps.base.outcome == 'success' &&
+        !contains(fromJSON(steps.labels.outputs.names), 'allow-incomplete-translations') }}
+      shell: bash
+      env:
+        GAPS_ACTION: ${{ inputs.gaps_action }}
+        BASE_REF: ${{ steps.base.outputs.ref }}
+      run: pnpm run "$GAPS_ACTION" --base "$BASE_REF"
+
+    - name: Check translation drift
+      id: drift
+      if: >-
+        ${{ !cancelled() && steps.labels.outcome == 'success' && steps.base.outcome == 'success' &&
+        !contains(fromJSON(steps.labels.outputs.names), 'allow-translation-drift') }}
+      shell: bash
+      env:
+        DRIFT_ACTION: ${{ inputs.drift_action }}
+        BASE_REF: ${{ steps.base.outputs.ref }}
+      run: pnpm run "$DRIFT_ACTION" --base "$BASE_REF"

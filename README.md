@@ -76,6 +76,7 @@ SemVer release.
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                               |
 | `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
+| `approve-translations`   | Revoke translation approval labels after a catalog change and rerun the translation check on label changes.       |
 | `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
 | `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
 | `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
@@ -126,14 +127,15 @@ the configured path; the `append-only-override` PR label is the reviewed escape 
 
 ### `node-actions`
 
-| Action            | Purpose                                                                                                     |
-| ----------------- | ----------------------------------------------------------------------------------------------------------- |
-| `audit`           | Run `pnpm audit --fix` and commit the fixes.                                                                |
-| `build-node`      | Run the package's build script (default `build`).                                                           |
-| `lint-node`       | Run the package's lint script (default `lint`).                                                             |
-| `setup-node`      | Set up Node + pnpm (GitHub registry) and install.                                                           |
-| `test-node`       | Run the package's tests and upload coverage.                                                                |
-| `test-playwright` | Run browser component and Playwright tests with coverage and optional private Drive screenshot comparisons. |
+| Action              | Purpose                                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `audit`             | Run `pnpm audit --fix` and commit the fixes.                                                                |
+| `build-node`        | Run the package's build script (default `build`).                                                           |
+| `lint-node`         | Run the package's lint script (default `lint`).                                                             |
+| `lint-translations` | Check catalog structure, and the translation gaps and drift a branch introduces, with label approvals.      |
+| `setup-node`        | Set up Node + pnpm (GitHub registry) and install.                                                           |
+| `test-node`         | Run the package's tests and upload coverage.                                                                |
+| `test-playwright`   | Run browser component and Playwright tests with coverage and optional private Drive screenshot comparisons. |
 
 `test-playwright` runs on an Ubuntu host with Docker Compose available. Its default scripts are
 `test:browser` and `test:e2e`; the latter owns application and service startup. The action uploads
@@ -164,6 +166,13 @@ Use `generic-actions/approve-playwright` for exact-head label approval and
 Pass `compose_file` for disposable integration services and set a unique `COMPOSE_PROJECT_NAME` in
 the calling job. The action preserves logs already collected by the runner and always removes that
 Compose project's services and volumes. See the [adoption guide](./docs/migrations/v1.32.0.md).
+
+`lint-translations` runs a platform's `i18n:structure`, `i18n:gaps` and `i18n:drift` scripts, the
+last two against the merge base with the default branch. The `allow-incomplete-translations` and
+`allow-translation-drift` labels accept gaps and drift; a merge group checks structure only. Skip the
+job on the default branch. A trusted `pull_request_target` caller runs
+`generic-actions/approve-translations`, which reruns the check when a label changes and removes both
+labels when a push changes a catalog. See the [adoption guide](./docs/migrations/v1.39.0.md).
 
 ### `security-actions`
 
