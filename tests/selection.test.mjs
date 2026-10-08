@@ -148,4 +148,6 @@ test("admin approval requires the current actor's rights and stays in the checke
   assert.equal(token.with["permission-pull-requests"], "write");
   const approve = manifest("generic-actions/approve-bot/action.yaml").runs.steps[0];
   assert.equal(approve.env.GH_TOKEN, "${{ inputs.github_token }}");
+  // A bare PR number resolves only through GH_REPO: the job has no checkout.
+  assert.equal(approve.env.GH_REPO, "${{ github.repository }}");
 });

@@ -4,7 +4,7 @@ description: Records a pull request approval on every invocation. Only enable th
 inputs:
   pull_request:
     required: true
-    description: The URL of the pull request to be approved.
+    description: URL or number of the pull request to approve. A number refers to the calling repository.
   github_token:
     required: true
     description: The GitHub token to use for the action.
@@ -18,3 +18,5 @@ runs:
       env:
         PR_URL: ${{ inputs.pull_request }}
         GH_TOKEN: ${{ inputs.github_token }}
+        # Without a checkout, gh resolves a bare PR number only through GH_REPO.
+        GH_REPO: ${{ github.repository }}
