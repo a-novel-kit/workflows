@@ -61,16 +61,15 @@ inputs:
       not compile (e.g. a stock-base database image), where caching the large
       base to GHA is pure overhead and can make the build slower than cold.
     default: "true"
-  reproducible_paths:
+  reproducible:
     required: false
-    default: ""
+    default: "false"
     description: >
-      Space-separated git pathspecs covering every input of the image, such as
-      "builds/database.*". When set, the pushed image is reproducible: it is dated by
-      the last commit touching those paths, its file times are rewritten to that date,
-      and it carries no build-time metadata (created, version and revision labels, or
-      inline provenance). A release with unchanged inputs then pushes the same digest
-      under its new tags. The attestation is unchanged.
+      When "true", the pushed image is reproducible: its file times and metadata are set to
+      the Unix epoch, and it carries no build-time metadata (created, version and revision
+      labels, or inline provenance). Its digest then depends only on its content, so a
+      release that changes nothing in the image pushes the same digest under its new tags.
+      The attestation is unchanged.
 
 outputs:
   digest:
@@ -86,25 +85,11 @@ runs:
     - uses: actions/checkout@v7
       with:
         persist-credentials: false
-        # Dating a reproducible image needs the history of its inputs.
-        fetch-depth: ${{ inputs.reproducible_paths != '' && '0' || '1' }}
-    # A reproducible image is dated by its inputs, not by the release, so unchanged
-    # inputs keep one digest.
-    - id: epoch
-      if: ${{ inputs.reproducible_paths != '' }}
+    # A fixed epoch keeps the digest a function of the image's content alone: a commit date
+    # would change it whenever a build file changes, even when the image doesn't.
+    - if: ${{ inputs.reproducible == 'true' }}
       shell: bash
-      env:
-        PATHS: ${{ inputs.reproducible_paths }}
-      run: |
-        set -euo pipefail
-        set -f
-        # shellcheck disable=SC2086 # the pathspecs are space-separated on purpose
-        epoch="$(git log -1 --format=%ct -- $PATHS)"
-        if [ -z "$epoch" ]; then
-          echo "::error::No commit touches the reproducible paths: $PATHS"
-          exit 1
-        fi
-        echo "SOURCE_DATE_EPOCH=$epoch" >>"$GITHUB_ENV"
+      run: echo "SOURCE_DATE_EPOCH=0" >>"$GITHUB_ENV"
     # Derive vX.Y and vX from an explicit version. The dispatched release passes one
     # because the workflow runs on the default branch, where the ref is not a tag.
     - id: ver
@@ -140,7 +125,7 @@ runs:
       shell: bash
       env:
         LABELS: ${{ steps.meta.outputs.labels }}
-        REPRODUCIBLE: ${{ inputs.reproducible_paths != '' }}
+        REPRODUCIBLE: ${{ inputs.reproducible == 'true' }}
       run: |
         set -euo pipefail
         {
@@ -203,11 +188,11 @@ runs:
         # Restore only: the push build shares this job's warm buildx cache from the
         # load build above, so it re-tags and pushes the already-built layers.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
-        push: ${{ inputs.reproducible_paths == '' }}
+        push: ${{ inputs.reproducible != 'true' }}
         # A reproducible push rewrites file times to SOURCE_DATE_EPOCH, and skips inline
         # provenance, which records the build time; the attestation below covers it.
-        outputs: ${{ inputs.reproducible_paths != '' && 'type=registry,rewrite-timestamp=true' || '' }}
-        provenance: ${{ inputs.reproducible_paths != '' && 'false' || '' }}
+        outputs: ${{ inputs.reproducible == 'true' && 'type=registry,rewrite-timestamp=true' || '' }}
+        provenance: ${{ inputs.reproducible == 'true' && 'false' || '' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.labels.outputs.labels }}
         file: ${{ inputs.file }}

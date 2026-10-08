@@ -123,36 +123,23 @@ test("Docker provenance uses the published digest and security tools require cal
   }
 });
 
-test("a reproducible docker build is dated by its inputs and drops build-time metadata", (t) => {
-  const push = manifest("build-actions/docker/action.yaml").runs.steps.find((s) => s.id === "build");
-  assert.equal(push.with.push, "${{ inputs.reproducible_paths == '' }}");
+test("a reproducible docker build is content-addressed and drops build-time metadata", (t) => {
+  const steps = manifest("build-actions/docker/action.yaml").runs.steps;
+  const push = steps.find((s) => s.id === "build");
+  assert.equal(push.with.push, "${{ inputs.reproducible != 'true' }}");
   assert.equal(
     push.with.outputs,
-    "${{ inputs.reproducible_paths != '' && 'type=registry,rewrite-timestamp=true' || '' }}"
+    "${{ inputs.reproducible == 'true' && 'type=registry,rewrite-timestamp=true' || '' }}"
   );
-  assert.equal(push.with.provenance, "${{ inputs.reproducible_paths != '' && 'false' || '' }}");
+  assert.equal(push.with.provenance, "${{ inputs.reproducible == 'true' && 'false' || '' }}");
   assert.equal(push.with.labels, "${{ steps.labels.outputs.labels }}");
+  // A fixed epoch: a commit date would move the digest with every build-file change.
+  const epoch = steps.find((s) => s.run?.includes("SOURCE_DATE_EPOCH"));
+  assert.equal(epoch.if, "${{ inputs.reproducible == 'true' }}");
+  assert.equal(epoch.run.trim(), 'echo "SOURCE_DATE_EPOCH=0" >>"$GITHUB_ENV"');
+  assert(steps.indexOf(epoch) < steps.indexOf(push));
 
-  // The image input changes at 1000, an unrelated file later at 2000.
   const w = workspace(t);
-  const commit = (path, date) => {
-    w.write(path, `${date}\n`);
-    succeeds(w.run("git", ["add", path]));
-    succeeds(
-      w.run("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", path], {
-        GIT_AUTHOR_DATE: `@${date} +0000`,
-        GIT_COMMITTER_DATE: `@${date} +0000`,
-      })
-    );
-  };
-  succeeds(w.run("git", ["init", "-q"]));
-  commit("builds/database.sql", 1000);
-  commit("cmd/main.go", 2000);
-  const epoch = step("build-actions/docker/action.yaml", "epoch");
-  succeeds(w.bash(epoch, { PATHS: "builds/database.* builds/missing.yaml" }));
-  assert.equal(w.read("env"), "SOURCE_DATE_EPOCH=1000\n");
-  assert.equal(w.bash(epoch, { PATHS: "missing/*" }).status, 1);
-
   const labels = step("build-actions/docker/action.yaml", "labels");
   const all = [
     "org.opencontainers.image.created=2026-10-08T00:00:00Z",
