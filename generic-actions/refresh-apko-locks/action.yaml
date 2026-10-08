@@ -1,0 +1,116 @@
+name: refresh apko locks
+description: >
+  Re-resolve apko lock files and open or update one pull request with the changes, as the bot.
+  A lock pins every package its config resolves to, so builds stay reproducible; this is how the
+  pins move forward. Run it on a schedule.
+
+inputs:
+  app_private_key:
+    required: true
+    description: Private key of the GitHub App that pushes the branch and opens the pull request.
+  client_id:
+    required: true
+    description: Client ID of that App.
+  configs:
+    required: true
+    description: >
+      Space-separated apko configs. Each lock sits beside its config, named
+      <config without .yaml>.lock.json.
+  version:
+    required: true
+    description: >
+      The apko release that resolves the locks, such as "1.4.8". Pin it with a
+      "# renovate: datasource=github-tags depName=chainguard-dev/apko" comment so it moves with the
+      apko the builds use.
+  arch:
+    required: false
+    default: x86_64
+    description: Architecture the locks resolve for.
+  branch:
+    required: false
+    default: chore/deps/apko-locks
+    description: Branch that carries the refresh. Each run replaces its content.
+
+runs:
+  using: composite
+  steps:
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.41.0
+      id: bot
+      with:
+        app_private_key: ${{ inputs.app_private_key }}
+        client_id: ${{ inputs.client_id }}
+
+    - name: Install apko
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.bot.outputs.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        cd "$RUNNER_TEMP"
+        gh release download "v$VERSION" --repo chainguard-dev/apko --clobber \
+          --pattern "apko_${VERSION}_linux_amd64.tar.gz" --pattern checksums.txt
+        grep " apko_${VERSION}_linux_amd64.tar.gz\$" checksums.txt | sha256sum -c -
+        tar -xzf "apko_${VERSION}_linux_amd64.tar.gz" --strip-components=1 "apko_${VERSION}_linux_amd64/apko"
+        echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
+
+    - name: Refresh the locks
+      id: refresh
+      shell: bash
+      env:
+        CONFIGS: ${{ inputs.configs }}
+        ARCH: ${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        # Lists the package changes between two locks, one "name: old → new" line each.
+        changes() {
+          jq -rn --slurpfile old "$1" --slurpfile new "$2" '
+            def pins($lock): [$lock[0].contents.packages[]? | {(.name): .version}] | add // {};
+            pins($old) as $o | pins($new) as $n
+            | ($o + $n | keys[]) as $name
+            | select($o[$name] != $n[$name])
+            | "- `\($name)`: \($o[$name] // "added") → \($n[$name] // "removed")"'
+        }
+        summary=""
+        for config in $CONFIGS; do
+          lock="${config%.yaml}.lock.json"
+          old="$(mktemp)"
+          git show "HEAD:$lock" >"$old" 2>/dev/null || echo '{}' >"$old"
+          apko lock "$config" --arch "$ARCH" --output "$lock"
+          lines="$(changes "$old" "$lock")"
+          [ -z "$lines" ] || summary+=$'\n'"**\`$lock\`**"$'\n\n'"$lines"$'\n'
+        done
+        # No output at all when nothing moved, so the pull request step stays skipped.
+        if [ -n "$summary" ]; then
+          {
+            echo 'summary<<SUMMARY_END'
+            echo "$summary"
+            echo SUMMARY_END
+          } >>"$GITHUB_OUTPUT"
+        fi
+
+    - name: Open or update the pull request
+      if: ${{ steps.refresh.outputs.summary != '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.bot.outputs.token }}
+        APP_LOGIN: ${{ steps.bot.outputs.app_login }}
+        BRANCH: ${{ inputs.branch }}
+        CONFIGS: ${{ inputs.configs }}
+        SUMMARY: ${{ steps.refresh.outputs.summary }}
+      run: |
+        set -euo pipefail
+        user_id="$(gh api "/users/$APP_LOGIN" --jq .id)"
+        git config url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf https://github.com/
+        git config user.name "$APP_LOGIN"
+        git config user.email "${user_id}+${APP_LOGIN}@users.noreply.github.com"
+        git switch -c "$BRANCH"
+        for config in $CONFIGS; do git add "${config%.yaml}.lock.json"; done
+        git commit -m "chore(deps): refresh apko locks"
+        git push --force origin "$BRANCH"
+        body="$(printf 'Re-resolves the apko locks. Every change below changes the images built from them.\n%s' "$SUMMARY")"
+        if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+          gh pr edit "$BRANCH" --body "$body"
+        else
+          gh pr create --head "$BRANCH" --title "chore(deps): refresh apko locks" --body "$body"
+        fi
