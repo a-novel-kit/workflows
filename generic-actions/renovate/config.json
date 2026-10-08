@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "globalExtends": ["github>a-novel-kit/workflows//renovate/base#v1.41.0"],
+  "globalExtends": ["github>a-novel-kit/workflows//renovate/base#v1.42.0"],
   "skipInstalls": false,
   "allowedCommands": ["^pnpm (install|i|format|dedupe)( |$)"],
   "customEnvVariables": {
