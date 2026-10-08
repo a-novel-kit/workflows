@@ -172,7 +172,7 @@ last two against the merge base with the default branch. The `allow-incomplete-t
 `allow-translation-drift` labels accept gaps and drift; a merge group checks structure only. Skip the
 job on the default branch. A trusted `pull_request_target` caller runs
 `generic-actions/approve-translations`, which reruns the check when a label changes and removes both
-labels when a push changes a catalog. See the [adoption guide](./docs/migrations/v1.39.0.md).
+labels when a push changes a catalog. See the [adoption guide](./docs/migrations/v1.40.0.md).
 
 ### `security-actions`
 
