@@ -61,6 +61,16 @@ inputs:
       not compile (e.g. a stock-base database image), where caching the large
       base to GHA is pure overhead and can make the build slower than cold.
     default: "true"
+  reproducible_paths:
+    required: false
+    default: ""
+    description: >
+      Space-separated git pathspecs covering every input of the image, such as
+      "builds/database.*". When set, the pushed image is reproducible: it is dated by
+      the last commit touching those paths, its file times are rewritten to that date,
+      and it carries no build-time metadata (created, version and revision labels, or
+      inline provenance). A release with unchanged inputs then pushes the same digest
+      under its new tags. The attestation is unchanged.
 
 outputs:
   digest:
@@ -76,6 +86,25 @@ runs:
     - uses: actions/checkout@v7
       with:
         persist-credentials: false
+        # Dating a reproducible image needs the history of its inputs.
+        fetch-depth: ${{ inputs.reproducible_paths != '' && '0' || '1' }}
+    # A reproducible image is dated by its inputs, not by the release, so unchanged
+    # inputs keep one digest.
+    - id: epoch
+      if: ${{ inputs.reproducible_paths != '' }}
+      shell: bash
+      env:
+        PATHS: ${{ inputs.reproducible_paths }}
+      run: |
+        set -euo pipefail
+        set -f
+        # shellcheck disable=SC2086 # the pathspecs are space-separated on purpose
+        epoch="$(git log -1 --format=%ct -- $PATHS)"
+        if [ -z "$epoch" ]; then
+          echo "::error::No commit touches the reproducible paths: $PATHS"
+          exit 1
+        fi
+        echo "SOURCE_DATE_EPOCH=$epoch" >>"$GITHUB_ENV"
     # Derive vX.Y and vX from an explicit version. The dispatched release passes one
     # because the workflow runs on the default branch, where the ref is not a tag.
     - id: ver
@@ -106,6 +135,23 @@ runs:
           type=raw,value=v${{ steps.ver.outputs.major }},enable=${{ inputs.version != '' }}
           type=raw,value=latest,enable=${{ inputs.version != '' }}
         flavor: latest=auto
+    # These labels change on every release, so a reproducible image leaves them out.
+    - id: labels
+      shell: bash
+      env:
+        LABELS: ${{ steps.meta.outputs.labels }}
+        REPRODUCIBLE: ${{ inputs.reproducible_paths != '' }}
+      run: |
+        set -euo pipefail
+        {
+          echo 'labels<<LABELS_END'
+          if [ "$REPRODUCIBLE" = true ]; then
+            grep -v -E '^org\.opencontainers\.image\.(created|version|revision)=' <<<"$LABELS" || true
+          else
+            echo "$LABELS"
+          fi
+          echo LABELS_END
+        } >>"$GITHUB_OUTPUT"
     - uses: docker/login-action@v4
       with:
         registry: ghcr.io
@@ -157,9 +203,13 @@ runs:
         # Restore only: the push build shares this job's warm buildx cache from the
         # load build above, so it re-tags and pushes the already-built layers.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
-        push: true
+        push: ${{ inputs.reproducible_paths == '' }}
+        # A reproducible push rewrites file times to SOURCE_DATE_EPOCH, and skips inline
+        # provenance, which records the build time; the attestation below covers it.
+        outputs: ${{ inputs.reproducible_paths != '' && 'type=registry,rewrite-timestamp=true' || '' }}
+        provenance: ${{ inputs.reproducible_paths != '' && 'false' || '' }}
         tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        labels: ${{ steps.labels.outputs.labels }}
         file: ${{ inputs.file }}
         secret-envs: ${{ inputs.secret-envs }}
         secret-files: ${{ inputs.secret-files }}
