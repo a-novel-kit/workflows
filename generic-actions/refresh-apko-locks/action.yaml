@@ -16,9 +16,12 @@ inputs:
     description: >
       Space-separated apko configs. Each lock sits beside its config, named
       <config without .yaml>.lock.json.
-  apko_version:
+  version:
     required: true
-    description: The apko release that resolves the locks, such as "1.4.8". Match the version the builds use.
+    description: >
+      The apko release that resolves the locks, such as "1.4.8". Pin it with a
+      "# renovate: datasource=github-tags depName=chainguard-dev/apko" comment so it moves with the
+      apko the builds use.
   arch:
     required: false
     default: x86_64
@@ -41,7 +44,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.bot.outputs.token }}
-        VERSION: ${{ inputs.apko_version }}
+        VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
         cd "$RUNNER_TEMP"

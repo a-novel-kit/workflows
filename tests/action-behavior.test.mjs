@@ -243,8 +243,8 @@ test("change detection preserves literal pathspecs and fails on unreadable repos
 
 test("refresh-apko-locks summarizes each lock's package changes and stays quiet without any", (t) => {
   const action = manifest("generic-actions/refresh-apko-locks/action.yaml");
-  assert.equal(action.inputs.apko_version.required, true);
-  assert.equal(action.inputs.apko_version.default, undefined);
+  assert.equal(action.inputs.version.required, true);
+  assert.equal(action.inputs.version.default, undefined);
   const publish = action.runs.steps.find((s) => s.name === "Open or update the pull request");
   assert.equal(publish.if, "${{ steps.refresh.outputs.summary != '' }}");
 
