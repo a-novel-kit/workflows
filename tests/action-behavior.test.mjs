@@ -240,3 +240,40 @@ test("change detection preserves literal pathspecs and fails on unreadable repos
   );
   assert.equal(existsSync(join(w.cwd, "injected")), false);
 });
+
+test("refresh-apko-locks summarizes each lock's package changes and stays quiet without any", (t) => {
+  const action = manifest("generic-actions/refresh-apko-locks/action.yaml");
+  assert.equal(action.inputs.apko_version.required, true);
+  assert.equal(action.inputs.apko_version.default, undefined);
+  const publish = action.runs.steps.find((s) => s.name === "Open or update the pull request");
+  assert.equal(publish.if, "${{ steps.refresh.outputs.summary != '' }}");
+
+  const lock = (packages) =>
+    JSON.stringify({ contents: { packages: Object.entries(packages).map(([name, version]) => ({ name, version })) } });
+  const w = workspace(t);
+  // The stub writes NEW_LOCK where apko lock would write the lock.
+  w.stub(
+    "apko",
+    "const args = process.argv; require('fs').writeFileSync(args[args.indexOf('--output') + 1], process.env.NEW_LOCK);"
+  );
+  w.write("builds/db.apko.yaml", "contents: {}\n");
+  w.write("builds/db.apko.lock.json", lock({ busybox: "1.0-r0", openssl: "3.0-r0", zlib: "1.2-r0" }));
+  succeeds(w.run("git", ["init", "-q"]));
+  succeeds(w.run("git", ["add", "."]));
+  succeeds(w.run("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "locks"]));
+
+  const refresh = step("generic-actions/refresh-apko-locks/action.yaml", "refresh");
+  for (const [name, newLock, expected] of [
+    [
+      "changed",
+      lock({ busybox: "1.0-r0", openssl: "3.1-r0", libfoo: "2.0-r0" }),
+      "\n**`builds/db.apko.lock.json`**\n\n" +
+        "- `libfoo`: added → 2.0-r0\n- `openssl`: 3.0-r0 → 3.1-r0\n- `zlib`: 1.2-r0 → removed\n",
+    ],
+    ["unchanged", lock({ busybox: "1.0-r0", openssl: "3.0-r0", zlib: "1.2-r0" }), ""],
+  ]) {
+    w.write("output", "");
+    succeeds(w.bash(refresh, { CONFIGS: "builds/db.apko.yaml", ARCH: "x86_64", NEW_LOCK: newLock }));
+    assert.equal(w.read("output"), expected && `summary<<SUMMARY_END\n${expected}\nSUMMARY_END\n`, name);
+  }
+});

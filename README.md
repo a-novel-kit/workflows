@@ -94,6 +94,7 @@ SemVer release.
 | `lint-shell`             | Run shellcheck over the repo's tracked shell scripts (advisory or gating; a no-shell repo passes).                |
 | `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                              |
 | `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
+| `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.              |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
 | `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
 
