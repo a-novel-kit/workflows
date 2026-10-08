@@ -20,7 +20,7 @@
     {
       "customType": "regex",
       "managerFilePatterns": ["/^builds\\/database\\.apko\\.yaml$/"],
-      "matchStrings": ["- (?<depName>[a-z0-9-]+)=(?<currentValue>[^\\s]+)"],
+      "matchStrings": ["- (?<depName>[a-z0-9._+-]+)=(?<currentValue>[^\\s]+)"],
       "datasourceTemplate": "apk"
     },
     {
