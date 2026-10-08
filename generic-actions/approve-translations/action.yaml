@@ -1,0 +1,85 @@
+name: approve translations
+description: >
+  Keep the translation approval labels honest from a trusted pull_request_target caller: remove
+  allow-incomplete-translations and allow-translation-drift when a push changes a catalog, and rerun
+  the head's translation check when either label changes or was removed. It never checks out PR code.
+inputs:
+  github_token:
+    required: true
+    description: Token with actions write, contents read and pull requests write; use only from trusted pull_request_target code.
+  catalogs:
+    required: false
+    default: src/lib/i18n/locales/
+    description: Path prefix of the catalog files; a push touching it revokes both labels.
+  workflow:
+    required: false
+    default: main.yaml
+    description: Workflow file whose run holds the translation check.
+  job:
+    required: false
+    default: lint-translations
+    description: Name of the translation check job to rerun.
+runs:
+  using: composite
+  steps:
+    - name: Revoke approvals after a catalog change
+      id: revoke
+      if: ${{ github.event.action == 'synchronize' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PR: ${{ github.event.pull_request.number }}
+        BEFORE: ${{ github.event.before }}
+        AFTER: ${{ github.event.after }}
+        LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        CATALOGS: ${{ inputs.catalogs }}
+      run: |
+        set -euo pipefail
+        held=$(jq -r '.[] | select(. == "allow-incomplete-translations" or . == "allow-translation-drift")' <<<"$LABELS")
+        [ -n "$held" ] || exit 0
+        # A compare that fails, as after a force-push drops the old head, revokes.
+        if changed=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" --jq '.files[].filename'); then
+          touched=false
+          while IFS= read -r file; do
+            if [[ $file == "$CATALOGS"* ]]; then touched=true; fi
+          done <<<"$changed"
+          [ "$touched" = true ] || exit 0
+        fi
+        while IFS= read -r label; do
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label "$label"
+        done <<<"$held"
+        echo "revoked=true" >> "$GITHUB_OUTPUT"
+
+    - name: Rerun the translation check
+      id: rerun
+      if: >-
+        ${{ steps.revoke.outputs.revoked == 'true' || (github.event.action != 'synchronize' &&
+        contains(fromJSON('["allow-incomplete-translations","allow-translation-drift"]'), github.event.label.name)) }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        WORKFLOW: ${{ inputs.workflow }}
+        JOB: ${{ inputs.job }}
+      run: |
+        set -euo pipefail
+        # A job reruns only once its whole run has completed.
+        status=missing
+        for _ in $(seq 1 80); do
+          run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WORKFLOW" --commit "$HEAD_SHA" --event push \
+            --limit 1 --json databaseId,status --jq '.[0] // empty')
+          status=$(jq -r '.status // "missing"' <<<"${run:-null}")
+          if [ "$status" = completed ]; then break; fi
+          sleep 20
+        done
+        if [ "$status" != completed ]; then
+          echo "::error::No completed $WORKFLOW run for $HEAD_SHA (last status: $status)."
+          exit 1
+        fi
+        job=$(gh run view "$(jq -r .databaseId <<<"$run")" --repo "$GITHUB_REPOSITORY" --json jobs \
+          --jq '.jobs[] | select(.name == env.JOB) | .databaseId')
+        if [ -z "$job" ]; then
+          echo "::error::No $JOB job in $WORKFLOW for $HEAD_SHA."
+          exit 1
+        fi
+        gh run rerun --repo "$GITHUB_REPOSITORY" --job "$job"
