@@ -13,10 +13,11 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Versions pinned in workflow with: blocks, annotated with a renovate datasource comment.",
+      "description": "Versions pinned in workflow with: blocks, and container image tags that follow another package's releases, annotated with a renovate datasource comment.",
       "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+version:\\s*[\"']?(?<currentValue>[^\"'\\s]+)"
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+version:\\s*[\"']?(?<currentValue>[^\"'\\s]+)",
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+image:\\s*[^\\s:]+:v(?<currentValue>[^\\s\"'-]+)"
       ],
       "extractVersionTemplate": "^v?(?<version>.+)$"
     },
@@ -68,8 +69,8 @@
       "minimumReleaseAge": "1 hour"
     },
     {
-      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to the npm manager (which is what Renovate uses for pnpm: pnpm-lock.yaml, workspaces, catalogs) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
-      "matchManagers": ["npm"],
+      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to npm registry releases (what pnpm installs from pnpm-lock.yaml, workspaces and catalogs, plus workflow pins annotated with datasource=npm) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install, and an annotated pin moves with its package. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
+      "matchDatasources": ["npm"],
       "minimumReleaseAge": "3 days"
     },
     {
@@ -152,10 +153,16 @@
       "automerge": false
     },
     {
-      "description": "Keep Playwright packages and CI container images on the same runtime version. The image sorts first and lends the branch its artifact config, so the group carries npm's dedupe.",
-      "matchPackageNames": ["playwright", "/^@playwright\\//", "mcr.microsoft.com/playwright"],
+      "description": "Keep Playwright packages and CI container images on the same runtime version. Workflows annotate the image with `# renovate: datasource=npm depName=playwright`, so its tag follows npm releases through the same age gate. That pin may lend the branch its artifact config, so the group carries npm's dedupe.",
+      "matchPackageNames": ["playwright", "/^@playwright\\//"],
       "groupName": "playwright runtime",
       "postUpdateOptions": ["pnpmDedupe"]
+    },
+    {
+      "description": "Leave the Playwright image tag to its annotated npm pin. MCR publishes no release timestamps, so a docker lookup skips the age gate and bumps the image days before the package it must match.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["mcr.microsoft.com/playwright"],
+      "enabled": false
     },
     {
       "description": "Keep the Vitest core and scoped packages on one runnable version.",
