@@ -135,6 +135,8 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
   // Type-checking tools need an x/tools that reads the toolchain's export data, yet it is `// indirect`.
   const xtools = goTools.packageRules.find((r) => r.matchDepNames?.includes("golang.org/x/tools"));
   assert.equal(xtools.enabled, true);
+  // Security PRs must re-enable what other rules disable, such as `// indirect` requires.
+  assert.deepEqual([base.osvVulnerabilityAlerts, base.vulnerabilityAlerts.enabled], [true, true]);
   for (const file of ["golangci-lint.mod", "mockery.mod"]) assert(matches(xtools.matchFileNames, file), file);
   const postgres = database.packageRules[0].matchPackageNames;
   for (const [name, expected] of [
