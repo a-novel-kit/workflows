@@ -34,7 +34,20 @@ Each service's Go module, npm client and images update in one PR, because a modu
 its matching images. Renovate runs every artifact update in a grouped branch with the configuration
 of its first upgrade by name, usually an image, so these groups carry both `go mod tidy` and
 `pnpm dedupe` for their members. The same applies to the golang image in the `go toolchain` group
-and the Playwright image in `playwright runtime`.
+and the Playwright image pin in `playwright runtime`.
+
+A workflow that runs in the Playwright container annotates the image, so its tag follows npm's
+`playwright` releases:
+
+```yaml
+container:
+  # renovate: datasource=npm depName=playwright
+  image: mcr.microsoft.com/playwright:v1.63.0-noble
+```
+
+The registry publishes no release dates, so the preset disables Renovate's docker lookup for this
+image, and an unannotated tag never updates. An annotated tag clears the same npm release-age gate
+as the package and lands in the same commit.
 
 For npm lockfiles, the package manager performs the refresh. Enforce transitive-package
 release cooldowns in the package manager (for example, pnpm's `minimumReleaseAge`);
