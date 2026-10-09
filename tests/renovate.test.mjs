@@ -24,6 +24,13 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
     ),
     [{ datasource: "github-releases", depName: "koalaman/shellcheck", currentValue: "0.11.0" }]
   );
+  assert.deepEqual(
+    extract(
+      workflow,
+      "container:\n  # renovate: datasource=npm depName=playwright\n  image: mcr.microsoft.com/playwright:v1.63.0-noble"
+    ).map(({ datasource, depName, currentValue }) => ({ datasource, depName, currentValue })),
+    [{ datasource: "npm", depName: "playwright", currentValue: "1.63.0" }]
+  );
   const images = base.customManagers.find((m) => m.description.includes("composite-action input defaults"));
   assert(matches(images.managerFilePatterns, ".github/actions/start-ci-services/action.yml"));
   assert.deepEqual(
@@ -75,11 +82,7 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
   const catchAll = base.packageRules.indexOf(rule("javascript dependencies"));
   for (const [group, yes, no] of [
     ["a-novel-kit uikit", ["@a-novel-kit/uikit", "@a-novel-kit/uikit-icons"], ["@other/uikit"]],
-    [
-      "playwright runtime",
-      ["playwright", "@playwright/test", "mcr.microsoft.com/playwright"],
-      ["@vitest/browser-playwright"],
-    ],
+    ["playwright runtime", ["playwright", "@playwright/test"], ["@vitest/browser-playwright"]],
     ["vitest monorepo", ["vitest", "@vitest/browser-playwright"], ["playwright"]],
     ["svelte vite toolchain", ["vite", "@sveltejs/vite-plugin-svelte"], ["svelte"]],
     ...["json-keys", "authentication", "narrative-engine", "genai"].map((service) => [
@@ -108,6 +111,10 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
   for (const name of ["github.com/uptrace/bun", "github.com/uptrace/bun/dialect/pgdialect"])
     assert(matches(rule("uptrace/bun").matchPackageNames, name), name);
   assert.equal(rule("uptrace/bun").enabled, true);
+  // MCR has no release timestamps: the image tag follows its annotated npm pin through the npm age gate.
+  const image = base.packageRules.find((r) => r.matchPackageNames?.includes("mcr.microsoft.com/playwright"));
+  assert.deepEqual([image.matchDatasources, image.enabled], [["docker"], false]);
+  assert.deepEqual(base.packageRules.find((r) => r.minimumReleaseAge === "3 days").matchDatasources, ["npm"]);
 });
 
 test("Renovate discovers tool modules and compose files while excluding unrelated formats", () => {
@@ -125,6 +132,10 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
   for (const file of ["go.mod", "cli/go.mod"]) assert(matches(go.matchFileNames, file));
   for (const file of ["buf.mod", "golangci-lint.mod", "gotestsum.mod", "mockery.mod"])
     assert(!matches(go.matchFileNames, file));
+  // Type-checking tools need an x/tools that reads the toolchain's export data, yet it is `// indirect`.
+  const xtools = goTools.packageRules.find((r) => r.matchDepNames?.includes("golang.org/x/tools"));
+  assert.equal(xtools.enabled, true);
+  for (const file of ["golangci-lint.mod", "mockery.mod"]) assert(matches(xtools.matchFileNames, file), file);
   const postgres = database.packageRules[0].matchPackageNames;
   for (const [name, expected] of [
     ["postgresql-18", true],

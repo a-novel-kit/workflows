@@ -29,6 +29,12 @@
     {
       "matchFileNames": ["go.mod"],
       "postUpdateOptions": ["gomodTidy"]
+    },
+    {
+      "description": "Keep x/tools current for tools that type-check: they read the compiler's export data through it, and a Go patch can raise that format (Go 1.27.2 writes v5, which x/tools before v0.50.0 rejects). Renovate disables the `// indirect` require unless a rule enables it.",
+      "matchFileNames": ["golangci-lint.mod", "mockery.mod"],
+      "matchDepNames": ["golang.org/x/tools"],
+      "enabled": true
     }
   ]
 }
