@@ -29,7 +29,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.42.0
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.42.1
       id: setup
       with:
         client_id: ${{ inputs.client_id }}
