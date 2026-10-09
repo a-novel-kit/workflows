@@ -81,7 +81,7 @@ runs:
         repositories: ${{ github.event.repository.name }}
         permission-pull-requests: write
 
-    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.42.1
+    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.42.2
       with:
         pull_request: ${{ inputs.pull_request }}
         github_token: ${{ steps.token.outputs.token }}
