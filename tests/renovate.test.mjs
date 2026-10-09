@@ -125,6 +125,10 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
   for (const file of ["go.mod", "cli/go.mod"]) assert(matches(go.matchFileNames, file));
   for (const file of ["buf.mod", "golangci-lint.mod", "gotestsum.mod", "mockery.mod"])
     assert(!matches(go.matchFileNames, file));
+  // Type-checking tools need an x/tools that reads the toolchain's export data, yet it is `// indirect`.
+  const xtools = goTools.packageRules.find((r) => r.matchDepNames?.includes("golang.org/x/tools"));
+  assert.equal(xtools.enabled, true);
+  for (const file of ["golangci-lint.mod", "mockery.mod"]) assert(matches(xtools.matchFileNames, file), file);
   const postgres = database.packageRules[0].matchPackageNames;
   for (const [name, expected] of [
     ["postgresql-18", true],
