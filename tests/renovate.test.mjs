@@ -115,6 +115,25 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
   const image = base.packageRules.find((r) => r.matchPackageNames?.includes("mcr.microsoft.com/playwright"));
   assert.deepEqual([image.matchDatasources, image.enabled], [["docker"], false]);
   assert.deepEqual(base.packageRules.find((r) => r.minimumReleaseAge === "3 days").matchDatasources, ["npm"]);
+  // First-party releases skip the age gates, so the exemption follows every gate and names each form.
+  const exempt = base.packageRules.findIndex((r) => r.minimumReleaseAge === null);
+  assert(exempt > base.packageRules.findLastIndex((r) => typeof r.minimumReleaseAge === "string"));
+  for (const name of [
+    "a-novel-kit/workflows",
+    "@a-novel-kit/nodelib-config",
+    "@a-novel/service-authentication-rest",
+    "github.com/a-novel-kit/golib",
+    "github.com/a-novel/service-json-keys",
+    "ghcr.io/a-novel/service-json-keys/standalone",
+  ])
+    assert(matches(base.packageRules[exempt].matchPackageNames, name), name);
+  for (const name of [
+    "a-novel-kitchen/x",
+    "@a-novelist/x",
+    "github.com/someone/a-novel-kit",
+    "evil/a-novel-kit/workflows",
+  ])
+    assert(!matches(base.packageRules[exempt].matchPackageNames, name), name);
 });
 
 test("Renovate discovers tool modules and compose files while excluding unrelated formats", () => {
