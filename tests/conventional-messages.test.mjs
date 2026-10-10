@@ -30,6 +30,7 @@ test("automation writes Conventional commit subjects and pull request titles", (
     for (const [, title] of source.matchAll(prTitles)) found.push({ path, kind: "PR title", subject: title });
   }
   assert(found.length >= 8, `expected the known writers, found ${found.length}`);
-  const offenders = found.filter(({ subject }) => !conventional.test(subject));
+  // A backport title reuses its fix's subject, which reached the default branch through this rule.
+  const offenders = found.filter(({ subject }) => !conventional.test(subject.replace(/^\$subject\b/, "fix: reused")));
   assert.deepEqual(offenders, [], "non-Conventional automation subjects");
 });
