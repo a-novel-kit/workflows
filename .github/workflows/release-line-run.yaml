@@ -1,19 +1,26 @@
 name: release line (reusable)
 
 # The reusable release-line cut (workflow_call). Every governed repo's thin `hotfix.yaml` caller runs
-# it on a push to `release/**`, which a merged backport produces. It cuts the line's next patch from
-# the branch head behind the protected `release` environment, the human "who may publish" gate, and
+# it when a backport pull request merges into `release/**`. It cuts the line's next patch from the
+# branch head behind the protected `release` environment, the human "who may publish" gate, and
 # pushes the bump commit to the line together with its tags, so the line's head is always its latest
 # patch. Nested actions are remote-pinned: a `./` path in a reusable workflow resolves against the
 # caller.
 #
-# A head that is already tagged has nothing to release. That covers the push that creates the line
-# from its baseline tag and the cut's own bump push, so the cut never triggers itself. The caller
-# serialises runs per line, and each run reads the line's current head rather than the pushed
-# commit, so two backports merged together cut one patch.
+# The caller triggers on pull_request_target, which GitHub runs from the default branch's workflow
+# file and checks against the `release` environment as the default branch. A push trigger would run
+# the line's own copy of the caller, as old as the tag the line was cut from.
+#
+# A head that is already tagged has nothing to release. The caller serialises runs per line, and
+# each run reads the line's current head rather than the merged commit, so two backports merged
+# together cut one patch and the second run finds nothing to cut.
 on:
   workflow_call:
     inputs:
+      branch:
+        description: The release line to cut, release/vMAJOR.MINOR (the merged pull request's base)
+        required: true
+        type: string
       severity:
         description: Escalation severity if the cut fails (sev2 / sev1)
         required: false
@@ -63,7 +70,7 @@ jobs:
       - name: Check for unreleased commits
         id: pending
         env:
-          BRANCH: ${{ github.ref_name }}
+          BRANCH: ${{ inputs.branch }}
         run: |
           set -euo pipefail
 
@@ -131,8 +138,8 @@ jobs:
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.7.5"
-          ref: ${{ github.ref_name }}
-          branch: ${{ github.ref_name }}
+          ref: ${{ inputs.branch }}
+          branch: ${{ inputs.branch }}
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
           dry_run: ${{ inputs.dry_run }}
@@ -145,8 +152,8 @@ jobs:
           app_private_key: ${{ secrets.app_private_key }}
           project_id: ${{ inputs.project_id }}
           severity: ${{ inputs.severity }}
-          summary: "release cut on ${{ github.ref_name }} failed"
-          dedup_key: "release-line-failed:${{ github.repository }}:${{ github.ref_name }}"
+          summary: "release cut on ${{ inputs.branch }} failed"
+          dedup_key: "release-line-failed:${{ github.repository }}:${{ inputs.branch }}"
           repo: ${{ github.repository }}
           mention: ${{ inputs.mention }}
           push_webhook: ${{ secrets.push_webhook }}
