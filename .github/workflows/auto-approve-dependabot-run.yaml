@@ -105,7 +105,7 @@ jobs:
 
       - name: Approve
         if: ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
-        uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.43.0
+        uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.44.0
         with:
           pull_request: ${{ steps.pr.outputs.url }}
           github_token: ${{ steps.token.outputs.token }}
