@@ -88,8 +88,12 @@ require (
   assert.notEqual(w.run(process.execPath, [releaseScript("plan")], { GITHUB_REPOSITORY: "" }).status, 0);
 });
 
-test("release pushes are atomic, hotfixes only push tags, and dry runs publish nothing", (t) => {
-  for (const action of ["release-core", "release-core-hotfix"]) {
+test("release pushes are atomic, hotfixes push only a named release line, and dry runs publish nothing", (t) => {
+  for (const [action, pushed] of [
+    ["release-core", "master"],
+    ["release-core-hotfix", ""],
+    ["release-core-hotfix", "release/v1.2"],
+  ]) {
     for (const outcome of ["success", "reject", "dry-run"]) {
       const w = repository(t);
       const git = (...args) => succeeds(w.run("git", args));
@@ -102,7 +106,7 @@ test("release pushes are atomic, hotfixes only push tags, and dry runs publish n
       git("tag", "v1.2.3");
       git("init", "--bare", "remote.git");
       git("remote", "add", "origin", "remote.git");
-      git("push", "origin", "master", "v1.2.3");
+      git("push", "origin", "master", "master:release/v1.2", "v1.2.3");
       const baseline = git("rev-parse", "HEAD");
       // Keep the mock remote and diagnostics out of the release commit's git add -A.
       w.write(".git/info/exclude", "remote.git/\nbin/\noutput\nsummary\nreleased\n");
@@ -123,14 +127,17 @@ test("release pushes are atomic, hotfixes only push tags, and dry runs publish n
         APP_SLUG: "fixture",
         RELEASE_TYPE: "patch",
         STAMP_NEEDED: "false",
-        BRANCH: "master",
+        BRANCH: pushed,
         DRY_RUN: String(outcome === "dry-run"),
       });
       if (outcome === "reject") assert.notEqual(result.status, 0, result.stdout);
       else succeeds(result);
       const remote = (...args) => git("--git-dir=remote.git", ...args);
-      const branch = remote("rev-parse", "refs/heads/master");
-      assert.equal(branch === baseline, action.endsWith("hotfix") || outcome !== "success");
+      for (const branch of ["master", "release/v1.2"])
+        assert.equal(
+          remote("rev-parse", `refs/heads/${branch}`) === baseline,
+          branch !== pushed || outcome !== "success"
+        );
       assert.equal(existsSync(join(w.cwd, "released")), outcome === "success");
       if (outcome === "success") {
         for (const tag of ["v1.2.4", "child/v1.2.4"]) assert.equal(remote("rev-parse", tag), git("rev-parse", "HEAD"));

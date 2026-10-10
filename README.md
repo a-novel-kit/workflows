@@ -211,19 +211,21 @@ verbatim — so the required context would be one GitHub never posts, and the PR
 
 ### `publish-actions`
 
-| Action                | Purpose                                                                                        |
-| --------------------- | ---------------------------------------------------------------------------------------------- |
-| `npm`                 | Publish the workspace packages to the GitHub registry.                                         |
-| `release-core`        | Cut a release in CI: bump the version, tag, push, release.                                     |
-| `release-core-hotfix` | Cut a hotfix release from an ephemeral branch off a release tag (patch, tag-only, not-latest). |
+| Action                | Purpose                                                                         |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `npm`                 | Publish the workspace packages to the GitHub registry.                          |
+| `release-core`        | Cut a release in CI: bump the version, tag, push, release.                      |
+| `release-core-hotfix` | Cut a patch from a release line or a ref off a release tag (patch, not-latest). |
 
 ### Reusable workflows
 
 Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/workflows/<file>@<tag>` (not `<group>/<action>` — these are whole workflows, in `.github/workflows/`).
 
-| Workflow          | Purpose                                                                                   |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| `reconcile-board` | Per-org board fail-safe sweep: epic rollup + Status drift re-derive + merge-gate re-post. |
+| Workflow           | Purpose                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `reconcile-board`  | Per-org board fail-safe sweep: epic rollup + Status drift re-derive + merge-gate re-post.               |
+| `backport-run`     | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line. |
+| `release-line-run` | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment. |
 
 ## Contributing
 

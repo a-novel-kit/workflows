@@ -1,0 +1,256 @@
+name: backport (reusable)
+
+# The reusable backport engine (workflow_call). Every governed repo's thin `hotfix.yaml` dispatch
+# caller, provisioned by repocfg, calls this with its org creds. It runs in the caller's context, so
+# nested actions are remote-pinned: a `./` path in a reusable workflow resolves against the caller.
+#
+# A hotfix ships reviewed, tested changes only, and never the default branch's unreleased work. The
+# fix lands on the default branch first, through its normal pull request. This workflow then carries
+# each fix commit onto the release line `release/vX.Y`, created from the line's latest tag on first
+# use, as its own backport pull request: CI and review run against the released code, and merging
+# the backport cuts the patch (release-line-run.yaml). A fix that does not apply cleanly opens
+# nothing; the run fails with the commands to write the release line's form of the fix by hand.
+#
+# A hotfix is not gated on the org kill switch. The switch pauses normal automation, while the
+# emergency patch path stays open, gated by the admin check here and the `release` environment on
+# the cut.
+on:
+  workflow_call:
+    inputs:
+      line:
+        description: 'X.Y line to patch (e.g. "1.4"); its release line branches from the latest vX.Y.* tag'
+        required: true
+        type: string
+      fix_refs:
+        description: >
+          Space-separated commit SHAs already on the default branch, oldest first, each backported as
+          its own pull request. Empty prepares the release line only, for a fix the line needs that
+          the default branch does not.
+        required: false
+        type: string
+        default: ""
+      severity:
+        description: Escalation severity if the backport fails (sev2 / sev1)
+        required: false
+        type: string
+        default: sev2
+      dry_run:
+        description: When true, report what would be created without pushing a branch or opening a pull request
+        required: false
+        type: boolean
+        default: true
+      client_id:
+        description: The [Agent] bot App client id.
+        required: true
+        type: string
+      project_id:
+        description: Node id of the org "Tasks" board (PVT_…) — escalate drives the failure ticket's Status here.
+        required: true
+        type: string
+      mention:
+        description: Threaded to escalate as the SEV1/SEV2 @mention (e.g. vars.SEV1_MENTION).
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app_private_key:
+        description: The [Agent] bot App private key (PEM).
+        required: true
+      push_webhook:
+        description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
+        required: false
+
+jobs:
+  backport:
+    runs-on: ubuntu-latest
+    # The default token serves only the admin check; branch and pull request writes use the [Agent]
+    # token minted below.
+    permissions:
+      contents: read
+    steps:
+      # workflow_dispatch is open to any write user, so this gate is what keeps hotfixes admin-only.
+      - name: Require admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_FULL: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # `|| echo ""` keeps a failed lookup from tripping `set -e`; an empty permission fails closed.
+          perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
+          if [ "$perm" != "admin" ]; then
+            echo "::error::hotfixes are admin-only; @${ACTOR} has permission '${perm:-none}'."
+            exit 1
+          fi
+
+      - name: Mint git token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.token.outputs.token }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Open backport pull requests
+        id: backport
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          LINE: ${{ inputs.line }}
+          FIX_REFS: ${{ inputs.fix_refs }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+
+          # The highest vLINE.PATCH release tag, excluding sub-module tags (<dir>/v…) and pre-releases.
+          # The line is validated first, which guards the glob and grep against a malformed or injected
+          # value; its dots are escaped so line 1.4 cannot match a tag v1x4.0.
+          release_baseline() {
+            local line="$1" line_re
+            if ! printf '%s' "$line" | grep -qE '^[0-9]+\.[0-9]+$'; then
+              echo "::error::line must be MAJOR.MINOR (e.g. 1.4), got \"$line\"." >&2
+              return 1
+            fi
+            line_re=$(printf '%s' "$line" | sed 's/\./\\./g')
+            git tag -l "v${line}.*" | grep -E "^v${line_re}\.[0-9]+$" | sort -V | tail -1
+          }
+
+          # Creates release/vLINE from the baseline tag when the line has none yet. An existing line
+          # must contain the baseline: its head is the latest patch, and a line missing it was cut by
+          # hand from something else.
+          ensure_release_line() {
+            local line="$1" baseline="$2" branch="release/v$1"
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+              git fetch --quiet origin "$branch"
+              if ! git merge-base --is-ancestor "$baseline" "origin/$branch"; then
+                echo "::error::$branch does not contain $baseline, the line's latest tag; repair the branch before backporting." >&2
+                return 1
+              fi
+              return 0
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry-run] would create \`$branch\` from \`$baseline\`." >> "$GITHUB_STEP_SUMMARY"
+              git update-ref "refs/remotes/origin/$branch" "$baseline"
+              return 0
+            fi
+            git push --quiet origin "$baseline^{commit}:refs/heads/$branch"
+            git fetch --quiet origin "$branch"
+            echo "Created \`$branch\` from \`$baseline\`." >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Prints the full SHA of a commit on the default branch. Every fix is resolved before
+          # anything is created, so a bad ref leaves no release line behind.
+          resolve_fix() {
+            local ref="$1" sha
+            case "$ref" in -*)
+              echo "::error::fix ref must not begin with '-' (got \"$ref\")." >&2
+              return 1
+              ;;
+            esac
+            if ! sha=$(git rev-parse --verify --quiet "${ref}^{commit}"); then
+              echo "::error::$ref is not a commit in this repository." >&2
+              return 1
+            fi
+            if ! git merge-base --is-ancestor "$sha" "origin/$DEFAULT_BRANCH"; then
+              echo "::error::${sha:0:12} is not on $DEFAULT_BRANCH. Land the fix through its pull request first, then backport it." >&2
+              return 1
+            fi
+            echo "$sha"
+          }
+
+          # Cherry-picks one resolved fix onto the release line as its own pull request, titled with
+          # the fix's own subject. A conflict leaves nothing behind and appends the commands to write
+          # the line's form of the fix by hand to $INSTRUCTIONS, the escalation ticket's body.
+          backport_fix() {
+            local sha="$1" line="$2" base="release/v$2" subject branch
+            # The title reuses the fix's subject, which reached the default branch Conventional.
+            subject=$(git log -1 --format=%s "$sha")
+            # `git cherry` prints `-` for a commit whose patch is already on the line.
+            if git cherry "origin/$base" "$sha" "${sha}^" | grep -q '^-'; then
+              echo "${sha:0:12} is already on \`$base\`; nothing to backport." >> "$GITHUB_STEP_SUMMARY"
+              return 0
+            fi
+            branch="backport/v${line}-${sha:0:12}"
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+              echo "::warning::\`$branch\` already exists; ${sha:0:12} is already being backported." >&2
+              return 0
+            fi
+            git switch --quiet --detach "origin/$base"
+            if ! git cherry-pick -x "$sha" >/dev/null 2>&1; then
+              local paths
+              paths=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
+              git cherry-pick --abort
+              echo "::error::${sha:0:12} does not apply to $base; conflicting paths: ${paths:-none}." >&2
+              # The title is quoted with %q, so the printed command stays safe to paste.
+              tee -a "$INSTRUCTIONS" >&2 <<EOF
+          \`${sha:0:12}\` (${subject}) does not apply to \`$base\`. Write the release line's form of the fix by hand:
+
+              git switch --create $branch origin/$base
+              git cherry-pick -x $sha   # resolve the conflicts against the released code
+              git push --set-upstream origin $branch
+              gh pr create --base $base --title $(printf '%q' "$subject [v$line]")
+
+          EOF
+              return 1
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry-run] would open \`$subject [v$line]\` from \`$branch\` into \`$base\`." >> "$GITHUB_STEP_SUMMARY"
+              return 0
+            fi
+            git push --quiet origin "HEAD:refs/heads/$branch"
+            gh pr create --base "$base" --head "$branch" --title "$subject [v$line]" \
+              --body "Backports ${sha} from \`$DEFAULT_BRANCH\` to \`$base\`. Merging it cuts the next v${line} patch." \
+              >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+
+          fixes=()
+          for ref in $FIX_REFS; do
+            sha=$(resolve_fix "$ref")
+            fixes+=("$sha")
+          done
+          if ! baseline=$(release_baseline "$LINE") || [ -z "$baseline" ]; then
+            echo "::error::no released tag on line v${LINE}.x — nothing to backport to."
+            exit 1
+          fi
+          ensure_release_line "$LINE" "$baseline"
+
+          INSTRUCTIONS="$RUNNER_TEMP/backport-instructions.md"
+          failed=0
+          for sha in "${fixes[@]}"; do
+            backport_fix "$sha" "$LINE" || failed=1
+          done
+          if [ -s "$INSTRUCTIONS" ]; then
+            delimiter="EOF_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+            printf 'instructions<<%s\n%s\n%s\n' "$delimiter" "$(cat "$INSTRUCTIONS")" "$delimiter" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$failed"
+
+      # Any failure in the hotfix path pulls a human in, so the emergency path is never silent. It
+      # passes the dispatch severity, a wired push webhook pages SEV1, and dry-run only logs it.
+      - name: Escalate on failure
+        if: ${{ failure() }}
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.42.2
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.app_private_key }}
+          project_id: ${{ inputs.project_id }}
+          severity: ${{ inputs.severity }}
+          summary: "backport to v${{ inputs.line }}.x failed"
+          dedup_key: "backport-failed:${{ github.repository }}:${{ inputs.line }}"
+          body: ${{ steps.backport.outputs.instructions }}
+          repo: ${{ github.repository }}
+          mention: ${{ inputs.mention }}
+          push_webhook: ${{ secrets.push_webhook }}
+          dry_run: ${{ inputs.dry_run }}

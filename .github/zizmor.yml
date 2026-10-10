@@ -50,9 +50,11 @@ rules:
 
   artipacked:
     ignore:
-      # The one checkout in this repo that must keep its credentials. It checks out with an
-      # explicitly minted, repo-scoped bot token and then pushes and deletes the ephemeral hotfix
-      # branch with plain `git push` (hotfix-run.yaml:183, :295) — no credential helper of its own,
-      # so the persisted one is what authenticates. Setting persist-credentials: false here does
-      # not harden the workflow, it breaks it. Every other checkout in the repo sets it.
+      # The checkouts in this repo that must keep their credentials. Each checks out with an
+      # explicitly minted, repo-scoped bot token and then pushes with plain `git push`: hotfix-run
+      # its ephemeral hotfix branch, backport-run the release line and its backport branches. Neither
+      # has a credential helper of its own, so the persisted one is what authenticates. Setting
+      # persist-credentials: false there does not harden the workflow, it breaks it. Every other
+      # checkout in the repo sets it.
       - hotfix-run.yaml
+      - backport-run.yaml
