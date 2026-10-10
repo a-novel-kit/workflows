@@ -241,7 +241,7 @@ jobs:
       # passes the dispatch severity, a wired push webhook pages SEV1, and dry-run only logs it.
       - name: Escalate on failure
         if: ${{ failure() }}
-        uses: a-novel-kit/workflows/generic-actions/escalate@v1.42.2
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.43.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}

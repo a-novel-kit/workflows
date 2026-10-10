@@ -25,7 +25,7 @@ jobs:
     # the callee mints a scoped App token and declares permissions: {}; the caller sets the ceiling, so it must not hand down
     # the repository default.
     permissions: {}
-    uses: a-novel-kit/workflows/.github/workflows/auto-approve-dependabot-run.yaml@v1.42.2
+    uses: a-novel-kit/workflows/.github/workflows/auto-approve-dependabot-run.yaml@v1.43.0
     with:
       client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
       dependency_bot_login: ${{ vars.DEPENDENCY_BOT_LOGIN }}
@@ -81,7 +81,7 @@ jobs:
 
       - name: Evaluate the merge gate
         if: steps.pr.outputs.number != ''
-        uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.42.2
+        uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.43.0
         with:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
@@ -91,7 +91,7 @@ jobs:
 
       - name: Evaluate the epic freeze
         if: steps.pr.outputs.number != ''
-        uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.42.2
+        uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.43.0
         with:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
