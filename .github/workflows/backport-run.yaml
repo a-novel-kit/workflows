@@ -100,6 +100,7 @@ jobs:
           fetch-tags: true
 
       - name: Open backport pull requests
+        id: backport
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           LINE: ${{ inputs.line }}
@@ -138,7 +139,6 @@ jobs:
             fi
             if [ "$DRY_RUN" = "true" ]; then
               echo "[dry-run] would create \`$branch\` from \`$baseline\`." >> "$GITHUB_STEP_SUMMARY"
-              git branch --force "$branch" "$baseline"
               git update-ref "refs/remotes/origin/$branch" "$baseline"
               return 0
             fi
@@ -147,25 +147,33 @@ jobs:
             echo "Created \`$branch\` from \`$baseline\`." >> "$GITHUB_STEP_SUMMARY"
           }
 
-          # Cherry-picks one default-branch fix onto the release line as its own pull request, titled
-          # with the fix's own subject. A conflict leaves nothing behind and prints the commands to
-          # write the line's form of the fix by hand.
-          backport_fix() {
-            local sha="$1" line="$2" base="release/v$2" subject branch
-            case "$sha" in -*)
-              echo "::error::fix ref must not begin with '-' (got \"$sha\")." >&2
+          # Prints the full SHA of a commit on the default branch. Every fix is resolved before
+          # anything is created, so a bad ref leaves no release line behind.
+          resolve_fix() {
+            local ref="$1" sha
+            case "$ref" in -*)
+              echo "::error::fix ref must not begin with '-' (got \"$ref\")." >&2
               return 1
               ;;
             esac
-            if ! sha=$(git rev-parse --verify --quiet "${sha}^{commit}"); then
-              echo "::error::$1 is not a commit in this repository." >&2
+            if ! sha=$(git rev-parse --verify --quiet "${ref}^{commit}"); then
+              echo "::error::$ref is not a commit in this repository." >&2
               return 1
             fi
             if ! git merge-base --is-ancestor "$sha" "origin/$DEFAULT_BRANCH"; then
               echo "::error::${sha:0:12} is not on $DEFAULT_BRANCH. Land the fix through its pull request first, then backport it." >&2
               return 1
             fi
+            echo "$sha"
+          }
+
+          # Cherry-picks one resolved fix onto the release line as its own pull request, titled with
+          # the fix's own subject. A conflict leaves nothing behind and appends the commands to write
+          # the line's form of the fix by hand to $INSTRUCTIONS, the escalation ticket's body.
+          backport_fix() {
+            local sha="$1" line="$2" base="release/v$2" subject title branch
             subject=$(git log -1 --format=%s "$sha")
+            title="$subject [v$line]"
             # `git cherry` prints `-` for a commit whose patch is already on the line.
             if git cherry "origin/$base" "$sha" "${sha}^" | grep -q '^-'; then
               echo "${sha:0:12} is already on \`$base\`; nothing to backport." >> "$GITHUB_STEP_SUMMARY"
@@ -181,22 +189,25 @@ jobs:
               local paths
               paths=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
               git cherry-pick --abort
-              {
-                echo "::error::${sha:0:12} (\"$subject\") does not apply to $base; conflicting paths: ${paths:-none}."
-                echo "Write the release line's form of the fix by hand:"
-                echo "  git switch --create $branch origin/$base"
-                echo "  git cherry-pick -x $sha   # resolve the conflicts against the released code"
-                echo "  git push --set-upstream origin $branch"
-                echo "  gh pr create --base $base --title \"$subject [v$line]\""
-              } >&2
+              echo "::error::${sha:0:12} does not apply to $base; conflicting paths: ${paths:-none}." >&2
+              # The title is quoted with %q, so the printed command stays safe to paste.
+              tee -a "$INSTRUCTIONS" >&2 <<EOF
+          \`${sha:0:12}\` (${subject}) does not apply to \`$base\`. Write the release line's form of the fix by hand:
+
+              git switch --create $branch origin/$base
+              git cherry-pick -x $sha   # resolve the conflicts against the released code
+              git push --set-upstream origin $branch
+              gh pr create --base $base --title $(printf '%q' "$title")
+
+          EOF
               return 1
             fi
             if [ "$DRY_RUN" = "true" ]; then
-              echo "[dry-run] would open \`$subject [v$line]\` from \`$branch\` into \`$base\`." >> "$GITHUB_STEP_SUMMARY"
+              echo "[dry-run] would open \`$title\` from \`$branch\` into \`$base\`." >> "$GITHUB_STEP_SUMMARY"
               return 0
             fi
             git push --quiet origin "HEAD:refs/heads/$branch"
-            gh pr create --base "$base" --head "$branch" --title "$subject [v$line]" \
+            gh pr create --base "$base" --head "$branch" --title "$title" \
               --body "Backports ${sha} from \`$DEFAULT_BRANCH\` to \`$base\`. Merging it cuts the next v${line} patch." \
               >> "$GITHUB_STEP_SUMMARY"
           }
@@ -204,16 +215,26 @@ jobs:
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
+          fixes=()
+          for ref in $FIX_REFS; do
+            sha=$(resolve_fix "$ref")
+            fixes+=("$sha")
+          done
           if ! baseline=$(release_baseline "$LINE") || [ -z "$baseline" ]; then
             echo "::error::no released tag on line v${LINE}.x — nothing to backport to."
             exit 1
           fi
           ensure_release_line "$LINE" "$baseline"
 
+          INSTRUCTIONS="$RUNNER_TEMP/backport-instructions.md"
           failed=0
-          for sha in $FIX_REFS; do
+          for sha in "${fixes[@]}"; do
             backport_fix "$sha" "$LINE" || failed=1
           done
+          if [ -s "$INSTRUCTIONS" ]; then
+            delimiter="EOF_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+            printf 'instructions<<%s\n%s\n%s\n' "$delimiter" "$(cat "$INSTRUCTIONS")" "$delimiter" >> "$GITHUB_OUTPUT"
+          fi
           exit "$failed"
 
       # Any failure in the hotfix path pulls a human in, so the emergency path is never silent. It
@@ -228,6 +249,7 @@ jobs:
           severity: ${{ inputs.severity }}
           summary: "backport to v${{ inputs.line }}.x failed"
           dedup_key: "backport-failed:${{ github.repository }}:${{ inputs.line }}"
+          body: ${{ steps.backport.outputs.instructions }}
           repo: ${{ github.repository }}
           mention: ${{ inputs.mention }}
           push_webhook: ${{ secrets.push_webhook }}

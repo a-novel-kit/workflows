@@ -4,11 +4,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { functions, step, succeeds, workspace } from "./helpers.mjs";
 
-const backport = functions(step(".github/workflows/backport-run.yaml", "Open backport pull requests"), [
-  "release_baseline",
-  "ensure_release_line",
-  "backport_fix",
-]);
+const dispatch = step(".github/workflows/backport-run.yaml", "Open backport pull requests");
+const backport = functions(dispatch, ["release_baseline", "ensure_release_line"]);
 const pending = functions(step(".github/workflows/release-line-run.yaml", "pending"), ["line_pending"]);
 
 /** A repository released at v1.4.0 whose default branch is pushed to a bare origin. */
@@ -38,9 +35,19 @@ function repository(t) {
       DRY_RUN: "false",
       ...env,
     });
+  const backports = (fixRefs, env = {}) =>
+    w.bash(dispatch, {
+      LINE: "1.4",
+      FIX_REFS: fixRefs,
+      DEFAULT_BRANCH: "master",
+      DRY_RUN: "false",
+      APP_SLUG: "agent",
+      RUNNER_TEMP: w.cwd,
+      ...env,
+    });
   const remote = (ref) => w.run("git", ["--git-dir=remote.git", "rev-parse", "--verify", "--quiet", ref]).stdout.trim();
   const pulls = () => (existsSync(join(w.cwd, "pulls")) ? w.read("pulls").trim().split("\n").map(JSON.parse) : []);
-  return { w, git, commit, sh, remote, pulls };
+  return { w, git, commit, sh, backports, remote, pulls };
 }
 
 test("the backport baseline is the line's highest stable tag, and a malformed line is data", (t) => {
@@ -70,76 +77,77 @@ test("a release line is created from its baseline once, and a line missing that 
 });
 
 test("a clean backport opens one pull request carrying the fix alone, never the default branch's unreleased work", (t) => {
-  const { git, commit, sh, remote, pulls } = repository(t);
+  const { git, commit, backports, remote, pulls } = repository(t);
   commit("dashboard.js", "render();\n", "feat: unreleased dashboard");
   const fix = commit("limits.js", "const max = 5;\n", "fix: lower the request limit");
   git("push", "-q", "origin", "master");
   const branch = `backport/v1.4-${fix.slice(0, 12)}`;
 
-  succeeds(sh(`ensure_release_line 1.4 v1.4.0 && backport_fix ${fix} 1.4`, { DRY_RUN: "true" }));
+  succeeds(backports(fix, { DRY_RUN: "true" }));
+  assert.equal(remote("refs/heads/release/v1.4"), "");
   assert.equal(remote(`refs/heads/${branch}`), "");
   assert.deepEqual(pulls(), []);
 
-  succeeds(sh(`ensure_release_line 1.4 v1.4.0 && backport_fix ${fix} 1.4`));
+  succeeds(backports(fix));
   const picked = remote(`refs/heads/${branch}`);
   assert.equal(git("rev-parse", `${picked}^`), git("rev-parse", "v1.4.0"));
   assert.equal(git("show", `${picked}:limits.js`), "const max = 5;");
   assert.equal(git("ls-tree", "--name-only", picked), "auth.js\nlimits.js");
   assert.match(git("log", "-1", "--format=%B", picked), new RegExp(`cherry picked from commit ${fix}`));
+  const title = "fix: lower the request limit [v1.4]";
+  const opened = ["pr", "create", "--base", "release/v1.4", "--head", branch, "--title", title, "--body"];
   assert.deepEqual(
     pulls().map((args) => args.slice(0, 9)),
-    [
-      [
-        "pr",
-        "create",
-        "--base",
-        "release/v1.4",
-        "--head",
-        branch,
-        "--title",
-        "fix: lower the request limit [v1.4]",
-        "--body",
-      ],
-    ]
+    [opened]
   );
 
   // A second dispatch finds the open backport, and once it merges, finds the fix on the line.
-  succeeds(sh(`backport_fix ${fix} 1.4`));
+  succeeds(backports(fix));
   git("push", "-q", "origin", `${picked}:refs/heads/release/v1.4`, `:refs/heads/${branch}`);
-  succeeds(sh(`ensure_release_line 1.4 v1.4.0 && backport_fix ${fix} 1.4`));
+  succeeds(backports(fix));
   assert.equal(pulls().length, 1);
 });
 
-test("a fix written against unreleased work opens nothing and says how to write the release line's form", (t) => {
-  const { git, commit, sh, remote, pulls } = repository(t);
-  // The default branch renames user to currentUser after v1.4.0, then fixes the renamed line. The
+test("a fix written against unreleased work opens nothing and hands over the release line's form", (t) => {
+  const { w, git, commit, backports, remote, pulls } = repository(t);
+  // The default branch renames user to currentUser after v1.4.0, then fixes the renamed line. That
   // fix cannot apply to the released code without the rename, so it conflicts instead of carrying it.
   commit("auth.js", "if (currentUser.id === owner) allow();\n", "refactor: rename user to currentUser");
+  const clean = commit("limits.js", "const max = 5;\n", "fix: lower the request limit");
   const fix = commit("auth.js", "if (currentUser.id === owner && !banned) allow();\n", "fix: refuse banned owners");
   git("push", "-q", "origin", "master");
 
-  const result = sh(`ensure_release_line 1.4 v1.4.0 && backport_fix ${fix} 1.4`);
+  const result = backports(`${clean} ${fix}`);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /does not apply to release\/v1\.4; conflicting paths: auth\.js/);
-  assert.match(result.stderr, new RegExp(`git cherry-pick -x ${fix}`));
+  const instructions = w.read("output").match(/^instructions<<(EOF_\w+)\n([^]*)\n\1$/m)?.[2] ?? "";
+  assert.match(instructions, new RegExp(`git cherry-pick -x ${fix}`));
+  assert.match(instructions, /--title fix:\\ refuse\\ banned\\ owners\\ \\\[v1\.4\\\]$/m);
   assert.equal(remote(`refs/heads/backport/v1.4-${fix.slice(0, 12)}`), "");
-  assert.equal(git("branch", "--list", "backport/*"), "");
   assert.equal(remote("refs/heads/release/v1.4"), git("rev-parse", "v1.4.0"));
-  assert.deepEqual(pulls(), []);
+  assert.deepEqual(
+    pulls().map((args) => args[7]),
+    ["fix: lower the request limit [v1.4]"]
+  );
 });
 
-test("a backport refuses refs that are not default-branch commits", (t) => {
-  const { git, commit, sh, pulls } = repository(t);
+test("a backport refuses refs that are not default-branch commits before creating anything", (t) => {
+  const { git, commit, backports, remote, pulls } = repository(t);
+  const fix = commit("limits.js", "const max = 5;\n", "fix: lower the request limit");
+  git("push", "-q", "origin", "master");
   git("switch", "-q", "-c", "side");
-  const side = commit("limits.js", "const max = 1;\n", "fix: unreviewed");
+  const side = commit("auth.js", "allow();\n", "fix: unreviewed");
   git("switch", "-q", "master");
-  succeeds(sh("ensure_release_line 1.4 v1.4.0"));
-  for (const [ref, message] of [
-    [side, /is not on master/],
+  for (const [refs, message] of [
+    [`${fix} ${side}`, /is not on master/],
     ["--help", /must not begin with '-'/],
     ["0000000", /is not a commit/],
-  ])
-    assert.match(sh(`backport_fix '${ref}' 1.4`).stderr, message, ref);
+  ]) {
+    const result = backports(refs);
+    assert.notEqual(result.status, 0, refs);
+    assert.match(result.stderr, message, refs);
+  }
+  assert.equal(remote("refs/heads/release/v1.4"), "");
   assert.deepEqual(pulls(), []);
 });
 
