@@ -214,7 +214,7 @@ runs:
         # caller deletes it, so there is no branch push; each tag points at the bump commit and
         # carries it to the remote.
         git add -A
-        git commit -m "$version"
+        git commit -m "chore(release): $version"
         tag_refs=()
         while IFS= read -r t; do
           [ -n "$t" ] || continue
