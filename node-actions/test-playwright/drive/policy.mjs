@@ -1,6 +1,5 @@
 // Bind screenshot-change approval to a human label action and an exact PR head.
 import { appendFile, readFile } from "node:fs/promises";
-import { setTimeout } from "node:timers/promises";
 import { Failure, GitHub, runCli } from "./common.mjs";
 
 export const LABEL = "allow-screenshot-change";
@@ -30,7 +29,7 @@ export class Policy {
     return null;
   }
 
-  async approved(pr, before) {
+  async latestLabel(pr, before) {
     let latest;
     for (const event of await this.github.pages(`issues/${pr.number}/events`)) {
       if (
@@ -46,6 +45,11 @@ export class Policy {
           latest = event;
       }
     }
+    return latest;
+  }
+
+  async approved(pr, before) {
+    const latest = await this.latestLabel(pr, before);
     if (!latest || latest.event !== "labeled" || latest.actor?.type !== "User" || latest.performed_via_github_app)
       return false;
     const permission = await this.github.request(`collaborators/${encodeURIComponent(latest.actor.login)}/permission`);
@@ -196,43 +200,50 @@ export class Policy {
       approved ? "Approved current PR head" : "No approval recorded; screenshot changes remain blocked",
       this.target()
     );
-    const rerun = ["labeled", "unlabeled"].includes(action);
-    let run;
-    for (let attempt = 0; attempt < 240; attempt++) {
-      const current = await this.github.request(`pulls/${pr.number}`);
-      if (current.state !== "open" || current.head.sha !== pr.head.sha) return;
-      if (!run) {
-        const { workflow_runs: runs } = await this.github.request(
-          `actions/workflows/main.yaml/runs?head_sha=${pr.head.sha}&event=push&per_page=100`
-        );
-        run = runs
-          .filter(
-            (candidate) =>
-              candidate.head_sha === pr.head.sha &&
-              candidate.event === "push" &&
-              candidate.path === ".github/workflows/main.yaml"
-          )
-          .sort((a, b) => a.run_number - b.run_number)
-          .at(-1);
-      } else run = await this.github.request(`actions/runs/${run.id}`);
-      if (run?.status === "completed") {
-        let artifact;
-        if (!approved) {
-          const result = await this.github.request(`actions/runs/${run.id}/artifacts?per_page=100`);
-          if (result.total_count > 100) throw new Failure("Too many artifacts to locate screenshot review");
-          artifact = result.artifacts.find(
-            (entry) =>
-              entry.name === "playwright-drift.html" &&
-              !entry.expired &&
-              Date.parse(entry.created_at) >= Date.parse(run.run_started_at)
-          );
-        }
-        if (rerun) await this.post(`actions/runs/${run.id}/rerun`);
-        return { run, artifact, approved };
-      }
-      await setTimeout(5000);
-    }
-    throw new Failure("Main is still running; rerun visual approval after it finishes to collect screenshot review");
+    if (!["labeled", "unlabeled"].includes(action)) return { approved };
+    // The rerun checks this receipt only after its setup, by which time this job has succeeded.
+    return { approved, rerun: await this.refresh(pr, await this.latestLabel(pr)) };
+  }
+
+  /** Refresh the open PR whose head a completed push run of main tested. */
+  async completed(run) {
+    if (run.event !== "push") return null;
+    const owner = this.github.repository.split("/")[0];
+    const pr = (await this.github.pages(`pulls?state=open&head=${owner}:${encodeURIComponent(run.head_branch)}`)).find(
+      (candidate) =>
+        candidate.head.sha === run.head_sha &&
+        candidate.base.ref === "master" &&
+        candidate.head.repo?.full_name === this.github.repository
+    );
+    if (!pr) return null;
+    const label = await this.latestLabel(pr);
+    const receipt = await this.latestStatus(pr.head.sha, APPROVAL);
+    // Until a receipt follows the label change, its own approval run is pending and refreshes instead.
+    return label && receipt?.created_at >= label.created_at ? this.refresh(pr, label) : null;
+  }
+
+  /** Rerun the head's browser job when its latest main attempt finished but began before the label change. */
+  async refresh(pr, label) {
+    if (!label) return null;
+    const { workflow_runs: runs } = await this.github.request(
+      `actions/workflows/main.yaml/runs?head_sha=${pr.head.sha}&event=push&per_page=100`
+    );
+    const run = runs
+      .filter(
+        (candidate) =>
+          candidate.head_sha === pr.head.sha &&
+          candidate.event === "push" &&
+          candidate.path === ".github/workflows/main.yaml"
+      )
+      .sort((a, b) => a.run_number - b.run_number)
+      .at(-1);
+    // A run still in progress is refreshed by its completion event.
+    if (run?.status !== "completed" || run.run_started_at > label.created_at) return null;
+    const { jobs } = await this.github.request(`actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`);
+    const job = jobs.find((entry) => entry.name === "test-browser");
+    if (!job || job.conclusion === "skipped") return null;
+    await this.post(`actions/jobs/${job.id}/rerun`);
+    return run;
   }
 
   target() {
@@ -246,23 +257,22 @@ async function main() {
   const event = JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8"));
   const mode = process.argv[2];
   if (mode === "label") {
-    const review = await policy.labelEvent(event);
-    if (!review) return;
-    const { run, artifact, approved } = review;
-    const url = `https://github.com/${env.GITHUB_REPOSITORY}/actions/runs/${run.id}/attempts/${run.run_attempt}`;
-    await appendFile(
-      env.GITHUB_STEP_SUMMARY,
-      `## Screenshot review\n\n[Main CI for this commit](${url})\n\n${
-        artifact
-          ? "Download **playwright-drift.html** from this run’s **Artifacts** section for Old / New / Diff images."
-          : approved
-            ? "Screenshot changes are approved for this commit."
-            : run.conclusion === "success"
-              ? "Main CI passed. No screenshot-change approval is needed."
-              : "No current drift report is available. Check main CI; if it reports screenshot differences, rerun it to regenerate the review."
-      }\n`
-    );
-    if (artifact) await appendFile(env.GITHUB_OUTPUT, `run_id=${run.id}\nartifact_id=${artifact.id}\n`);
+    const review =
+      env.GITHUB_EVENT_NAME === "workflow_run"
+        ? { rerun: await policy.completed(event.workflow_run) }
+        : await policy.labelEvent(event);
+    const lines = [];
+    if (review?.approved !== undefined)
+      lines.push(
+        review.approved
+          ? "Screenshot changes are approved for this commit."
+          : "No screenshot approval is recorded for this commit. The `visual-comparison` check links any drift review."
+      );
+    if (review?.rerun)
+      lines.push(
+        `[Main CI](https://github.com/${env.GITHUB_REPOSITORY}/actions/runs/${review.rerun.id}) reruns its browser check for the label change.`
+      );
+    if (lines.length) await appendFile(env.GITHUB_STEP_SUMMARY, `## Screenshot approval\n\n${lines.join("\n\n")}\n`);
   } else if (mode === "allow") {
     const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
     const allowed =

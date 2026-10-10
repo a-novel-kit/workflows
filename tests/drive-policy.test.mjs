@@ -169,103 +169,114 @@ test("squash queue commits are attributed through their queue entries, never by 
   f.github.graphql = async () => ({ repository: { mergeQueue: { entries: { nodes } } } });
   assert.deepEqual(await f.policy.associated("base", "squash-2", true), []);
 });
-test("label reruns the completed head and synchronize invalidates approval", async () => {
+
+/** A labeled PR whose finished main run began before the label and failed its browser job. */
+function refreshFixture() {
   const f = fixture();
   process.env.GITHUB_RUN_ID = "41";
   process.env.GITHUB_RUN_ATTEMPT = "1";
-  const event = {
-    action: "labeled",
-    label: { name: LABEL },
-    number: 1,
-    pull_request: f.pr,
-    sender: { type: "User", login: "reviewer" },
-  };
-  const run = {
-    id: 42,
-    run_number: 4,
-    head_sha: "head",
-    event: "push",
-    path: ".github/workflows/main.yaml",
-    status: "completed",
-  };
-  f.github.request = async (path) =>
-    path.startsWith("pulls/")
-      ? f.pr
-      : path.startsWith("collaborators/")
-        ? { permission: "write" }
-        : path.includes("workflows/")
-          ? { workflow_runs: [run] }
-          : path.includes("/artifacts?")
-            ? { artifacts: [], total_count: 0 }
-            : run;
-  const posts = [];
-  f.policy.post = async (...args) => posts.push(args);
-  await f.policy.labelEvent(event);
-  assert.equal(posts[0][1].state, "success");
-  assert.equal(posts[0][1].target_url, "https://github.com/example/studio/actions/runs/41/attempts/1");
-  assert.equal(posts[1][0], "actions/runs/42/rerun");
-  posts.length = 0;
-  await f.policy.labelEvent({ ...event, action: "synchronize" });
-  assert.equal(posts[0][1].state, "success");
-  assert.equal(posts[0][1].description, "No approval recorded; screenshot changes remain blocked");
-  assert.equal(posts.length, 1);
-});
-
-function reviewFixture() {
-  const f = fixture();
   const run = {
     id: 42,
     run_number: 4,
     run_attempt: 2,
     head_sha: "head",
+    head_branch: "feature",
     event: "push",
     path: ".github/workflows/main.yaml",
     status: "completed",
-    conclusion: "failure",
-    run_started_at: "2026-09-01T12:00:00Z",
+    run_started_at: "2026-09-01T09:00:00Z",
   };
-  const artifact = { id: 9, name: "playwright-drift.html", expired: false, created_at: "2026-09-01T12:01:00Z" };
-  const artifacts = [artifact];
+  const browser = { id: 7, name: "test-browser", conclusion: "failure" };
+  const requests = [],
+    posts = [];
   f.github.request = async (path) => {
+    requests.push(path);
     if (path.startsWith("pulls/")) return f.pr;
+    if (path.startsWith("collaborators/")) return { permission: "write" };
     if (path.includes("workflows/")) return { workflow_runs: [run] };
-    if (path.includes("/artifacts?")) return { artifacts, total_count: artifacts.length };
+    if (path.includes("/jobs?")) return { jobs: [browser] };
     return run;
   };
-  const posts = [];
+  const pages = f.github.pages;
+  f.github.pages = async (path) => (path.startsWith("pulls?") ? [f.pr] : pages(path));
   f.policy.post = async (...args) => posts.push(args);
-  return {
-    ...f,
-    run,
-    artifact,
-    artifacts,
-    posts,
-    labelEvent: { action: "synchronize", number: 1, pull_request: f.pr },
-  };
+  return { ...f, run, browser, requests, posts };
 }
 
-test("unapproved heads attach only a current, unexpired drift report without rerunning main", async () => {
-  for (const [mutate, expected] of [
+const labeled = (pr, action = "labeled") => ({
+  action,
+  label: { name: LABEL },
+  number: 1,
+  pull_request: pr,
+  sender: { type: "User", login: "reviewer" },
+});
+
+test("a label change reruns only the browser job of the head's finished main run", async () => {
+  const f = refreshFixture();
+  const result = await f.policy.labelEvent(labeled(f.pr));
+  assert.equal(result.approved, true);
+  assert.equal(result.rerun.id, 42);
+  assert.deepEqual(
+    f.posts.map(([path]) => path),
+    ["statuses/head", "actions/jobs/7/rerun"]
+  );
+  assert.equal(f.posts[0][1].target_url, "https://github.com/example/studio/actions/runs/41/attempts/1");
+});
+
+test("PR pushes record the receipt without waiting on main", async () => {
+  for (const action of ["opened", "reopened", "synchronize"]) {
+    const f = refreshFixture();
+    assert.deepEqual(await f.policy.labelEvent({ action, number: 1, pull_request: f.pr }), { approved: false });
+    assert.deepEqual(
+      f.posts.map(([path]) => path),
+      ["statuses/head"]
+    );
+    assert.equal(f.posts[0][1].description, "No approval recorded; screenshot changes remain blocked");
+    assert.equal(
+      f.requests.some((path) => path.startsWith("actions/")),
+      false
+    );
+  }
+});
+
+test("refresh reruns only a finished run that began before the label change", async () => {
+  for (const [mutate, rerun] of [
     [() => {}, true],
-    [(f) => (f.artifact.expired = true), false],
-    [(f) => (f.artifact.created_at = "2026-09-01T11:00:00Z"), false],
-    [(f) => (f.artifact.name = "coverage"), false],
-    [(f) => f.artifacts.pop(), false],
+    [(f) => (f.run.run_started_at = "2026-09-01T10:00:00Z"), true],
+    [(f) => (f.run.run_started_at = "2026-09-01T10:00:01Z"), false],
+    [(f) => (f.run.status = "in_progress"), false],
+    [(f) => (f.run.head_sha = "other"), false],
+    [(f) => (f.browser.conclusion = "skipped"), false],
+    [(f) => (f.browser.name = "test-unit"), false],
+    [(f) => (f.event = undefined), false],
   ]) {
-    const f = reviewFixture();
+    const f = refreshFixture();
     mutate(f);
-    const result = await f.policy.labelEvent(f.labelEvent);
-    assert.equal(result.run.id, 42);
-    assert.equal(Boolean(result.artifact), expected);
-    assert.equal(f.posts.length, 1);
-    assert.equal(f.posts[0][1].state, "success");
+    assert.equal(Boolean(await f.policy.refresh(f.pr, f.event)), rerun);
+    assert.equal(f.posts.length, Number(rerun));
+  }
+});
+
+test("main's completion refreshes once the label change has its receipt", async () => {
+  for (const [mutate, rerun] of [
+    [() => {}, true],
+    [(f) => (f.receipt.created_at = "2026-09-01T09:59:59Z"), false],
+    [(f) => f.events.pop(), false],
+    [(f) => (f.run.event = "merge_group"), false],
+    [(f) => (f.pr.head.sha = "newer"), false],
+    [(f) => (f.pr.base.ref = "release"), false],
+  ]) {
+    const f = refreshFixture();
+    mutate(f);
+    assert.equal(Boolean(await f.policy.completed(f.run)), rerun);
+    assert.equal(f.posts.length, Number(rerun));
   }
 });
 
 test("green approval receipts cannot authorize screenshot regeneration", async () => {
   for (const action of ["opened", "reopened", "synchronize", "unlabeled"]) {
-    const f = reviewFixture();
-    await f.policy.labelEvent({ ...f.labelEvent, action, label: { name: LABEL } });
+    const f = refreshFixture();
+    await f.policy.labelEvent(labeled(f.pr, action));
     const receipt = f.posts[0][1];
     assert.equal(receipt.state, "success");
     const proof = fixture();
@@ -277,54 +288,40 @@ test("green approval receipts cannot authorize screenshot regeneration", async (
   }
 });
 
-test("a new PR head stops an older approval run from attaching evidence", async () => {
-  const f = reviewFixture();
-  const request = f.github.request;
-  let reads = 0;
-  f.github.request = async (path) => {
-    if (path.startsWith("pulls/") && ++reads > 1) return { ...f.pr, head: { ...f.pr.head, sha: "new-head" } };
-    return request(path);
-  };
-  assert.equal(await f.policy.labelEvent(f.labelEvent), undefined);
-  assert.equal(f.posts.length, 1);
-});
-
-test("approval waits when the main run has not appeared yet", async () => {
-  const f = reviewFixture();
-  const request = f.github.request;
-  let listings = 0;
-  f.github.request = async (path) => {
-    if (path.includes("workflows/") && listings++ === 0) return { workflow_runs: [] };
-    return request(path);
-  };
-  assert.equal((await f.policy.labelEvent(f.labelEvent)).artifact.id, 9);
-});
-
-test("approval CLI exposes the exact report for native artifact transfer and reviewer navigation", (t) => {
-  const f = reviewFixture(),
-    ws = workspace(t);
-  ws.write("event.json", JSON.stringify(f.labelEvent));
-  const stub = ws.write(
-    "github.mjs",
+test("approval CLI links the browser rerun from either trigger", (t) => {
+  const f = refreshFixture();
+  for (const [name, payload] of [
+    ["pull_request_target", labeled(f.pr)],
+    ["workflow_run", { workflow_run: f.run }],
+  ]) {
+    const ws = workspace(t);
+    ws.write("event.json", JSON.stringify(payload));
+    const stub = ws.write(
+      "github.mjs",
+      `
+      const pr = ${JSON.stringify(f.pr)}, run = ${JSON.stringify(f.run)}, browser = ${JSON.stringify(f.browser)};
+      const events = ${JSON.stringify(f.events)}, statuses = ${JSON.stringify(f.statuses)};
+      globalThis.fetch = async (url, options) => new Response(JSON.stringify(
+        options.method === 'POST' ? {} :
+        url.includes('/pulls/') ? pr :
+        url.includes('/pulls?') ? [pr] :
+        url.includes('/events') ? events :
+        url.includes('/statuses') ? statuses :
+        url.includes('/collaborators/') ? {permission: 'write'} :
+        url.includes('/workflows/') ? {workflow_runs: [run]} :
+        url.includes('/jobs?') ? {jobs: [browser]} : run
+      ));
     `
-    const pr = ${JSON.stringify(f.pr)}, run = ${JSON.stringify(f.run)}, artifact = ${JSON.stringify(f.artifact)};
-    globalThis.fetch = async (url, options) => new Response(JSON.stringify(
-      options.method === 'POST' ? {} : url.includes('/pulls/') ? pr :
-      url.includes('/workflows/') ? {workflow_runs: [run]} :
-      url.includes('/artifacts?') ? {artifacts: [artifact], total_count: 1} : run
-    ));
-  `
-  );
-  succeeds(
-    ws.run(process.execPath, ["--import", stub, `${root}node-actions/test-playwright/drive/policy.mjs`, "label"], {
-      GITHUB_REPOSITORY: "example/studio",
-      GITHUB_EVENT_PATH: `${ws.cwd}/event.json`,
-      GITHUB_RUN_ID: "41",
-      GITHUB_RUN_ATTEMPT: "1",
-    })
-  );
-  assert.equal(ws.read("output"), "run_id=42\nartifact_id=9\n");
-  assert.match(ws.read("summary"), /Artifacts/);
-  assert.match(ws.read("summary"), /Old \/ New \/ Diff/);
-  assert.match(ws.read("summary"), /actions\/runs\/42\/attempts\/2/);
+    );
+    succeeds(
+      ws.run(process.execPath, ["--import", stub, `${root}node-actions/test-playwright/drive/policy.mjs`, "label"], {
+        GITHUB_REPOSITORY: "example/studio",
+        GITHUB_EVENT_NAME: name,
+        GITHUB_EVENT_PATH: `${ws.cwd}/event.json`,
+        GITHUB_RUN_ID: "41",
+        GITHUB_RUN_ATTEMPT: "1",
+      })
+    );
+    assert.match(ws.read("summary"), /\(https:\/\/github\.com\/example\/studio\/actions\/runs\/42\) reruns/);
+  }
 });

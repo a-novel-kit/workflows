@@ -84,7 +84,7 @@ SemVer release.
 | `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
-| `approve-playwright`     | Bind screenshot approval to the PR head, refresh browser checks and attach pending drift reviews to this run.     |
+| `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.               |
 | `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.            |
 | `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                           |
@@ -156,10 +156,11 @@ The complete Playwright report, including drift, stays in the Drive archive. Aft
 open `playwright-report/` with `pnpm exec playwright show-report`; an approved regeneration also keeps
 the original failing report under `.visual/comparison-report/`. Drive previews files but does not host
 the interactive HTML report. Existing Drive configuration and batch cleanup need no changes.
-`generic-actions/approve-playwright` waits for the matching main run and copies its current drift
-report into the visual approval run's **Artifacts** section. Both runs retain the small HTML review
-for three days; expired reports and reports from earlier attempts are excluded. Label approval still
-belongs to the reviewed PR head, and approved label events retain the existing rerun behavior.
+`generic-actions/approve-playwright` records label approval for the reviewed PR head without waiting
+on main. When the label changes after the head's main run started, it reruns that run's
+`test-browser` job once the run completes: at once if it already has, otherwise from the caller's
+`workflow_run` trigger on main. Reviewers reach the drift review through the `visual-comparison`
+check, which links main's run summary. See the [upgrade guide](./docs/migrations/v1.44.0.md).
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).
