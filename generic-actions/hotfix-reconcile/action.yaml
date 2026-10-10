@@ -171,7 +171,7 @@ runs:
           # listed in the draft.
           git -C "$dir" add -A
           git -C "$dir" commit --quiet --allow-empty --no-edit \
-            -m "hotfix reconcile v${LINE} (INCOMPLETE — resolve/finish before merge)" \
+            -m "fix(hotfix): reconcile v${LINE} (incomplete, resolve before merge)" \
             -m "cherry-pick -x ${BASELINE}..${FIX_HEAD} stopped on: ${conflict_paths:-<already-applied / empty>}"
           git -C "$dir" cherry-pick --quit >/dev/null 2>&1 || true
         fi
@@ -189,13 +189,13 @@ runs:
           body=$(printf 'Forward-ports the **v%s** hotfix fix diff to `%s`, but `git cherry-pick -x %s..%s` did not complete cleanly — whatever applied is committed as-is on this branch (conflict markers where paths conflicted: %s), and the rest of the range was NOT applied.\n\n**Resolve by hand:** check out `%s`, finish porting every commit in the range below (resolving any `<<<<<<<` markers), push, mark this PR ready, then squash-merge.\n\nCommits in the range:\n%s\n\nCloses #%s' \
             "$LINE" "$default_branch" "$BASELINE" "${FIX_HEAD:0:12}" "${conflict_paths:-—}" "$branch" "${range_commits:-—}" "$CLEANUP_TASK")
           pr_url=$(gh pr create --repo "$REPO" --base "$default_branch" --head "$branch" --draft \
-            --title "[CONFLICTS] hotfix reconcile v${LINE} → ${default_branch}" --body "$body")
+            --title "fix(hotfix): [CONFLICTS] reconcile v${LINE} into ${default_branch}" --body "$body")
           echo "::warning::reconcile CONFLICTED — opened DRAFT PR for manual resolution: ${pr_url}"
         else
           body=$(printf 'Forward-ports the **v%s** hotfix fix diff (range `%s..%s`, the fix only — never the bump) to `%s` via `git cherry-pick -x`.\n\nThis is the regression guard for the fix-on-tag hotfix: without it a later minor cut from `%s` would silently reintroduce the bug. Squash-merge when green.\n\nCloses #%s' \
             "$LINE" "$BASELINE" "${FIX_HEAD:0:12}" "$default_branch" "$default_branch" "$CLEANUP_TASK")
           pr_url=$(gh pr create --repo "$REPO" --base "$default_branch" --head "$branch" \
-            --title "hotfix reconcile v${LINE} → ${default_branch}" --body "$body")
+            --title "fix(hotfix): reconcile v${LINE} into ${default_branch}" --body "$body")
           echo "Opened reconcile PR: ${pr_url}" | tee -a "$GITHUB_STEP_SUMMARY"
         fi
         rm -rf "$dir"

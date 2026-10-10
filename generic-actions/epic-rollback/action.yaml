@@ -644,7 +644,11 @@ runs:
               detail="pre-merge SHA mismatch for ${r_sha:0:12} (parent ${actual_parent:0:12} != recorded ${r_pre:0:12})"
               break
             fi
-            if ! git -C "$dir" revert --no-edit "$r_sha" >/dev/null 2>&1; then
+            # The revert carries a Conventional subject, `revert: <reverted subject>`, so it
+            # passes a commit-message ruleset; git's default `Revert "…"` would not.
+            if ! git -C "$dir" revert --no-commit "$r_sha" >/dev/null 2>&1 \
+              || ! git -C "$dir" commit --quiet -m "revert: $(git -C "$dir" log -1 --format=%s "$r_sha")" \
+                -m "This reverts commit ${r_sha}."; then
               conflict=true
               detail="git-revert conflict on ${r_sha:0:12}; paths: $(git -C "$dir" diff --name-only --diff-filter=U | tr '\n' ' ')"
               git -C "$dir" revert --abort >/dev/null 2>&1 || true
@@ -659,16 +663,16 @@ runs:
             echo "::error::${repo}: ${detail}" | tee -a "$GITHUB_STEP_SUMMARY"
             git -C "$dir" reset --hard "origin/${base}" >/dev/null 2>&1
             git -C "$dir" commit --allow-empty --quiet \
-              -m "HELD rollback placeholder for epic:#${EPIC} (rollback #${M}) — DO NOT MERGE"
+              -m "revert: hold the epic:#${EPIC} rollback #${M} placeholder (do not merge)"
             if ! git -C "$dir" push --quiet -u origin "$branch" 2>/dev/null; then
               # A branch ruleset may reject an empty commit, so fall back to a one-file marker commit
               # and the held draft still exists to hold the wave.
               echo "::warning::${repo}: held-placeholder empty commit rejected (ruleset?) — retrying with a ${MARKER} marker commit."
               git -C "$dir" reset --hard "origin/${base}" >/dev/null 2>&1
-              printf 'HELD rollback placeholder for epic:#%s (rollback #%s) — DO NOT MERGE.\n\nThe automated revert for %s could not be produced:\n\n%s\n\nFinish by hand: reset to `%s`, `git revert --no-edit` %s newest-first, resolve conflicts, delete this file, push, mark the PR ready.\n' \
+              printf 'HELD rollback placeholder for epic:#%s (rollback #%s) — DO NOT MERGE.\n\nThe automated revert for %s could not be produced:\n\n%s\n\nFinish by hand: reset to `%s`, then for each of %s newest-first run `git revert --no-commit <squash>`, resolve conflicts and `git commit -m "revert: <reverted subject>"`; delete this file, push, mark the PR ready.\n' \
                 "$EPIC" "$M" "$repo" "$detail" "$base" "$sha_list" > "${dir}/${MARKER}"
               git -C "$dir" add "$MARKER"
-              git -C "$dir" commit --quiet -m "HELD rollback placeholder for epic:#${EPIC} (rollback #${M}) — DO NOT MERGE"
+              git -C "$dir" commit --quiet -m "revert: hold the epic:#${EPIC} rollback #${M} placeholder (do not merge)"
               if ! git -C "$dir" push --quiet -u origin "$branch" 2>/dev/null; then
                 echo "::error::could not push held placeholder for ${repo} (empty commit AND ${MARKER} marker both rejected)." | tee -a "$GITHUB_STEP_SUMMARY"
                 rm -rf "$dir"
@@ -676,10 +680,10 @@ runs:
                 exit 1
               fi
             fi
-            body=$(printf 'HELD — the automated revert for **%s** could not be produced:\n\n> %s\n\nThis is a DRAFT placeholder that keeps epic:#%s from landing partially (the merge-gate holds every sibling until this one is ready). Never auto-resolved.\n\n**Finish by hand:** reset this branch to `%s`, then for each commit below (NEWEST-FIRST) run `git revert --no-edit <squash>`, resolve conflicts, push, and mark this PR ready.\n\nCommits to revert: %s (originals: %s)\n\nRequested by @%s. Reason: %s' \
+            body=$(printf 'HELD — the automated revert for **%s** could not be produced:\n\n> %s\n\nThis is a DRAFT placeholder that keeps epic:#%s from landing partially (the merge-gate holds every sibling until this one is ready). Never auto-resolved.\n\n**Finish by hand:** reset this branch to `%s`, then for each commit below (NEWEST-FIRST) run `git revert --no-commit <squash>`, resolve conflicts, `git commit -m "revert: <reverted subject>"`, push, retitle this PR without `[HELD]`, and mark it ready.\n\nCommits to revert: %s (originals: %s)\n\nRequested by @%s. Reason: %s' \
               "$repo" "$detail" "$M" "$base" "$sha_list" "$orig_list" "$ACTOR" "$REASON")
             if ! pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
-              --draft --title "[HELD] Revert epic:#${EPIC} — ${repo} (rollback #${M})" --body "$body"); then
+              --draft --title "revert: [HELD] roll back epic:#${EPIC} in ${repo} (rollback #${M})" --body "$body"); then
               echo "::error::could not open the HELD draft revert PR for ${repo}." | tee -a "$GITHUB_STEP_SUMMARY"
               rm -rf "$dir"
               orphan_summary
@@ -697,7 +701,7 @@ runs:
             body=$(printf 'Reverts the landed epic:#%s changes in **%s** (newest-first): %s.\n\nOriginals: %s. Part of rollback epic #%s. Each revert is a new forward commit — the originals stay merged in history.\n\nRequested by @%s. Reason: %s' \
               "$EPIC" "$repo" "$sha_list" "$orig_list" "$M" "$ACTOR" "$REASON")
             if ! pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
-              --title "Revert epic:#${EPIC} — ${repo} (rollback #${M})" --body "$body"); then
+              --title "revert: roll back epic:#${EPIC} in ${repo} (rollback #${M})" --body "$body"); then
               echo "::error::could not open the revert PR for ${repo}." | tee -a "$GITHUB_STEP_SUMMARY"
               rm -rf "$dir"
               orphan_summary
