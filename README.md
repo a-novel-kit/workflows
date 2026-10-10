@@ -159,8 +159,10 @@ the interactive HTML report. Existing Drive configuration and batch cleanup need
 `generic-actions/approve-playwright` records label approval for the reviewed PR head without waiting
 on main. When the label changes after the head's main run started, it reruns that run's
 `test-browser` job once the run completes: at once if it already has, otherwise from the caller's
-`workflow_run` trigger on main. Reviewers reach the drift review through the `visual-comparison`
-check, which links main's run summary. See the [upgrade guide](./docs/migrations/v1.44.0.md).
+`workflow_run` trigger on main. While screenshot changes await approval, the failing
+`visual-comparison` check names the `allow-screenshot-change` label and links the drift review
+directly; rerun `test-browser` once the page expires. Any other failure links main's run. See the
+[upgrade guide](./docs/migrations/v1.44.0.md).
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).

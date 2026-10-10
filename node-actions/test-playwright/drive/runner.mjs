@@ -131,7 +131,11 @@ export async function compare(script, { approved = false, seed = false } = {}) {
   if (seed) {
     if (code) throw new Failure("Initial screenshot capture failed");
   } else if (changed) {
-    if (!approved) throw new Failure("Screenshot changes require approval for the current PR head");
+    if (!approved) {
+      // Only this failure is waiting on a reviewer, so only it asks for the label.
+      if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, "approval=required\n");
+      throw new Failure("Screenshot changes require approval for the current PR head");
+    }
     for (const [source, target] of [
       ["playwright-report", ".visual/comparison-report"],
       ["test-results", ".visual/comparison-results"],
