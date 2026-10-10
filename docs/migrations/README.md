@@ -4,6 +4,8 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.43.0](./v1.43.0.md) | Hotfixes become backport pull requests into `release/vX.Y` lines; merging one cuts the patch.                             |
+| [v1.40.0](./v1.40.0.md) | Shared translation gate for platforms with translation catalogs.                                                          |
 | [v1.38.0](./v1.38.0.md) | Protobuf regeneration becomes an opt-in Renovate preset for `buf.mod` repositories.                                       |
 | [v1.37.0](./v1.37.0.md) | Removes four uncalled actions; per-action caches seed once after adopting.                                                |
 | [v1.33.0](./v1.33.0.md) | Optional private Drive storage, native screenshot comparisons and reviewed visual updates.                                |
