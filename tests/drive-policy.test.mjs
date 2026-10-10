@@ -239,6 +239,26 @@ test("PR pushes record the receipt without waiting on main", async () => {
   }
 });
 
+test("a push removes the label that approved an earlier head", async () => {
+  for (const [labels, revoked] of [
+    [[{ name: LABEL }], true],
+    [[{ name: "good first issue" }], false],
+  ]) {
+    const f = refreshFixture();
+    f.pr.labels = labels;
+    const deletes = [];
+    const request = f.github.request;
+    f.github.request = async (path, options) => {
+      if (options?.method === "DELETE") deletes.push([path, options.missing]);
+      return request(path, options);
+    };
+    const result = await f.policy.labelEvent({ action: "synchronize", number: 1, pull_request: f.pr });
+    assert.deepEqual(result, revoked ? { approved: false, revoked: true } : { approved: false });
+    assert.deepEqual(deletes, revoked ? [[`issues/1/labels/${LABEL}`, true]] : []);
+    assert.equal(f.posts[0][1].description, "No approval recorded; screenshot changes remain blocked");
+  }
+});
+
 test("refresh reruns only a finished run that began before the label change", async () => {
   for (const [mutate, rerun] of [
     [() => {}, true],

@@ -200,7 +200,15 @@ export class Policy {
       approved ? "Approved current PR head" : "No approval recorded; screenshot changes remain blocked",
       this.target()
     );
-    if (!["labeled", "unlabeled"].includes(action)) return { approved };
+    if (!["labeled", "unlabeled"].includes(action)) {
+      // The label approved an earlier head, so a push drops it; adding it again approves this one.
+      if (action !== "synchronize" || !pr.labels?.some((label) => label.name === LABEL)) return { approved };
+      await this.github.request(`issues/${pr.number}/labels/${encodeURIComponent(LABEL)}`, {
+        method: "DELETE",
+        missing: true,
+      });
+      return { approved, revoked: true };
+    }
     // The rerun checks this receipt only after its setup, by which time this job has succeeded.
     return { approved, rerun: await this.refresh(pr, await this.latestLabel(pr)) };
   }
@@ -267,6 +275,10 @@ async function main() {
         review.approved
           ? "Screenshot changes are approved for this commit."
           : "No screenshot approval is recorded for this commit. The `visual-comparison` check links any drift review."
+      );
+    if (review?.revoked)
+      lines.push(
+        `Removed the \`${LABEL}\` label, which approved an earlier commit. Add it again once this commit's screenshots are reviewed.`
       );
     if (review?.rerun)
       lines.push(

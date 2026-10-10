@@ -157,12 +157,13 @@ open `playwright-report/` with `pnpm exec playwright show-report`; an approved r
 the original failing report under `.visual/comparison-report/`. Drive previews files but does not host
 the interactive HTML report. Existing Drive configuration and batch cleanup need no changes.
 `generic-actions/approve-playwright` records label approval for the reviewed PR head without waiting
-on main. When the label changes after the head's main run started, it reruns that run's
+on main. A push removes the label, since it approved an earlier head; add it again after reviewing
+the new one. When the label changes after the head's main run started, it reruns that run's
 `test-browser` job once the run completes: at once if it already has, otherwise from the caller's
 `workflow_run` trigger on main. While screenshot changes await approval, the failing
 `visual-comparison` check names the `allow-screenshot-change` label and links the drift review
 directly; rerun `test-browser` once the page expires. Any other failure links main's run. See the
-[upgrade guide](./docs/migrations/v1.44.0.md).
+[upgrade guides](./docs/migrations/v1.44.0.md) and [v1.46.0](./docs/migrations/v1.46.0.md).
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).

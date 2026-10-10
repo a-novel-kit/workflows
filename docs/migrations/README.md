@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.46.0](./v1.46.0.md) | `approve-playwright` removes `allow-screenshot-change` on a push; its job needs `pull-requests: write`.                   |
 | [v1.45.0](./v1.45.0.md) | Removes the reconcile hotfix path (`hotfix-run`, `hotfix-reconcile`) that backports replaced.                             |
 | [v1.44.0](./v1.44.0.md) | `approve-playwright` records the approval without waiting on main CI.                                                     |
 | [v1.43.0](./v1.43.0.md) | Hotfixes become backport pull requests into `release/vX.Y` lines; merging one cuts the patch.                             |
