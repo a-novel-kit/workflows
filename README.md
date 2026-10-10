@@ -76,7 +76,7 @@ SemVer release.
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                               |
 | `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
-| `approve-translations`   | Revoke translation approval labels after a catalog change and rerun the translation check on label changes.       |
+| `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                 |
 | `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
 | `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
 | `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
@@ -157,12 +157,13 @@ open `playwright-report/` with `pnpm exec playwright show-report`; an approved r
 the original failing report under `.visual/comparison-report/`. Drive previews files but does not host
 the interactive HTML report. Existing Drive configuration and batch cleanup need no changes.
 `generic-actions/approve-playwright` records label approval for the reviewed PR head without waiting
-on main. When the label changes after the head's main run started, it reruns that run's
+on main. A push removes the label, since it approved an earlier head; add it again after reviewing
+the new one. When the label changes after the head's main run started, it reruns that run's
 `test-browser` job once the run completes: at once if it already has, otherwise from the caller's
 `workflow_run` trigger on main. While screenshot changes await approval, the failing
 `visual-comparison` check names the `allow-screenshot-change` label and links the drift review
 directly; rerun `test-browser` once the page expires. Any other failure links main's run. See the
-[upgrade guide](./docs/migrations/v1.44.0.md).
+[upgrade guides](./docs/migrations/v1.44.0.md) and [v1.46.0](./docs/migrations/v1.46.0.md).
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).
@@ -176,7 +177,7 @@ last two against the merge base with the default branch. The `allow-incomplete-t
 `allow-translation-drift` labels accept gaps and drift; a merge group checks structure only. Skip the
 job on the default branch. A trusted `pull_request_target` caller runs
 `generic-actions/approve-translations`, which reruns the check when a label changes and removes both
-labels when a push changes a catalog. See the [adoption guide](./docs/migrations/v1.40.0.md).
+labels when a push reaches the PR. See the [adoption guide](./docs/migrations/v1.40.0.md).
 
 ### `security-actions`
 

@@ -1,10 +1,10 @@
 name: approve playwright
-description: Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.
+description: Bind screenshot approval to the PR head, remove the label a push made stale, and rerun the browser check that a label change left stale.
 
 inputs:
   github_token:
     required: true
-    description: Token with Actions and statuses write plus contents and pull requests read; use only from trusted pull_request_target or workflow_run code.
+    description: Token with Actions, statuses and pull requests write plus contents read; use only from trusted pull_request_target or workflow_run code.
 
 runs:
   using: composite

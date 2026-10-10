@@ -12,10 +12,7 @@ import * as fs from 'node:fs';
 const args = process.argv.slice(2);
 fs.appendFileSync('calls', JSON.stringify(['gh', ...args]) + '\\n');
 const [command, sub] = args;
-if (command === 'api') {
-  if (process.env.COMPARE_FAIL) process.exit(1);
-  console.log(process.env.COMPARE_FILES ?? '');
-} else if (command === 'pr' && sub === 'list') {
+if (command === 'pr' && sub === 'list') {
   console.log(process.env.PR_LABELS ?? '[]');
 } else if (command === 'run' && sub === 'list') {
   const statuses = (process.env.RUN_STATUSES ?? '').split(',');
@@ -101,22 +98,19 @@ test("gaps and drift receive the merge base reference", (t) => {
   }
 });
 
-test("a push that changes a catalog revokes every held approval label", (t) => {
+test("a push revokes every held approval label and leaves the others alone", (t) => {
   const w = translations(t);
-  const env = {
-    GITHUB_REPOSITORY: "a-novel/platform",
-    PR: "12",
-    BEFORE: "aaa",
-    AFTER: "bbb",
-    CATALOGS: "src/lib/i18n/locales/",
-    LABELS: '["allow-incomplete-translations","good first issue","allow-translation-drift"]',
-    COMPARE_FILES: "src/routes/page.svelte\nsrc/lib/i18n/locales/fr/common.yaml",
-  };
+  const env = { GITHUB_REPOSITORY: "a-novel/platform", PR: "12" };
 
-  succeeds(w.bash(step(approve, "revoke"), env));
+  succeeds(
+    w.bash(step(approve, "revoke"), {
+      ...env,
+      LABELS: '["allow-incomplete-translations","good first issue","allow-translation-drift"]',
+    })
+  );
   assert.equal(w.read("output"), "revoked=true\n");
   assert.deepEqual(
-    calls(w).filter(([, command]) => command === "pr"),
+    calls(w),
     ["allow-incomplete-translations", "allow-translation-drift"].map((label) => [
       "gh",
       "pr",
@@ -128,41 +122,12 @@ test("a push that changes a catalog revokes every held approval label", (t) => {
       label,
     ])
   );
-});
-
-test("approval labels survive a push that leaves the catalogs alone", (t) => {
-  const w = translations(t);
-  succeeds(
-    w.bash(step(approve, "revoke"), {
-      GITHUB_REPOSITORY: "a-novel/platform",
-      PR: "12",
-      BEFORE: "aaa",
-      AFTER: "bbb",
-      CATALOGS: "src/lib/i18n/locales/",
-      LABELS: '["allow-translation-drift"]',
-      COMPARE_FILES: "src/lib/i18n/locales.ts\nsrc/routes/page.svelte",
-    })
-  );
-  assert.equal(calls(w).length, 1);
-  assert.throws(() => w.read("output"));
-});
-
-test("an unreadable push revokes, and a PR without approval labels is left alone", (t) => {
-  const w = translations(t);
-  const env = {
-    GITHUB_REPOSITORY: "a-novel/platform",
-    PR: "12",
-    BEFORE: "aaa",
-    AFTER: "bbb",
-    CATALOGS: "src/lib/i18n/locales/",
-  };
-
-  succeeds(w.bash(step(approve, "revoke"), { ...env, LABELS: '["allow-translation-drift"]', COMPARE_FAIL: "1" }));
-  assert.equal(w.read("output"), "revoked=true\n");
 
   w.write("calls", "");
+  w.write("output", "");
   succeeds(w.bash(step(approve, "revoke"), { ...env, LABELS: '["good first issue"]' }));
   assert.equal(w.read("calls"), "");
+  assert.equal(w.read("output"), "");
 });
 
 test("the rerun waits for the head's run, then reruns only the translation job", (t) => {
