@@ -188,6 +188,40 @@ test("watchdog pages a missing or silent fail-safe but fails the scan on an unre
   }
 });
 
+test("watchdog escalates a backport left open into a release line past the threshold", (t) => {
+  const w = workspace(t);
+  w.stub(
+    "gh",
+    `
+    const args = process.argv.slice(2);
+    const checks = ['merge-gate', 'epic-freeze'].map((name) => ({ __typename: 'CheckRun', name, status: 'COMPLETED' }));
+    const pr = (number, baseRefName, hours) => ({
+      number, url: 'https://github.com/a-novel-kit/example/pull/' + number, baseRefName,
+      createdAt: new Date(Date.now() - hours * 3_600_000).toISOString(), repository: { nameWithOwner: 'a-novel-kit/example' },
+      commits: { nodes: [{ commit: { committedDate: new Date().toISOString(), statusCheckRollup: { contexts: { nodes: checks } } } }] },
+    });
+    if (args[1] === 'graphql')
+      console.log(JSON.stringify({ data: { search: { pageInfo: { hasNextPage: false },
+        nodes: [pr(1, 'release/v1.4', 30), pr(2, 'release/v1.4', 2), pr(3, 'master', 30)] } } }));
+    else if (args[0] === 'api') console.log('example');
+    else console.log('[]');
+  `
+  );
+  const env = {
+    ORG: "a-novel-kit",
+    REPO: "a-novel-kit/.github",
+    STALE_MIN: "30",
+    STUCK_MIN: "60",
+    BACKPORT_HOURS: "24",
+  };
+  succeeds(w.bash(step(".github/workflows/watchdog.yaml", "scan"), env));
+  const findings = JSON.parse(w.read("output").match(/^findings=(.*)$/m)[1]);
+  assert.deepEqual(
+    findings.map((finding) => [finding.severity, finding.dedup_key]),
+    [["sev2", "stale-backport:a-novel-kit/example:1"]]
+  );
+});
+
 test("append-only gate checks real history, validates the base and honors only the configured override", (t) => {
   const w = workspace(t);
   const git = (...args) => succeeds(w.run("git", args));

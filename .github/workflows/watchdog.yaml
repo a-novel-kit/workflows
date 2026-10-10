@@ -5,9 +5,11 @@
 # or a hotfix run hung holding its lock. This scheduled sweep notices those and escalates each, so a
 # stuck automation surfaces to a human.
 #
-# Two detections, org-wide:
+# Three detections, org-wide:
 #   - stale check: an open PR whose required merge-gate / epic-freeze check has had no terminal
 #     conclusion for longer than the threshold (the check never posted, or is stuck pending).
+#   - stale backport: a pull request into a release line (release/*) open longer than the
+#     threshold. A backport carries a hotfix, so leaving it open leaves the release unpatched.
 #   - stuck hotfix: a hotfix.yaml run in_progress longer than the threshold, a hung step holding the
 #     per-repo hotfix lock and blocking further hotfixes there.
 # Each finding fans out to the escalate action, one deduped ticket per condition. The schedule and
@@ -35,6 +37,11 @@ on:
         type: string
         default: "60"
         description: A hotfix run in_progress longer than this (minutes) is a stuck lock.
+      stale_backport_hours:
+        required: false
+        type: string
+        default: "24"
+        description: A pull request into a release line (release/*) open longer than this (hours) is stale.
       heartbeat_workflows:
         required: false
         type: string
@@ -85,7 +92,7 @@ jobs:
           permission-issues: read
           permission-pull-requests: read
           permission-actions: read
-      - name: Scan for stale checks + stuck hotfix runs
+      - name: Scan for stale checks, stale backports + stuck hotfix runs
         id: scan
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -93,6 +100,7 @@ jobs:
           REPO: ${{ github.repository }}
           STALE_MIN: ${{ inputs.stale_check_minutes }}
           STUCK_MIN: ${{ inputs.stuck_run_minutes }}
+          BACKPORT_HOURS: ${{ inputs.stale_backport_hours }}
           HEARTBEAT_WORKFLOWS: ${{ inputs.heartbeat_workflows }}
           HEARTBEAT_MAX: ${{ inputs.heartbeat_max_minutes }}
         run: |
@@ -110,7 +118,7 @@ jobs:
           # outage or a dropped event, and the PR is blocked with no self-heal.
           q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:50, after:$cursor){
             pageInfo{ hasNextPage endCursor }
-            nodes{ ... on PullRequest{ number url repository{ nameWithOwner }
+            nodes{ ... on PullRequest{ number url baseRefName createdAt repository{ nameWithOwner }
               commits(last:1){ nodes{ commit{ committedDate
                 statusCheckRollup{ contexts(first:40){ nodes{
                   __typename ... on CheckRun{ name status } } } } } } } } } } }'
@@ -124,6 +132,16 @@ jobs:
               repo=$(printf '%s' "$pr" | jq -r '.repository.nameWithOwner')
               num=$(printf '%s' "$pr" | jq -r '.number')
               url=$(printf '%s' "$pr" | jq -r '.url')
+              # ---- Stale backports: the same sweep, keyed on the PR's age rather than its head's.
+              base=$(printf '%s' "$pr" | jq -r '.baseRefName')
+              if [[ "$base" == release/* ]]; then
+                opened=$(printf '%s' "$pr" | jq -r '.createdAt')
+                if [ $(( now - $(date -u -d "$opened" +%s) )) -ge $(( BACKPORT_HOURS * 3600 )) ]; then
+                  add sev2 "Stale backport ${repo}#${num} into ${base}" \
+                    "stale-backport:${repo}:${num}" "$repo" \
+                    "${url} has been open into \`${base}\` for >${BACKPORT_HOURS}h. A backport carries a hotfix, so the release line stays unpatched until it merges. Review and merge it, or close it if the line no longer needs the fix."
+                fi
+              fi
               committed=$(printf '%s' "$pr" | jq -r '.commits.nodes[0].commit.committedDate // empty')
               [ -n "$committed" ] || continue
               age=$(( now - $(date -u -d "$committed" +%s) ))
