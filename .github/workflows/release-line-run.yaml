@@ -1,0 +1,153 @@
+name: release line (reusable)
+
+# The reusable release-line cut (workflow_call). Every governed repo's thin `hotfix.yaml` caller runs
+# it on a push to `release/**`, which a merged backport produces. It cuts the line's next patch from
+# the branch head behind the protected `release` environment, the human "who may publish" gate, and
+# pushes the bump commit to the line together with its tags, so the line's head is always its latest
+# patch. Nested actions are remote-pinned: a `./` path in a reusable workflow resolves against the
+# caller.
+#
+# A head that is already tagged has nothing to release. That covers the push that creates the line
+# from its baseline tag and the cut's own bump push, so the cut never triggers itself. The caller
+# serialises runs per line, and each run reads the line's current head rather than the pushed
+# commit, so two backports merged together cut one patch.
+on:
+  workflow_call:
+    inputs:
+      severity:
+        description: Escalation severity if the cut fails (sev2 / sev1)
+        required: false
+        type: string
+        default: sev2
+      dry_run:
+        description: When true, bump and report without committing, tagging, pushing or releasing
+        required: false
+        type: boolean
+        default: false
+      client_id:
+        description: The [Agent] bot App client id.
+        required: true
+        type: string
+      project_id:
+        description: Node id of the org "Tasks" board (PVT_…) — escalate drives the failure ticket's Status here.
+        required: true
+        type: string
+      mention:
+        description: Threaded to escalate as the SEV1/SEV2 @mention (e.g. vars.SEV1_MENTION).
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app_private_key:
+        description: The [Agent] bot App private key (PEM).
+        required: true
+      push_webhook:
+        description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
+        required: false
+
+jobs:
+  # Reads the line's state without the `release` environment, so a push with nothing to release never
+  # asks a human to approve.
+  pending:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      cut: ${{ steps.pending.outputs.cut }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Check for unreleased commits
+        id: pending
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Prints true when the line's current head carries no release tag of its own line.
+          line_pending() {
+            local branch="$1" line head
+            if ! printf '%s' "$branch" | grep -qE '^release/v[0-9]+\.[0-9]+$'; then
+              echo "::error::release lines are named release/vMAJOR.MINOR, got \"$branch\"." >&2
+              return 1
+            fi
+            line=${branch#release/v}
+            git fetch --quiet --tags origin "$branch"
+            head=$(git rev-parse "origin/$branch")
+            if git tag --points-at "$head" | grep -qE "^v${line//./\\.}\.[0-9]+$"; then
+              echo false
+            else
+              echo true
+            fi
+          }
+
+          cut=$(line_pending "$BRANCH")
+          echo "cut=$cut" >> "$GITHUB_OUTPUT"
+          if [ "$cut" = "false" ]; then
+            echo "\`$BRANCH\` head is already released; nothing to cut." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  cut:
+    needs: pending
+    if: needs.pending.outputs.cut == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      actions: read # the lock step reads in-flight release runs
+    steps:
+      # An asymmetric lock: wait out any in-flight release before cutting, so the two never
+      # interleave. Only the cut waits; the ordering is best-effort, and release-core-hotfix refuses a
+      # tag that already exists.
+      - name: Acquire lock (wait for in-flight release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1800))
+          while :; do
+            active=$(gh run list --repo "$REPO" --workflow release.yaml --limit 30 \
+              --json status --jq '[.[] | select(.status | IN("in_progress","queued"))] | length' 2>/dev/null || echo "err")
+            if [ "$active" = "0" ]; then
+              break
+            elif [ "$active" = "err" ]; then
+              echo "::warning::couldn't read in-flight release runs (gh error) — retrying in 30s."
+            else
+              echo "⏳ ${active} release run(s) actively in flight — waiting 30s before re-checking…"
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::a release has been actively in flight (or its status unreadable) > 30m — aborting the cut; retry once it completes."
+              exit 1
+            fi
+            sleep 30
+          done
+
+      - name: Cut the patch
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.42.2
+        with:
+          # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
+          cli_version: "1.7.5"
+          ref: ${{ github.ref_name }}
+          branch: ${{ github.ref_name }}
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.app_private_key }}
+          dry_run: ${{ inputs.dry_run }}
+
+      - name: Escalate on failure
+        if: ${{ failure() }}
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.42.2
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.app_private_key }}
+          project_id: ${{ inputs.project_id }}
+          severity: ${{ inputs.severity }}
+          summary: "release cut on ${{ github.ref_name }} failed"
+          dedup_key: "release-line-failed:${{ github.repository }}:${{ github.ref_name }}"
+          repo: ${{ github.repository }}
+          mention: ${{ inputs.mention }}
+          push_webhook: ${{ secrets.push_webhook }}
+          dry_run: ${{ inputs.dry_run }}
