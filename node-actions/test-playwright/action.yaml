@@ -223,6 +223,8 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
         GH_TOKEN: ${{ inputs.github_token }}
         VISUAL_OUTCOME: ${{ steps.journeys.outcome == 'success' && steps.drive-upload.outcome == 'success' && steps.drift-upload.outcome != 'failure' && 'success' || 'failure' }}
+        APPROVAL: ${{ steps.drive-upload.outcome == 'success' && steps.journeys.outputs.approval || '' }}
+        DRIFT_URL: ${{ steps.drift-upload.outputs.artifact-url }}
       run: |
         set -euo pipefail
         node "$ACTION_PATH/drive/policy.mjs" record

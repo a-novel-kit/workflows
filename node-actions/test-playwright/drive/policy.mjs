@@ -281,14 +281,19 @@ async function main() {
     await appendFile(env.GITHUB_ENV, `VISUAL_APPROVED=${allowed}\n`);
   } else if (mode === "record") {
     const success = env.VISUAL_OUTCOME === "success";
+    const pending = !success && env.APPROVAL === "required";
     const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
     const verdict = success ? JSON.parse(await readFile(".visual/verdict.json", "utf8")) : {};
     const description = success
       ? verdict.changed
         ? "approved"
         : `matched:${baseline}`
-      : "Visual tests or evidence upload failed";
-    await policy.status(env.GITHUB_SHA, COMPARISON, success ? "success" : "failure", description, policy.target());
+      : pending
+        ? `Screenshots changed: review the drift, then add the ${LABEL} label`
+        : "Visual tests or evidence upload failed";
+    // Only a successful comparison's run link serves as proof, so a pending one links its review.
+    const target = pending && env.DRIFT_URL ? env.DRIFT_URL : policy.target();
+    await policy.status(env.GITHUB_SHA, COMPARISON, success ? "success" : "failure", description, target);
   } else throw new Failure("Unknown approval operation");
 }
 

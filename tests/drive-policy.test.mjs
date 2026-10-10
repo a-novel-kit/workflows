@@ -325,3 +325,44 @@ test("approval CLI links the browser rerun from either trigger", (t) => {
     assert.match(ws.read("summary"), /\(https:\/\/github\.com\/example\/studio\/actions\/runs\/42\) reruns/);
   }
 });
+
+test("a comparison awaiting approval links its drift review and names the label", (t) => {
+  const run = "https://github.com/example/studio/actions/runs/42/attempts/1";
+  const review = "https://github.com/example/studio/actions/runs/42/artifacts/7";
+  for (const [approval, description, target] of [
+    ["required", `Screenshots changed: review the drift, then add the ${LABEL} label`, review],
+    ["", "Visual tests or evidence upload failed", run],
+  ]) {
+    const ws = workspace(t);
+    ws.write(".visual/context.json", JSON.stringify({ baseline: "base" }));
+    ws.write("event.json", "{}");
+    const stub = ws.write(
+      "github.mjs",
+      `
+      import { appendFileSync } from "node:fs";
+      globalThis.fetch = async (url, options) => {
+        if (options.method === "POST") appendFileSync(${JSON.stringify(`${ws.cwd}/posts`)}, options.body);
+        return new Response("{}");
+      };
+    `
+    );
+    succeeds(
+      ws.run(process.execPath, ["--import", stub, `${root}node-actions/test-playwright/drive/policy.mjs`, "record"], {
+        GITHUB_REPOSITORY: "example/studio",
+        GITHUB_EVENT_PATH: `${ws.cwd}/event.json`,
+        GITHUB_SHA: "head",
+        GITHUB_RUN_ID: "42",
+        GITHUB_RUN_ATTEMPT: "1",
+        VISUAL_OUTCOME: "failure",
+        APPROVAL: approval,
+        DRIFT_URL: review,
+      })
+    );
+    assert.deepEqual(JSON.parse(ws.read("posts")), {
+      context: COMPARISON,
+      state: "failure",
+      description,
+      target_url: target,
+    });
+  }
+});

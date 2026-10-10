@@ -16,7 +16,7 @@ test("native comparison, additions, approval and functional failure boundaries",
   t.after(() => rm(work, { recursive: true, force: true }));
   const script = `node ${root}/node_modules/playwright/cli.js test -c ${root}/tests/visual-fixture/playwright.config.mjs`;
   await writeFile(join(work, "package.json"), JSON.stringify({ private: true, scripts: { e2e: script } }));
-  async function run(expected, values = {}, drift = false) {
+  async function run(expected, values = {}, drift = false, approval = false) {
     for (const name of await readdir(join(work, ".visual")).catch(() => []))
       if (name.startsWith("comparison")) await rm(join(work, ".visual", name), { recursive: true, force: true });
     await writeFile(join(work, "output"), "");
@@ -32,7 +32,10 @@ test("native comparison, additions, approval and functional failure boundaries",
       encoding: "utf8",
     });
     assert.equal(result.status === 0, expected, result.stdout + result.stderr);
-    assert.equal(await readFile(join(work, "output"), "utf8"), `drift=${drift}\n`);
+    assert.equal(
+      await readFile(join(work, "output"), "utf8"),
+      `drift=${drift}\n${approval ? "approval=required\n" : ""}`
+    );
     assert.equal(existsSync(reviewPath), drift);
   }
   const snapshot = (name) => join(work, ".visual/snapshots/desktop", name);
@@ -45,7 +48,7 @@ test("native comparison, additions, approval and functional failure boundaries",
   await run(true, { VISUAL_SEED: "true" });
   const original = await readFile(snapshot("one.png"));
   await run(true);
-  await run(false, { PROBE_CHANGED: "true" }, true);
+  await run(false, { PROBE_CHANGED: "true" }, true, true);
   assert.deepEqual(await readFile(snapshot("one.png")), original);
   const differences = await images();
   assert.equal(differences.length, 6);
@@ -100,7 +103,7 @@ test("native comparison, additions, approval and functional failure boundaries",
   const report = JSON.parse(await readFile(join(work, ".visual/results.json")));
   assert.ok(report.tests.every((test) => test.status === "passed" && !test.errors.length));
   await rm(snapshot("three.png"));
-  await run(false, { PROBE_ADD: "true" }, true);
+  await run(false, { PROBE_ADD: "true" }, true, true);
   assert.equal((await images()).length, 6);
   assert.ok(!(await review()).includes("three"));
   await rm(snapshot("three.png"));
@@ -112,7 +115,7 @@ test("native comparison, additions, approval and functional failure boundaries",
   });
   await rm(join(work, ".visual"), { recursive: true, force: true });
   await run(true, { VISUAL_SEED: "true" });
-  await run(false, { PROBE_REMOVE: "true" }, true);
+  await run(false, { PROBE_REMOVE: "true" }, true, true);
   assert.match(await review(), /Removed screenshot/);
   const removed = (await images())[0];
   await run(true, { PROBE_REMOVE: "true", VISUAL_APPROVED: "true" }, true);
