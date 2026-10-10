@@ -3,6 +3,11 @@ name: auto-approve-dependabot (reusable)
 # The reusable auto-approve-dependabot engine (workflow_call). Every governed repo's thin
 # `auto-approve-dependabot.yaml` caller, provisioned by repocfg, calls this with its org creds. It
 # runs in the caller's context, approving and queueing that repo's trusted dependency-bot PRs.
+#
+# Approval is what lets a bot PR merge, so it also enforces Renovate's release-age gate: an update
+# younger than its minimumReleaseAge carries a pending `renovate/stability-days` status, which no
+# ruleset requires. The caller re-runs this on that status turning green, a `status` event with no
+# pull_request payload, so the job resolves the PR from the commit.
 on:
   workflow_call:
     inputs:
@@ -27,10 +32,12 @@ jobs:
   auto-approve:
     runs-on: ubuntu-latest
     if: >-
+      github.event_name == 'status' ||
       github.event.pull_request.user.login == inputs.dependency_bot_login ||
       github.event.pull_request.user.login == inputs.dependabot_security_login
-    # Every step runs on the minted App token, so the default token is unused.
-    permissions: {}
+    # The default token only reads commit statuses, which the App cannot; the rest uses the App.
+    permissions:
+      statuses: read
     steps:
       # Approve as the App: an identity distinct from the bot author, and one whose review
       # counts toward the required-approval rule, where a workflow's own token does not.
@@ -45,14 +52,41 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # A human push to the branch means the change needs real review, so this approves only when
-      # every commit is the bot's own. An unknown author counts as non-bot, failing closed.
-      - name: Confirm every commit is the bot's
-        id: guard
+      # A status event names only a commit: approve the open dependency-bot PR whose head it is.
+      - name: Resolve the pull request
+        id: pr
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          PR: ${{ github.event.pull_request.html_url }}
-          BOT: ${{ github.event.pull_request.user.login }}
+          EVENT_PR: ${{ github.event.pull_request.html_url }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha || github.event.sha }}
+          EVENT_AUTHOR: ${{ github.event.pull_request.user.login }}
+          RENOVATE: ${{ inputs.dependency_bot_login }}
+        run: |
+          set -euo pipefail
+          url="$EVENT_PR" author="$EVENT_AUTHOR"
+          if [ -z "$url" ]; then
+            read -r url author < <(gh api "repos/$GITHUB_REPOSITORY/commits/$EVENT_SHA/pulls" |
+              jq -r --arg sha "$EVENT_SHA" --arg bot "$RENOVATE" '[.[] | select(.state == "open" and .head.sha == $sha and .user.login == $bot)][0]
+                | "\(.html_url // "") \(.user.login // "")"')
+          fi
+          if [ -z "$url" ]; then
+            echo "::notice::No open dependency-bot PR has head ${EVENT_SHA:0:12}; nothing to approve."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          { echo "url=$url"; echo "author=$author"; echo "sha=$EVENT_SHA"; } >> "$GITHUB_OUTPUT"
+
+      # A human push to the branch means the change needs real review, so this approves only when
+      # every commit is the bot's own. An unknown author counts as non-bot, failing closed. An update
+      # still inside its release-age window waits: the green status re-runs this job.
+      - name: Confirm every commit is the bot's and the update has aged
+        id: guard
+        if: ${{ steps.pr.outputs.skip != 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          STATUS_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.url }}
+          BOT: ${{ steps.pr.outputs.author }}
+          SHA: ${{ steps.pr.outputs.sha }}
         run: |
           set -euo pipefail
           authors=$(gh pr view "$PR" --json commits \
@@ -60,13 +94,20 @@ jobs:
           if [ "$authors" != "$BOT" ]; then
             echo "::notice::Not auto-approving — commits by '${authors:-unknown}', expected only '$BOT'."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          age=$(GH_TOKEN="$STATUS_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/status" \
+            --jq '[.statuses[] | select(.context == "renovate/stability-days")][0].state // "none"')
+          if [ "$age" != none ] && [ "$age" != success ]; then
+            echo "::notice::Not auto-approving yet — renovate/stability-days is '$age'; its success re-runs this."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Approve
-        if: ${{ steps.guard.outputs.skip != 'true' }}
+        if: ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
         uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.42.2
         with:
-          pull_request: ${{ github.event.pull_request.html_url }}
+          pull_request: ${{ steps.pr.outputs.url }}
           github_token: ${{ steps.token.outputs.token }}
 
       # Put the approved PR in the merge queue so it merges hands-off. The queue re-validates the
@@ -74,8 +115,8 @@ jobs:
       # method and makes the command explicit in a repo with no queue. Where there is one, gh just
       # logs that the strategy is queue-controlled.
       - name: Enable auto-merge
-        if: ${{ steps.guard.outputs.skip != 'true' }}
+        if: ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          PR: ${{ github.event.pull_request.html_url }}
+          PR: ${{ steps.pr.outputs.url }}
         run: gh pr merge "$PR" --auto --squash
