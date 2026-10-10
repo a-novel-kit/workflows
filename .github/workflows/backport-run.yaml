@@ -171,9 +171,9 @@ jobs:
           # the fix's own subject. A conflict leaves nothing behind and appends the commands to write
           # the line's form of the fix by hand to $INSTRUCTIONS, the escalation ticket's body.
           backport_fix() {
-            local sha="$1" line="$2" base="release/v$2" subject title branch
+            local sha="$1" line="$2" base="release/v$2" subject branch
+            # The title reuses the fix's subject, which reached the default branch Conventional.
             subject=$(git log -1 --format=%s "$sha")
-            title="$subject [v$line]"
             # `git cherry` prints `-` for a commit whose patch is already on the line.
             if git cherry "origin/$base" "$sha" "${sha}^" | grep -q '^-'; then
               echo "${sha:0:12} is already on \`$base\`; nothing to backport." >> "$GITHUB_STEP_SUMMARY"
@@ -197,17 +197,17 @@ jobs:
               git switch --create $branch origin/$base
               git cherry-pick -x $sha   # resolve the conflicts against the released code
               git push --set-upstream origin $branch
-              gh pr create --base $base --title $(printf '%q' "$title")
+              gh pr create --base $base --title $(printf '%q' "$subject [v$line]")
 
           EOF
               return 1
             fi
             if [ "$DRY_RUN" = "true" ]; then
-              echo "[dry-run] would open \`$title\` from \`$branch\` into \`$base\`." >> "$GITHUB_STEP_SUMMARY"
+              echo "[dry-run] would open \`$subject [v$line]\` from \`$branch\` into \`$base\`." >> "$GITHUB_STEP_SUMMARY"
               return 0
             fi
             git push --quiet origin "HEAD:refs/heads/$branch"
-            gh pr create --base "$base" --head "$branch" --title "$title" \
+            gh pr create --base "$base" --head "$branch" --title "$subject [v$line]" \
               --body "Backports ${sha} from \`$DEFAULT_BRANCH\` to \`$base\`. Merging it cuts the next v${line} patch." \
               >> "$GITHUB_STEP_SUMMARY"
           }
