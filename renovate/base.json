@@ -75,9 +75,14 @@
       "minimumReleaseAge": "1 hour"
     },
     {
-      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to npm registry releases (what pnpm installs from pnpm-lock.yaml, workspaces and catalogs, plus workflow pins annotated with datasource=npm) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install, and an annotated pin moves with its package. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value (defined in nodelib-config).",
+      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to npm registry releases (what pnpm installs from pnpm-lock.yaml, workspaces and catalogs, plus workflow pins annotated with datasource=npm) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install, and an annotated pin moves with its package. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value, its built-in 1-day default.",
       "matchDatasources": ["npm"],
       "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "First-party releases skip both release-age gates. They come from the org's own release workflows behind the protected release environment, so waiting guards against nothing and only holds the fleet a release behind; none ships assets that finish publishing late. Each repo's pnpm-workspace.yaml exempts the same npm scopes from pnpm's own gate.",
+      "matchPackageNames": ["/^(@|github\\.com\\/|ghcr\\.io\\/)?a-novel(-kit)?\\//"],
+      "minimumReleaseAge": null
     },
     {
       "description": "Bump the main go directive, grouped with the golang base image. Tool modfiles keep their existing compatibility floor until a tool dependency requires a newer Go release.",
