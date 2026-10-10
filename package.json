@@ -10,7 +10,7 @@
     "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
-    "playwright": "1.63.0",
+    "playwright": "1.64.0",
     "prettier": "^3.6.2",
     "prettier-plugin-packagejson": "^3.0.0",
     "yaml": "2.9.1"
