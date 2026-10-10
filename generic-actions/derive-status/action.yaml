@@ -95,7 +95,7 @@ runs:
         q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
           pullRequest(number:$num){
             state isDraft reviewDecision
-            closingIssuesReferences(first:5){ nodes{ id number labels(first:20){ nodes{ name } } } } } } }'
+            closingIssuesReferences(first:5){ nodes{ id number } } } } }'
         # A missing or inaccessible PR makes the GraphQL call error; catch it here so the failure
         # surfaces as one clear message.
         if ! pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR"); then
@@ -120,28 +120,11 @@ runs:
         # Newline-separated for board-write, which takes several ids and writes the same field and
         # value to each. The fan-out lives there because a composite action cannot loop a `uses:` step.
         issue_ids=$(echo "$refs" | jq -r 'sort_by(.number) | .[].id')
-        # A hotfix cleanup Task carries `hotfix-reconcile`, which makes Done its terminal MERGED
-        # status. Collected across every closing issue, since one status covers all of them.
-        labelled=$(echo "$refs" | jq -c '[.[] | (.labels.nodes // []) | map(.name) | index("hotfix-reconcile") != null]')
 
         # A pure function of the PR's current state: the reconcile sweep re-runs it and has
         # to reach the same answer whatever event fired.
         case "$state" in
-          MERGED)
-            # A hotfix-reconcile cleanup Task is terminal on merge: the forward-port landed and a
-            # hotfix cuts its own tag off the reconcile's baseline, so nothing else ships it.
-            # One status covers every closing issue. A PR closing both a hotfix cleanup Task and an
-            # ordinary one has two terminal statuses and no way to choose, so it stops here.
-            hotfix_count=$(printf '%s' "$labelled" | jq '[.[] | select(.)] | length')
-            if [ "$hotfix_count" = "0" ]; then
-              status="Awaiting release"
-            elif [ "$hotfix_count" = "$ref_count" ]; then
-              status="Done"
-            else
-              echo "::error::PR #$PR closes both hotfix-reconcile and ordinary Tasks, which derive different terminal statuses. Split the PR so each lands with its own."
-              exit 1
-            fi
-            ;;
+          MERGED) status="Awaiting release" ;;
           CLOSED) status="Ready" ;; # closed unmerged → the attempt was abandoned; back to actionable
           OPEN)
             if [ "$draft" = "true" ]; then

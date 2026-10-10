@@ -10,15 +10,15 @@ function filter(source, variable) {
 
 test("status and reconcile selectors include every closing issue and label-only Epic member", () => {
   const derive = step("generic-actions/derive-status/action.yaml", "Compute Status + resolve the Task");
-  const ids = filter(derive, "issue_ids"),
-    labelled = filter(derive, "labelled");
-  const refs = [
-    { number: 11, id: "I11", labels: { nodes: [] } },
-    { number: 10, id: "I10", labels: { nodes: [{ name: "hotfix-reconcile" }] } },
-  ];
-  assert.equal(ids(refs), '"I10"\n"I11"');
+  const ids = filter(derive, "issue_ids");
+  assert.equal(
+    ids([
+      { number: 11, id: "I11" },
+      { number: 10, id: "I10" },
+    ]),
+    '"I10"\n"I11"'
+  );
   assert.equal(ids([]), "");
-  assert.deepEqual(JSON.parse(labelled(refs)), [false, true]);
   const nodes = [
     [true, true],
     [true, false],
