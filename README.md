@@ -76,7 +76,7 @@ SemVer release.
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                               |
 | `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
-| `approve-translations`   | Revoke translation approval labels after a catalog change and rerun the translation check on label changes.       |
+| `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                 |
 | `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
 | `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
 | `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
@@ -177,7 +177,7 @@ last two against the merge base with the default branch. The `allow-incomplete-t
 `allow-translation-drift` labels accept gaps and drift; a merge group checks structure only. Skip the
 job on the default branch. A trusted `pull_request_target` caller runs
 `generic-actions/approve-translations`, which reruns the check when a label changes and removes both
-labels when a push changes a catalog. See the [adoption guide](./docs/migrations/v1.40.0.md).
+labels when a push reaches the PR. See the [adoption guide](./docs/migrations/v1.40.0.md).
 
 ### `security-actions`
 
