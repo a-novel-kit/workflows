@@ -3,6 +3,7 @@
   "extends": ["config:recommended"],
   "prHourlyLimit": 0,
   "rebaseWhen": "behind-base-branch",
+  "semanticCommits": "enabled",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 5am"]
