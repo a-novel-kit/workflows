@@ -254,6 +254,57 @@ test("append-only gate checks real history, validates the base and honors only t
   assert.equal(w.bash(script, { ...env, EVENT_LABELS: '["unrelated"]' }).status, 1);
   assert.equal(w.bash(script, { ...env, BASE: "--output=injected" }).status, 1);
   assert.equal(w.bash(script, { ...env, BASE: "a".repeat(40) }).status, 1);
+
+  // A push's payload still carries the label added for the previous head, so it no longer bypasses.
+  const push = { ...env, EVENT_ACTION: "synchronize", EVENT_LABELS: '["override"]' };
+  assert.equal(w.bash(script, push).status, 1);
+});
+
+test("append-only gate removes an override that a push made stale", (t) => {
+  const w = workspace(t);
+  const git = (...args) => succeeds(w.run("git", args));
+  git("init", "-q");
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "test");
+  w.write("frozen/locked.txt", "locked\n");
+  git("add", "frozen");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  w.write("frozen/added.txt", "added\n");
+  git("add", "frozen");
+  git("commit", "-qm", "addition");
+  w.stub(
+    "gh",
+    `require("fs").appendFileSync("gh-calls", JSON.stringify(process.argv.slice(2)) + "\\n");
+    if (process.env.GH_FAIL) { console.error(process.env.GH_FAIL); process.exit(1); }`
+  );
+  const script = step("generic-actions/check-append-only/action.yaml", "Check append-only path");
+  const push = {
+    BASE: base,
+    PATH_TO_CHECK: "frozen",
+    OVERRIDE_LABEL: "append-only-override",
+    EVENT_LABELS: '["append-only-override"]',
+    EVENT_ACTION: "synchronize",
+    GITHUB_REPOSITORY: "a-novel/service",
+    PR: "7",
+  };
+
+  succeeds(w.bash(script, push));
+  assert.equal(existsSync(join(w.cwd, "gh-calls")), false);
+
+  succeeds(w.bash(script, { ...push, GH_TOKEN: "token" }));
+  assert.deepEqual(JSON.parse(w.read("gh-calls")), [
+    "api",
+    "--method",
+    "DELETE",
+    "repos/a-novel/service/issues/7/labels/append-only-override",
+    "--silent",
+  ]);
+
+  succeeds(w.bash(script, { ...push, GH_TOKEN: "token", GH_FAIL: "gh: Not Found (HTTP 404)" }));
+  const denied = w.bash(script, { ...push, GH_TOKEN: "token", GH_FAIL: "gh: Forbidden (HTTP 403)" });
+  assert.equal(denied.status, 1);
+  assert.match(denied.stdout, /failed to remove the "append-only-override" label/);
 });
 
 test("change detection preserves literal pathspecs and fails on unreadable repositories", (t) => {

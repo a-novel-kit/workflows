@@ -1,7 +1,8 @@
 name: check append-only
 description: >
   Allow new files under a path while rejecting changes to existing files. A visible PR label is the
-  deliberate override for bulk regeneration or another reviewed exception.
+  deliberate override for bulk regeneration or another reviewed exception. It approves the head it was
+  added on: a push is checked without it, and removes it when a token is given.
 
 inputs:
   path:
@@ -16,6 +17,12 @@ inputs:
     required: false
     default: append-only-override
     description: PR label that bypasses the check. Empty disables the override.
+  github_token:
+    required: false
+    default: ""
+    description: >
+      Token with pull requests write. With it, a push removes the override label so a reviewer can add
+      it again for the new head; without it, a push only ignores the label.
 
 runs:
   using: composite
@@ -27,6 +34,9 @@ runs:
         PATH_TO_CHECK: ${{ inputs.path }}
         OVERRIDE_LABEL: ${{ inputs.override_label }}
         EVENT_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        EVENT_ACTION: ${{ github.event.action }}
+        PR: ${{ github.event.pull_request.number }}
+        GH_TOKEN: ${{ inputs.github_token }}
       run: |
         set -euo pipefail
 
@@ -50,11 +60,29 @@ runs:
           [ "${#VIOLATIONS[@]}" -eq 0 ]
         }
 
+        revoke_override() {
+          [ -n "${GH_TOKEN:-}" ] || return 0
+          local label err
+          label=$(jq -rn --arg label "$OVERRIDE_LABEL" '$label | @uri')
+          if ! err=$(gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$label" --silent 2>&1); then
+            # Another append-only step in the same job may have removed it first.
+            [[ $err == *"HTTP 404"* ]] && return 0
+            printf '::error::failed to remove the "%s" label: %s\n' "$OVERRIDE_LABEL" "$err"
+            return 1
+          fi
+        }
+
         if has_override; then
-          printf '::warning::append-only check bypassed by label "%s"\n' "$OVERRIDE_LABEL"
-          printf '## Append-only check\n\nBypassed by `%s`.\n' "$OVERRIDE_LABEL" \
-            >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          if [ "${EVENT_ACTION:-}" != synchronize ]; then
+            printf '::warning::append-only check bypassed by label "%s"\n' "$OVERRIDE_LABEL"
+            printf '## Append-only check\n\nBypassed by `%s`.\n' "$OVERRIDE_LABEL" \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # A push's payload still carries the label added for the previous head.
+          printf '::notice::"%s" approved an earlier head, so this push is checked without it\n' \
+            "$OVERRIDE_LABEL"
+          revoke_override || exit 1
         fi
 
         if [ -z "${PATH_TO_CHECK:-}" ]; then
