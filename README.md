@@ -99,17 +99,25 @@ SemVer release.
 | `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
 
 `check-append-only` needs the full base history. It rejects every change except additions under
-the configured path; the `append-only-override` PR label is the reviewed escape hatch.
+the configured path; the `append-only-override` PR label is the reviewed escape hatch. The label
+approves the head it was added on: a push is checked without it, and removes it when the step gets a
+token, so a reviewer adds it again for the new head. See the [upgrade guide](./docs/migrations/v1.46.0.md).
 
 ```yaml
-- uses: actions/checkout@v6
-  with:
-    fetch-depth: 0
+check-migration-snapshots:
+  permissions:
+    contents: read
+    pull-requests: write
+  steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
 
-- uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.27.0
-  with:
-    path: internal/models/migrations
-    base: ${{ github.event.pull_request.base.sha }}
+    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.46.0
+      with:
+        path: internal/models/migrations
+        base: ${{ github.event.pull_request.base.sha }}
+        github_token: ${{ github.token }}
 ```
 
 ### `github-pages-actions`
@@ -163,7 +171,7 @@ the new one. When the label changes after the head's main run started, it reruns
 `workflow_run` trigger on main. While screenshot changes await approval, the failing
 `visual-comparison` check names the `allow-screenshot-change` label and links the drift review
 directly; rerun `test-browser` once the page expires. Any other failure links main's run. See the
-[upgrade guides](./docs/migrations/v1.44.0.md) and [v1.46.0](./docs/migrations/v1.46.0.md).
+[upgrade guides](./docs/migrations/v1.44.0.md) and [v1.45.3](./docs/migrations/v1.45.3.md).
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).
