@@ -139,7 +139,6 @@ jobs:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.7.5"
           ref: ${{ inputs.branch }}
-          branch: ${{ inputs.branch }}
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
           dry_run: ${{ inputs.dry_run }}

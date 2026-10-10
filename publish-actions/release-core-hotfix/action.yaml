@@ -4,15 +4,15 @@ description: >
   It reuses release-core's bump.mjs + plan.mjs UNCHANGED (the version math and tag plan are
   identical) but drops the three default-branch assumptions baked into release-core: the
   default-branch guard, the default-branch checkout, and the push-to-the-default-branch. Instead it
-  checks out a ref cut from a release TAG (carrying the fix on top of the baseline) and patch-bumps
-  to vX.Y.(Z+1). It pushes the tags, plus the bump commit when `branch` names a release line, so
+  checks out a release line, cut from a release TAG and carrying backported fixes, and
+  patch-bumps to vX.Y.(Z+1). It pushes the bump commit back to the line together with the tags, so
   the line's head stays its latest patch. The tag is created with --latest=false so a patch to an
   OLD line can't steal "Latest" from a newer release.
 
   Kept a SEPARATE action (not a flag on release-core) on purpose — blast-radius discipline: a change
   to the exception path must not be able to break the everyday release path. The bump is a plain
-  `patch` here (a hotfix is always a patch of its line); the reconcile-to-master, the ephemeral
-  branch lifecycle, the lock, and the human gate all live in the caller (hotfix.yaml).
+  `patch` here (a hotfix is always a patch of its line); the lock and the human gate live in the
+  caller (release-line-run.yaml).
 
 inputs:
   cli_version:
@@ -28,23 +28,17 @@ inputs:
   ref:
     required: true
     description: >
-      The ephemeral hotfix branch to cut from (e.g. hotfix/vX.Y.x), already carrying the fix on top
-      of the baseline release tag. bump.mjs derives the version from THIS ref's package.json, so it
-      must descend from a real release tag — hard-asserted below (the baseline vX.Y.Z tag must exist).
+      The release line to cut (release/vX.Y), carrying backported fixes on top of its latest
+      release tag. bump.mjs derives the version from the line's package.json, so it must descend
+      from a real release tag — hard-asserted below (the baseline vX.Y.Z tag must exist).
   client_id:
     required: true
     description: >
       [Agent] App client ID. Needs contents:write plus a tag-protection bypass, since the vX.Y.(Z+1)
-      tag is protected (v*), and, with `branch`, a bypass of the release line's branch protection.
+      tag is protected (v*), and a bypass of the release line's branch protection.
   app_private_key:
     required: true
     description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
-  branch:
-    required: false
-    default: ""
-    description: >
-      A release line (release/vX.Y) to push the bump commit to, together with the tags, so the
-      line's head stays its latest patch. Empty pushes the tags alone, for a disposable ref.
   dry_run:
     required: false
     default: "false"
@@ -146,7 +140,7 @@ runs:
         APP_SLUG: ${{ steps.token.outputs.app-slug }}
         DRY_RUN: ${{ inputs.dry_run }}
         STAMP_NEEDED: ${{ steps.stamp.outputs.needed }}
-        BRANCH: ${{ inputs.branch }}
+        BRANCH: ${{ inputs.ref }}
       run: |
         set -euo pipefail
 
@@ -216,8 +210,8 @@ runs:
           exit 0
         fi
 
-        # Commit the bump and push it with the tags, atomically. A release line receives the bump
-        # commit too; a disposable ref gets the tags alone, each pointing at the bump commit.
+        # Commit the bump and push it to the line with the tags, atomically, so the line never
+        # moves without its tag.
         git add -A
         git commit -m "chore(release): $version"
         tag_refs=()
@@ -227,9 +221,7 @@ runs:
           tag_refs+=("refs/tags/$t")
         done <<< "$tags"
 
-        branch_ref=()
-        [ -n "$BRANCH" ] && branch_ref=("HEAD:refs/heads/$BRANCH")
-        git push --atomic origin "${branch_ref[@]}" "${tag_refs[@]}"
+        git push --atomic origin "HEAD:refs/heads/$BRANCH" "${tag_refs[@]}"
 
         # --latest=false keeps a patch to an old line from becoming the repo's "Latest" release over
         # a newer version.

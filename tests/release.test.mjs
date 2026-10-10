@@ -88,10 +88,9 @@ require (
   assert.notEqual(w.run(process.execPath, [releaseScript("plan")], { GITHUB_REPOSITORY: "" }).status, 0);
 });
 
-test("release pushes are atomic, hotfixes push only a named release line, and dry runs publish nothing", (t) => {
+test("release pushes are atomic, hotfixes push their release line, and dry runs publish nothing", (t) => {
   for (const [action, pushed] of [
     ["release-core", "master"],
-    ["release-core-hotfix", ""],
     ["release-core-hotfix", "release/v1.2"],
   ]) {
     for (const outcome of ["success", "reject", "dry-run"]) {

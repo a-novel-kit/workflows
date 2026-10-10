@@ -6,9 +6,6 @@ on:
       - "**"
     branches:
       - "**"
-      # The ephemeral hotfix branches hotfix.yaml pushes and deletes, dry-run drills included, never
-      # become PRs, so there is nothing to lint on them.
-      - "!hotfix/**"
 
 # Cancel an in-progress lint run when a newer commit lands on the same ref, since the superseded
 # run's result is worthless. This workflow only lints, with no release or deploy work that has to

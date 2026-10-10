@@ -212,11 +212,11 @@ verbatim — so the required context would be one GitHub never posts, and the PR
 
 ### `publish-actions`
 
-| Action                | Purpose                                                                         |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `npm`                 | Publish the workspace packages to the GitHub registry.                          |
-| `release-core`        | Cut a release in CI: bump the version, tag, push, release.                      |
-| `release-core-hotfix` | Cut a patch from a release line or a ref off a release tag (patch, not-latest). |
+| Action                | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `npm`                 | Publish the workspace packages to the GitHub registry.           |
+| `release-core`        | Cut a release in CI: bump the version, tag, push, release.       |
+| `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line (patch, not-latest). |
 
 ### Reusable workflows
 

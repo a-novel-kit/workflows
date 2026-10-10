@@ -4,6 +4,8 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.45.0](./v1.45.0.md) | Removes the reconcile hotfix path (`hotfix-run`, `hotfix-reconcile`) that backports replaced.                             |
+| [v1.44.0](./v1.44.0.md) | `approve-playwright` records the approval without waiting on main CI.                                                     |
 | [v1.43.0](./v1.43.0.md) | Hotfixes become backport pull requests into `release/vX.Y` lines; merging one cuts the patch.                             |
 | [v1.40.0](./v1.40.0.md) | Shared translation gate for platforms with translation catalogs.                                                          |
 | [v1.38.0](./v1.38.0.md) | Protobuf regeneration becomes an opt-in Renovate preset for `buf.mod` repositories.                                       |
