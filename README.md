@@ -84,6 +84,7 @@ SemVer release.
 | `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
+| `discord-post`           | Post one Discord embed with a state-colored bar; pings only the ids passed in, never fails the job.               |
 | `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.               |
 | `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.            |
 | `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
