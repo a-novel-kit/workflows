@@ -1,0 +1,50 @@
+name: notify-release (reusable)
+
+# Announces each published release in Discord with its notes, as GitHub shows them. Every governed
+# repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on `release: published`.
+# release-core creates releases with an App token, so the event fires for them, hotfixes included.
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: When "true", write the message to the step summary instead of posting it.
+        required: false
+        type: string
+        default: "false"
+    secrets:
+      webhook:
+        description: Discord webhook of the org's releases channel (RELEASES_WEBHOOK). Empty skips the post.
+        required: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    permissions: {}
+    steps:
+      # GitHub renders a bare pull-request or compare URL as "#N" or "v1...v2"; Discord shows it
+      # whole. Only bare URLs are rewritten, so a link the author already wrote stays intact.
+      - name: Format the notes
+        id: notes
+        env:
+          BODY: ${{ github.event.release.body }}
+        run: |
+          set -euo pipefail
+          delimiter="EOF_$(openssl rand -hex 8)"
+          {
+            echo "description<<$delimiter"
+            printf '%s\n' "$BODY" | sed -E \
+              -e 's,(^|[[:space:]])(https://github\.com/[^/[:space:]]+/[^/[:space:]]+/pull/([0-9]+)),\1[#\3](\2),g' \
+              -e 's,(^|[[:space:]])(https://github\.com/[^/[:space:]]+/[^/[:space:]]+/compare/([^[:space:]]+)),\1[\3](\2),g'
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post to Discord
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.47.0
+        with:
+          webhook: ${{ secrets.webhook }}
+          color: released
+          title: ${{ github.event.release.name || format('{0} {1}', github.event.repository.name, github.event.release.tag_name) }}
+          url: ${{ github.event.release.html_url }}
+          description: ${{ steps.notes.outputs.description }}
+          dry_run: ${{ inputs.dry_run }}
