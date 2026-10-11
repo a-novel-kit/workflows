@@ -362,3 +362,44 @@ test("refresh-apko-locks summarizes each lock's package changes and stays quiet 
     assert.equal(w.read("output"), expected && `summary<<SUMMARY_END\n${expected}\nSUMMARY_END\n`, name);
   }
 });
+
+test("escalate pages Discord with push_mention and keeps the GitHub mention on the ticket", (t) => {
+  const w = workspace(t);
+  const path = "generic-actions/escalate/action.yaml";
+  const steps = manifest(path).runs.steps;
+  const inputs = {
+    severity: "sev1",
+    summary: "release cut failed",
+    dedup_key: "release-line-failed:a-novel/infra:release/v1",
+    planning_repo: "a-novel/.github",
+    mention: "@octocat",
+    push_mention: "<@&42>",
+    push_webhook: "https://discord.invalid/webhook",
+    dry_run: "true",
+  };
+  // Bind each step's env from the manifest, so the test covers which input reaches which step.
+  const bind = (id, outputs = {}) =>
+    Object.fromEntries(
+      Object.entries(steps.find((entry) => entry.id === id).env).map(([key, value]) => [
+        key,
+        value
+          .replace(
+            /\$\{\{ (inputs|steps\.resolve\.outputs)\.(\w+) \}\}/g,
+            (_, scope, name) => (scope === "inputs" ? inputs : outputs)[name] ?? ""
+          )
+          .replace(/\$\{\{[^}]*\}\}/g, ""),
+      ])
+    );
+  succeeds(w.bash(step(path, "resolve"), bind("resolve")));
+  const outputs = Object.fromEntries(
+    w
+      .read("output")
+      .trim()
+      .split("\n")
+      .map((line) => line.split(/=(.*)/s).slice(0, 2))
+  );
+  succeeds(w.bash(step(path, "push"), bind("push", outputs)));
+  const page = w.read("summary");
+  assert.match(page, /^cc <@&42>$/m);
+  assert.doesNotMatch(page, /@octocat/);
+});
