@@ -48,7 +48,12 @@ on:
         required: true
         type: string
       mention:
-        description: Threaded to escalate as the SEV1/SEV2 @mention (e.g. vars.SEV1_MENTION).
+        description: Threaded to escalate as the SEV1/SEV2 GitHub @mention on tickets.
+        required: false
+        type: string
+        default: ""
+      push_mention:
+        description: Threaded to escalate as the Discord mention on the SEV1 push ("<@&ROLE_ID>").
         required: false
         type: string
         default: ""
@@ -252,5 +257,6 @@ jobs:
           body: ${{ steps.backport.outputs.instructions }}
           repo: ${{ github.repository }}
           mention: ${{ inputs.mention }}
+          push_mention: ${{ inputs.push_mention }}
           push_webhook: ${{ secrets.push_webhook }}
           dry_run: ${{ inputs.dry_run }}

@@ -94,9 +94,15 @@ inputs:
     required: false
     default: ""
     description: >
-      Who to @mention for SEV1/SEV2 (e.g. "@kushuh" or a team). Empty means no ping even when the
-      severity would warrant one, so the action degrades gracefully before it is wired. @everyone /
-      @here are neutralized (the push sets allowed_mentions to users + roles only).
+      GitHub @mention for SEV1/SEV2 tickets (e.g. "@kushuh" or "@org/team"). It reaches the ticket
+      and its recurrence comments only; the push takes `push_mention`. Empty means no ping.
+  push_mention:
+    required: false
+    default: ""
+    description: >
+      Discord mention for the SEV1 push, in Discord's syntax: "<@&ROLE_ID>" for a role, "<@USER_ID>"
+      for a user. Empty posts the page without a ping. @everyone / @here are neutralized (the push
+      sets allowed_mentions to users + roles only).
   planning_repo:
     required: false
     default: ${{ github.repository_owner }}/.github
@@ -164,6 +170,7 @@ runs:
         STATE: ${{ inputs.state }}
         SUMMARY: ${{ inputs.summary }}
         MENTION: ${{ inputs.mention }}
+        PUSH_MENTION: ${{ inputs.push_mention }}
         DEDUP_KEY: ${{ inputs.dedup_key }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
         RUN_URL: ${{ inputs.run_url }}
@@ -217,6 +224,7 @@ runs:
         # Markdown detail, written only to a --body-file.
         clean_summary=$(printf '%s' "$SUMMARY" | tr -d '\r' | tr '\n' ' ')
         clean_mention=$(printf '%s' "${MENTION:-}" | tr -d '\r' | tr '\n' ' ')
+        clean_push_mention=$(printf '%s' "${PUSH_MENTION:-}" | tr -d '\r' | tr '\n' ' ')
 
         # Default the run link to this very run so a human lands on the evidence in one click.
         run_url="${RUN_URL:-}"
@@ -244,6 +252,7 @@ runs:
           echo "target_status=$target_status"
           echo "clean_summary=$clean_summary"
           echo "clean_mention=$clean_mention"
+          echo "clean_push_mention=$clean_push_mention"
         } >> "$GITHUB_OUTPUT"
 
     # A token scoped to issues:write on the planning repo alone, which bounds a leak.
@@ -447,7 +456,7 @@ runs:
         EPIC: ${{ inputs.epic }}
         RUN_URL: ${{ steps.resolve.outputs.run_url }}
         RUNBOOK: ${{ inputs.runbook }}
-        MENTION: ${{ steps.resolve.outputs.clean_mention }}
+        PUSH_MENTION: ${{ steps.resolve.outputs.clean_push_mention }}
         ISSUE_URL: ${{ steps.ticket.outputs.issue_url }}
         DRY_RUN: ${{ steps.resolve.outputs.dry_run }}
       run: |
@@ -460,7 +469,7 @@ runs:
         [ -n "${RUN_URL:-}" ] && content="${content}"$'\n'"run: ${RUN_URL}"
         [ -n "${RUNBOOK:-}" ] && content="${content}"$'\n'"runbook: ${RUNBOOK}"
         [ -n "${ISSUE_URL:-}" ] && content="${content}"$'\n'"ticket: ${ISSUE_URL}"
-        [ -n "${MENTION:-}" ] && content="${content}"$'\n'"cc ${MENTION}"
+        [ -n "${PUSH_MENTION:-}" ] && content="${content}"$'\n'"cc ${PUSH_MENTION}"
         # Cap the whole message well under the limit (head -c counts bytes over the whole stream),
         # then `iconv -c` drops any multibyte character the cut split in half — Discord 400s on
         # invalid UTF-8.
@@ -468,7 +477,7 @@ runs:
         content=$(printf '%s' "$content" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
 
         # jq builds the JSON so the message can hold any character. allowed_mentions restricts pings
-        # to users and roles, so an @everyone or @here in `mention` cannot mass-ping. The payload
+        # to users and roles, so an @everyone or @here in `push_mention` cannot mass-ping. The payload
         # shape is Discord's, and swapping chat providers is a local edit here.
         payload=$(jq -n --arg c "$content" '{content: $c, allowed_mentions: {parse: ["users", "roles"]}}')
 
