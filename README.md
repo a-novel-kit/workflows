@@ -234,11 +234,13 @@ verbatim — so the required context would be one GitHub never posts, and the PR
 
 Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/workflows/<file>@<tag>` (not `<group>/<action>` — these are whole workflows, in `.github/workflows/`).
 
-| Workflow           | Purpose                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------------------------- |
-| `reconcile-board`  | Per-org board fail-safe sweep: epic rollup + Status drift re-derive + merge-gate re-post.               |
-| `backport-run`     | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line. |
-| `release-line-run` | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment. |
+| Workflow             | Purpose                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `reconcile-board`    | Per-org board fail-safe sweep: epic rollup + Status drift re-derive + merge-gate re-post.                         |
+| `backport-run`       | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.           |
+| `release-line-run`   | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
+| `notify-ci-run`      | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
+| `notify-release-run` | Announce a published release in Discord with its notes, linking pull requests the way GitHub does.                |
 
 ## Contributing
 

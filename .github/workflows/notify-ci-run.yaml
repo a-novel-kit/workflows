@@ -1,0 +1,89 @@
+name: notify-ci (reusable)
+
+# Tells a repository's owners in Discord when its default branch breaks, and when it is green again.
+# Every governed repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on the
+# `workflow_run` completion of `main` and `release`, so a release that fails after tagging reports
+# here too. A failure pings the repository's Discord role; the recovery posts without a ping.
+on:
+  workflow_call:
+    inputs:
+      roles:
+        description: JSON map from "<org>/<repo>" to the Discord role id pinged on a failure (vars.DISCORD_REPO_ROLES).
+        required: false
+        type: string
+        default: "{}"
+      dry_run:
+        description: When "true", write each message to the step summary instead of posting it.
+        required: false
+        type: string
+        default: "false"
+    secrets:
+      webhook:
+        description: Discord webhook of the org's CI channel (CI_WEBHOOK). Empty skips the post.
+        required: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # Only runs of the default branch itself: a fork can name its branch after it, and a merge-queue
+    # or pull-request run is not the branch's state.
+    if: >-
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success') &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
+    # Reads the workflow's previous run; never checks out or runs the code under report.
+    permissions:
+      actions: read
+    steps:
+      - name: Decide what to post
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          AUTHOR: ${{ github.event.workflow_run.head_commit.author.name }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+
+          # A success is news only when it ends a failure: the previous decided run of this workflow
+          # on the branch failed. Cancelled and skipped runs say nothing about the code.
+          if [ "$CONCLUSION" = failure ]; then
+            post=failed
+          else
+            previous=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/runs?branch=$BRANCH&status=completed&per_page=30" |
+              jq -r --argjson id "$RUN_ID" --argjson number "$RUN_NUMBER" '[.workflow_runs[]
+                | select(.id != $id and .run_number < $number and (.conclusion == "success" or .conclusion == "failure"))][0].conclusion // ""')
+            if [ "$previous" != failure ]; then exit 0; fi
+            post=succeeded
+          fi
+
+          delimiter="EOF_$(openssl rand -hex 8)"
+          {
+            echo "post=$post"
+            echo "description<<$delimiter"
+            printf '%s\n' "${MESSAGE%%$'\n'*}"
+            printf '[`%s`](%s/%s/commit/%s) by %s\n' "${SHA:0:7}" "$SERVER_URL" "$GITHUB_REPOSITORY" "$SHA" "$AUTHOR"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post to Discord
+        if: steps.state.outputs.post != ''
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.47.0
+        with:
+          webhook: ${{ secrets.webhook }}
+          color: ${{ steps.state.outputs.post }}
+          title: >-
+            ${{ github.repository }} · ${{ github.event.workflow_run.name }}
+            ${{ steps.state.outputs.post == 'failed' && 'failed on' || 'is green again on' }}
+            ${{ github.event.workflow_run.head_branch }}
+          url: ${{ github.event.workflow_run.html_url }}
+          description: ${{ steps.state.outputs.description }}
+          mention_roles: ${{ steps.state.outputs.post == 'failed' && fromJSON(inputs.roles || '{}')[github.repository] || '' }}
+          dry_run: ${{ inputs.dry_run }}
