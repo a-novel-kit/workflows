@@ -1,0 +1,137 @@
+name: discord-post
+description: >
+  Post one embed to a Discord channel webhook: a colored side bar naming the event's state, a title
+  linking to GitHub, and a Markdown body. Pings are limited to the role and user ids passed in, so
+  text copied from a PR title or release notes can never ping anyone. A notification never fails the
+  job it reports on: delivery errors end as a warning, and an empty webhook skips the post.
+
+inputs:
+  webhook:
+    required: false
+    default: ""
+    description: >
+      Discord channel webhook URL, passed from a secret. Empty skips the post, so a repository
+      without the secret stays quiet.
+  title:
+    required: true
+    description: Embed title, cut to Discord's 256 characters.
+  url:
+    required: false
+    default: ""
+    description: Link opened by the title, and by the "read more" link when the description is cut.
+  description:
+    required: false
+    default: ""
+    description: Markdown body, cut to Discord's 4096 characters.
+  color:
+    required: true
+    description: >
+      State shown by the side bar: failed (red), succeeded (green), started (blue), upcoming
+      (gold), in-progress (orange), cancelled (grey) or released (purple).
+  footer:
+    required: false
+    default: ""
+    description: Small text under the body, such as the repository or the actor.
+  mention_roles:
+    required: false
+    default: ""
+    description: Discord role ids to ping, separated by spaces or commas.
+  mention_users:
+    required: false
+    default: ""
+    description: Discord user ids to ping, separated by spaces or commas.
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", write the payload to the step summary instead of posting it.
+
+outputs:
+  delivered:
+    description: '"true" when Discord accepted the message.'
+    value: ${{ steps.post.outputs.delivered }}
+
+runs:
+  using: composite
+  steps:
+    - name: Post to Discord
+      id: post
+      shell: bash
+      env:
+        WEBHOOK: ${{ inputs.webhook }}
+        TITLE: ${{ inputs.title }}
+        URL: ${{ inputs.url }}
+        DESCRIPTION: ${{ inputs.description }}
+        COLOR: ${{ inputs.color }}
+        FOOTER: ${{ inputs.footer }}
+        MENTION_ROLES: ${{ inputs.mention_roles }}
+        MENTION_USERS: ${{ inputs.mention_users }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+        echo "delivered=false" >> "$GITHUB_OUTPUT"
+
+        case "$COLOR" in
+          failed) bar=15158332 ;;
+          succeeded) bar=3066993 ;;
+          started) bar=3447003 ;;
+          upcoming) bar=15844367 ;;
+          in-progress) bar=15105570 ;;
+          cancelled) bar=9807270 ;;
+          released) bar=10181046 ;;
+          *) echo "::error::unknown color \"$COLOR\""; exit 1 ;;
+        esac
+
+        # Snowflakes are digits; anything else is a caller bug that would otherwise ping nobody.
+        for list in MENTION_ROLES MENTION_USERS; do
+          if printf '%s' "${!list}" | tr ', ' '\n' | grep -qv '^[0-9]*$'; then
+            echo "::error::${list,,} must hold Discord ids (digits only)"
+            exit 1
+          fi
+        done
+        roles=$(printf '%s' "$MENTION_ROLES" | tr ', ' '\n' | jq -Rn '[inputs | select(length > 0)]')
+        users=$(printf '%s' "$MENTION_USERS" | tr ', ' '\n' | jq -Rn '[inputs | select(length > 0)]')
+
+        # Mobile push notifications show `content`, not the embed, so a pinged message repeats its
+        # title there. jq slices strings by character, which keeps a cut multibyte character whole.
+        payload=$(jq -cn \
+          --arg title "$TITLE" --arg url "$URL" --arg description "$DESCRIPTION" \
+          --arg footer "$FOOTER" --argjson bar "$bar" \
+          --argjson roles "$roles" --argjson users "$users" '
+          def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+          (($roles | map("<@&\(.)>")) + ($users | map("<@\(.)>"))) as $pings
+          | (if $url == "" then "" else "\n\n[Read more](\($url))" end) as $more
+          | {
+              embeds: [
+                {title: ($title | cut(256)), color: $bar}
+                + (if $url == "" then {} else {url: $url} end)
+                + (if $description == "" then {}
+                   elif ($description | length) > 4096 then {description: (($description | cut(4096 - ($more | length))) + $more)}
+                   else {description: $description} end)
+                + (if $footer == "" then {} else {footer: {text: ($footer | cut(2048))}} end)
+              ],
+              allowed_mentions: {parse: [], roles: $roles, users: $users}
+            }
+          + (if $pings == [] then {} else {content: ($pings + [$title] | join(" ") | cut(2000))} end)')
+
+        if [ "$DRY_RUN" = "true" ]; then
+          printf '[dry-run] would post to Discord:\n```json\n%s\n```\n' "$payload" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if [ -z "$WEBHOOK" ]; then
+          echo "::notice::No Discord webhook configured; skipped the post."
+          exit 0
+        fi
+
+        # Discord answers 204 on success, 429 when rate limited and 5xx transiently. curl runs
+        # without --fail so those codes are captured and retried.
+        code=000
+        for attempt in 1 2 3; do
+          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "delivered=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ "$attempt" -lt 3 ] && sleep "$((attempt * attempt * 2))"
+        done
+        echo "::warning::Discord did not accept the post (last HTTP $code)."
