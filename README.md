@@ -85,6 +85,7 @@ SemVer release.
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
 | `discord-post`           | Post one Discord embed with a state-colored bar; pings only the ids passed in, never fails the job.               |
+| `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked, fail-soft.                              |
 | `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.               |
 | `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.            |
 | `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
@@ -241,6 +242,7 @@ Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/wo
 | `release-line-run`   | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
 | `notify-ci-run`      | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
 | `notify-release-run` | Announce a published release in Discord with its notes, linking pull requests the way GitHub does.                |
+| `notify-issues-run`  | Post board issues entering Ready, or changing assignees outside Backlog, to Discord, pinging the assignees.       |
 
 ## Contributing
 

@@ -1,0 +1,145 @@
+name: notify-issues (reusable)
+
+# Tells people in Discord when an issue is theirs to pick up. Each org's `.github` repo calls this on
+# a schedule: GitHub raises no event when a board Status changes, so the board is polled. It posts
+# each open board issue that entered Ready, and each one whose assignees changed outside Backlog,
+# since the caller's previous successful run, so a late or failed run is caught up by the next. A
+# post pings the assignees through the GitHub-to-Discord map, or the repository's role when nobody
+# is assigned.
+on:
+  workflow_call:
+    inputs:
+      project_id:
+        required: true
+        type: string
+        description: Node id of the org "Tasks" board (PVT_…).
+      client_id:
+        required: true
+        type: string
+        description: The org's [Agent] bot App client id; the default token cannot read org boards.
+      roles:
+        required: false
+        type: string
+        default: "{}"
+        description: JSON map from "<org>/<repo>" to the Discord role pinged for an unassigned issue (vars.DISCORD_REPO_ROLES).
+      bws_server_url:
+        required: false
+        type: string
+        default: ""
+        description: Bitwarden server holding the map (vars.BWS_SERVER_URL). Empty means the US cloud.
+      dry_run:
+        required: false
+        type: string
+        default: "false"
+        description: When "true", write each message to the step summary instead of posting it.
+    secrets:
+      private_key:
+        required: true
+        description: The [Agent] bot App private key (PEM).
+      webhook:
+        required: false
+        description: Discord webhook of the org's issues channel (ISSUES_WEBHOOK). Empty skips the posts.
+      bws_access_token:
+        required: false
+        description: Read-only token for the GitHub-to-Discord map (BWS_READ_TOKEN). Empty posts without user pings.
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # Reads the caller's previous run; the board goes through the App.
+    permissions:
+      actions: read
+    outputs:
+      events: ${{ steps.scan.outputs.events }}
+    steps:
+      - name: Mint board token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-issues: read
+          permission-organization-projects: read
+
+      - name: Find the issues to post
+        id: scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOARD_TOKEN: ${{ steps.token.outputs.token }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          CALLER: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          # A first run looks back one schedule interval rather than over the whole board.
+          workflow="${CALLER%@*}"
+          since="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "${workflow##*/}" --status success \
+            --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
+          [ -n "$since" ] || since="$(date -u -d '-15 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+
+          query='query($project: ID!, $endCursor: String) {
+            node(id: $project) { ... on ProjectV2 { items(first: 100, after: $endCursor) {
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                status: fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name updatedAt } }
+                content { ... on Issue {
+                  number title url state
+                  repository { nameWithOwner }
+                  assignees(first: 10) { nodes { databaseId login } }
+                  timelineItems(itemTypes: [ASSIGNED_EVENT, UNASSIGNED_EVENT], last: 1) {
+                    nodes { ... on AssignedEvent { createdAt } ... on UnassignedEvent { createdAt } }
+                  }
+                } }
+              }
+            } } }
+          }'
+          # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings.
+          events="$(GH_TOKEN="$BOARD_TOKEN" gh api graphql --paginate -f query="$query" -F project="$PROJECT_ID" |
+            jq -sc --arg since "$since" '[.[].data.node.items.nodes[]
+              | select(.content.state == "OPEN" and .status != null)
+              | (if .status.name == "Ready" and .status.updatedAt > $since then "Ready for pickup"
+                 elif .status.name != "Backlog" and (.content.timelineItems.nodes[0].createdAt // "") > $since
+                 then "Assignees changed, status \(.status.name)"
+                 else empty end) as $what
+              | [.content.assignees.nodes[] | select(.login | endswith("[bot]") | not)] as $assignees
+              | {
+                  repo: .content.repository.nameWithOwner, number: .content.number, title: .content.title,
+                  url: .content.url, user_ids: ($assignees | map(.databaseId | tostring) | join(" ")),
+                  description: "\($what) · \(if $assignees == [] then "nobody assigned"
+                    else "assigned to \($assignees | map(.login) | join(", "))" end)"
+                }]')"
+          echo "events=$events" >>"$GITHUB_OUTPUT"
+          echo "$(jq length <<<"$events") issue(s) to post since $since." >>"$GITHUB_STEP_SUMMARY"
+
+  post:
+    needs: scan
+    if: needs.scan.outputs.events != '[]'
+    runs-on: ubuntu-latest
+    permissions: {}
+    strategy:
+      # One post at a time keeps the channel in board order and under Discord's rate limit.
+      max-parallel: 1
+      matrix:
+        event: ${{ fromJSON(needs.scan.outputs.events) }}
+    steps:
+      # Resolved in the posting job: masked Discord ids cannot cross a job boundary.
+      - name: Resolve the assignees
+        id: users
+        if: matrix.event.user_ids != ''
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.48.0
+        with:
+          github_user_ids: ${{ matrix.event.user_ids }}
+          bws_access_token: ${{ secrets.bws_access_token }}
+          bws_server_url: ${{ inputs.bws_server_url }}
+
+      - name: Post to Discord
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.48.0
+        with:
+          webhook: ${{ secrets.webhook }}
+          color: started
+          title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
+          url: ${{ matrix.event.url }}
+          description: ${{ matrix.event.description }}
+          mention_users: ${{ steps.users.outputs.discord_ids }}
+          mention_roles: ${{ matrix.event.user_ids == '' && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
+          dry_run: ${{ inputs.dry_run }}
