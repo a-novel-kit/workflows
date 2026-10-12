@@ -30,7 +30,7 @@ rules:
   github-app:
     ignore:
       # Each mints an App token with `owner:` and no `repositories:`, which zizmor reads as
-      # over-broad. For these four it is the requirement, not an oversight — each is an org-wide
+      # over-broad. For these five it is the requirement, not an oversight — each is an org-wide
       # sweep, and the suggested fix (naming specific repositories) would blind it:
       #
       #   token-expiry.yaml — enumerates the ORGANISATION's PATs. Its one permission,
@@ -41,14 +41,17 @@ rules:
       #     on the list, which is the exact failure it exists to catch.
       #   reconcile-board.yaml — same shape: an org-scoped PR search feeding the board reconcile.
       #   notify-issues-run.yaml — reads the org board, whose issues live in every repository.
+      #   notify-pr-run.yaml — reads the issues a pull request closes, which can live in any
+      #     repository, with their board dates.
       #
-      # All four already hold the narrow line that IS available to them: `permissions: {}` on the
-      # job, so the default token is unused, and read-only `permission-*` scopes on the App token.
+      # All five already hold the narrow line that IS available to them: a default token that is
+      # unused or read-only, and read-only `permission-*` scopes on the App token.
       # Widen any of them and this suppression stops being justified.
       - token-expiry.yaml
       - watchdog.yaml
       - reconcile-board.yaml
       - notify-issues-run.yaml
+      - notify-pr-run.yaml
 
   artipacked:
     ignore:
