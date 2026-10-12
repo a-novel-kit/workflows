@@ -1,0 +1,323 @@
+name: notify-pr (reusable)
+
+# Tells people in Discord where each pull request stands, without the dependency bots' noise. Every
+# governed repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on pull request,
+# review and failed CI events. A person's pull request posts its lifecycle to the pull-requests
+# channel, pinging its owner: the assignees, else the assignees of the issues it closes, else the
+# repository's role. Its reviews post to the reviews channel. A bot's pull request posts only when
+# its CI fails, pinging the repository's role on the first failure, and when it merges or closes
+# after one. Drafts post nothing, and a post never pings the person who caused it.
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        required: true
+        type: string
+        description: The org's [Agent] bot App client id; the default token cannot read the board's Target date.
+      roles:
+        required: false
+        type: string
+        default: "{}"
+        description: JSON map from "<org>/<repo>" to the Discord role pinged when nobody owns or reviews (vars.DISCORD_REPO_ROLES).
+      bws_server_url:
+        required: false
+        type: string
+        default: ""
+        description: Bitwarden server holding the GitHub-to-Discord map (vars.BWS_SERVER_URL). Empty means the US cloud.
+      dry_run:
+        required: false
+        type: string
+        default: "false"
+        description: When "true", write each message to the step summary instead of posting it.
+    secrets:
+      private_key:
+        required: true
+        description: The [Agent] bot App private key (PEM).
+      pull_requests_webhook:
+        required: false
+        description: Discord webhook of the org's pull-requests channel (PULL_REQUESTS_WEBHOOK). Empty skips those posts.
+      reviews_webhook:
+        required: false
+        description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK). Empty skips those posts.
+      dependencies_webhook:
+        required: false
+        description: Discord webhook of the org's dependencies channel (DEPENDENCIES_WEBHOOK). Empty skips those posts.
+      bws_access_token:
+        required: false
+        description: Read-only token for the GitHub-to-Discord map (BWS_READ_TOKEN). Empty posts without user pings.
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # A bot's pull request reaches the job only through a failed CI run or its close. Repos run `main`
+    # on pull_request, merge_group or a push to every branch, so the branch is what tells a pull
+    # request's run from the default branch's.
+    if: >-
+      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.name == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch != github.event.repository.default_branch ||
+      github.event_name != 'workflow_run' &&
+      (!github.event.pull_request.draft || github.event.action == 'converted_to_draft') &&
+      (github.event.pull_request.user.type != 'Bot' || github.event.action == 'closed')
+    # Lists the CI runs of a bot's pull request; the pull request itself goes through the App.
+    permissions:
+      actions: read
+    # One pull request's events post in the order they happened.
+    concurrency:
+      group: notify-pr-${{ github.repository }}-${{ github.event.pull_request.number || github.event.workflow_run.head_branch }}
+      queue: max
+    steps:
+      - name: Mint read token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-issues: read
+          permission-pull-requests: read
+          permission-organization-projects: read
+
+      - name: Decide what to post
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          event="$(cat "$GITHUB_EVENT_PATH")"
+          owner="${GITHUB_REPOSITORY%/*}"
+
+          # A failed run names its pull request by branch; the merge queue's branch carries the number.
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+            kind=failed
+            branch="$(jq -r .workflow_run.head_branch <<<"$event")"
+            if [[ $branch =~ ^gh-readonly-queue/.+/pr-([0-9]+)-[0-9a-f]+$ ]]; then
+              number="${BASH_REMATCH[1]}"
+            else
+              number="$(gh api -X GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open -f head="$owner:$branch" \
+                --jq '.[0].number // empty')"
+            fi
+            [ -n "$number" ] || exit 0
+          else
+            kind="$(jq -r .action <<<"$event")"
+            if [ "$GITHUB_EVENT_NAME" = pull_request_review ]; then kind="review_$kind"; fi
+            number="$(jq -r .pull_request.number <<<"$event")"
+          fi
+
+          # A ready pull request is read a minute later, so the assignees and reviewers automation adds
+          # meanwhile join its post. A dequeue's reason reaches the timeline just after the event.
+          case "$kind" in
+            opened | ready_for_review) sleep 60 ;;
+            dequeued) sleep 10 ;;
+          esac
+
+          query='query($owner: String!, $name: String!, $number: Int!) {
+            repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+              number title url state isDraft createdAt headRefName baseRefName reviewDecision
+              author { __typename login }
+              assignees(first: 10) { nodes { databaseId login } }
+              reviewRequests(first: 10) { nodes { requestedReviewer {
+                __typename ... on User { databaseId login } ... on Team { name }
+              } } }
+              latestOpinionatedReviews(first: 20, writersOnly: true) { nodes { state author { login } } }
+              mergeQueueEntry { state }
+              milestone { title url dueOn }
+              closingIssuesReferences(first: 5) { nodes {
+                number url repository { nameWithOwner }
+                assignees(first: 10) { nodes { databaseId login } }
+                projectItems(first: 5) { nodes {
+                  target: fieldValueByName(name: "Target date") { ... on ProjectV2ItemFieldDateValue { date } }
+                } }
+              } }
+              ready: timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], last: 1) {
+                nodes { ... on ReadyForReviewEvent { createdAt } }
+              }
+              dropped: timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 20) {
+                nodes { ... on RemovedFromMergeQueueEvent { reason } }
+              }
+            } }
+          }'
+          pr="$(GH_TOKEN="$APP_TOKEN" gh api graphql -F owner="$owner" -F name="${GITHUB_REPOSITORY#*/}" \
+            -F number="$number" -f query="$query" --jq .data.repository.pullRequest)"
+
+          # A bot's history decides its posts: every CI run since it opened, on its branch or in the
+          # queue. A rerun counts as a failure, since a green run is rarely rerun.
+          runs='[]'
+          jobs='[]'
+          if [ "$(jq -r .author.__typename <<<"$pr")" = Bot ] && { [ "$kind" = failed ] || [ "$kind" = closed ]; }; then
+            runs="$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/main.yaml/runs?created=>=$(jq -r .createdAt <<<"$pr")&per_page=100" \
+              --jq '.workflow_runs[] | {id, head_branch, conclusion, run_attempt}' | jq -sc .)"
+            if [ "$kind" = failed ]; then
+              jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$(jq -r .workflow_run.id <<<"$event")/jobs" \
+                --jq '[.jobs[] | select(.conclusion == "failure") | .name]')"
+            fi
+          fi
+
+          # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings.
+          delimiter="EOF_$(openssl rand -hex 8)"
+          jq -r --argjson pr "$pr" --argjson runs "$runs" --argjson jobs "$jobs" \
+            --arg kind "$kind" --arg repo "$GITHUB_REPOSITORY" --arg d "$delimiter" '
+            . as $event
+            | def logins: map(.login // .name) | join(", ");
+            def ids: map(select(.databaseId != $event.sender.id) | .databaseId | tostring);
+            def when($style): "<t:\(fromdateiso8601):\($style)>";
+            ($pr.author.__typename == "Bot") as $bot
+            | ($pr.state == "OPEN") as $open
+            | (if $pr.assignees.nodes != [] then $pr.assignees.nodes
+               else [$pr.closingIssuesReferences.nodes[].assignees.nodes[]] | unique_by(.databaseId) end) as $owners
+            | (if $owners == [] then {role: true} else {users: ($owners | ids)} end) as $to_owners
+            | [$pr.reviewRequests.nodes[].requestedReviewer] as $reviewers
+            | ([$pr.latestOpinionatedReviews.nodes[] | select(.state == "APPROVED") | .author]) as $approvers
+            | ([$pr.latestOpinionatedReviews.nodes[] | select(.state == "CHANGES_REQUESTED") | .author]) as $blockers
+            | (($pr.ready.nodes[0].createdAt // $pr.createdAt) | fromdateiso8601 + 60 | todateiso8601) as $settled
+            | (($event.pull_request.updated_at // "") < $settled) as $settling
+            | [$runs[] | select(.head_branch == $pr.headRefName or
+                (.head_branch | startswith("gh-readonly-queue/\($pr.baseRefName)/pr-\($pr.number)-")))] as $history
+            | ([$history[] | select(.id != $event.workflow_run.id and (.conclusion == "failure" or .run_attempt > 1))]
+                + (if ($event.workflow_run.run_attempt // 1) > 1 then [$event.workflow_run] else [] end)
+                | length) as $failures
+            | [$pr.dropped.nodes[].reason | ascii_downcase] as $drops
+            | (if $pr.assignees.nodes == [] then "nobody assigned" else "assigned to \($pr.assignees.nodes | logins)" end) as $assigned
+
+            # Posts by event: a color, a headline, and who to ping.
+            | (if $bot then
+                if $kind == "failed" and $open then
+                  {channel: "dependencies", color: "failed"}
+                  + if $failures == 0 then {headline: "**CI failed**", role: true} else {headline: "**CI failed again**"} end
+                elif $kind == "closed" and $failures > 0 then
+                  {channel: "dependencies"}
+                  + if $pr.state == "MERGED" then {color: "succeeded", headline: "**Merged** after failing CI"}
+                    else {color: "cancelled", headline: "**Closed** after failing CI"} end
+                else null end
+              elif $kind == "opened" or $kind == "ready_for_review" then
+                {channel: "pull_requests", color: "started", headline: "**Ready for review** · \($assigned)"} + $to_owners
+              elif $kind == "converted_to_draft" then
+                {channel: "pull_requests", color: "cancelled", headline: "**Back to draft**"}
+              elif ($kind == "assigned" or $kind == "unassigned") and ($settling | not) then
+                {channel: "pull_requests", color: "upcoming", headline: "**Assignees changed** · \($assigned)"} + $to_owners
+              elif $kind == "closed" then
+                {channel: "pull_requests"}
+                + if $pr.state == "MERGED" then {color: "succeeded", headline: "**Merged**"}
+                  else {color: "cancelled", headline: "**Closed** without merging"} end
+              elif $kind == "reopened" then
+                {channel: "pull_requests", color: "started", headline: "**Reopened** · \($assigned)"} + $to_owners
+              # recover-prs re-queues a pull request whose checks timed out, up to three times.
+              elif $kind == "dequeued" and $open and ($drops[-1] // "merged") != "merged"
+                and ($drops[-1] != "checks_timed_out" or ($drops | map(select(. == "checks_timed_out")) | length) > 3) then
+                {channel: "pull_requests", color: "failed",
+                 headline: "**Dropped from the merge queue** · \($drops[-1] | gsub("_"; " "))"} + $to_owners
+              else null end) as $lifecycle
+            | (if $bot then null
+              elif $kind == "opened" or $kind == "ready_for_review" or
+                ($kind == "review_request_removed" and $reviewers == [] and ($settling | not)) then
+                if $reviewers == [] then {color: "upcoming", headline: "**Needs a reviewer**", role: true}
+                else {color: "started", headline: "**Review requested** from \($reviewers | logins)",
+                  users: ([$reviewers[] | select(.__typename == "User")] | ids)} end
+              elif $kind == "review_requested" and ($settling | not) then
+                {color: "started",
+                 headline: "**Review requested** from \([$event.requested_reviewer // $event.requested_team] | logins)",
+                 users: ([$event.requested_reviewer // empty | {databaseId: .id}] | ids)}
+              elif $kind == "review_request_removed" and ($settling | not) then
+                {color: "cancelled",
+                 headline: "**Review request removed** for \([$event.requested_reviewer // $event.requested_team] | logins)"}
+              # A reply in a review thread arrives as a bodiless "commented" review.
+              elif $kind == "review_submitted" and ($event.review.state != "commented" or
+                (($event.review.body // "") != "" and $event.review.user.login != $event.pull_request.user.login)) then
+                {color: ({approved: "succeeded", changes_requested: "in-progress"}[$event.review.state] // "upcoming"),
+                 headline: ("**\({approved: "Approved", changes_requested: "Changes requested"}[$event.review.state] // "Reviewed")**"
+                   + " by \($event.review.user.login) · [read the review](\($event.review.html_url))")}
+                + $to_owners
+              elif $kind == "review_dismissed" then
+                {color: "in-progress", headline: "**Review dismissed** · \($event.review.user.login)"}
+                + if $pr.reviewDecision == "APPROVED" then {} else $to_owners end
+              else null end) as $review
+
+            # What every post says beyond its headline.
+            | (([$pr.closingIssuesReferences.nodes[].projectItems.nodes[].target.date // empty] | first
+                | if . then "\(.)T12:00:00Z" else null end) // $pr.milestone.dueOn) as $due
+            | [
+                "Status: \(if $pr.state == "MERGED" then "merged" elif $pr.state == "CLOSED" then "closed"
+                  elif $pr.isDraft then "draft" elif $pr.mergeQueueEntry then "in the merge queue" else "open" end)"
+                + " · Review: \([
+                    if $approvers != [] then "approved by \($approvers | logins)" else empty end,
+                    if $blockers != [] then "changes requested by \($blockers | logins)" else empty end,
+                    if $reviewers != [] and $open then "waiting on \($reviewers | logins)" else empty end
+                  ] | if . == [] then "no reviewer" else join(" · ") end)",
+                ([
+                  ($pr.closingIssuesReferences.nodes | if . != [] then
+                    "Closes \(map("[\(.repository.nameWithOwner)#\(.number)](\(.url))") | join(", "))" else empty end),
+                  ($pr.milestone // empty | "Milestone [\(.title)](\(.url))")
+                ] | if . != [] then join(" · ") else empty end),
+                ([
+                  ($due // empty | "Due \(when("D")) (\(when("R")))"),
+                  "Opened \($pr.createdAt | when("R")) by \($pr.author.login)"
+                ] | join(" · ")),
+                ($event.workflow_run // empty | if $kind == "failed" then
+                  "[\(.name) #\(.run_number)](\(.html_url)) failed\(if $jobs != [] then ": \($jobs | join(", "))" else "" end)"
+                  else empty end)
+              ] as $details
+            | {
+                title: "\($repo)#\($pr.number) · \($pr.title)",
+                url: $pr.url,
+                lifecycle_channel: ($lifecycle.channel // ""),
+                lifecycle_color: ($lifecycle.color // ""),
+                lifecycle_description: (if $lifecycle then [$lifecycle.headline] + $details | join("\n") else "" end),
+                lifecycle_users: ($lifecycle.users // [] | join(" ")),
+                lifecycle_role: ($lifecycle.role // false),
+                review_color: ($review.color // ""),
+                review_description: (if $review then [$review.headline] + $details | join("\n") else "" end),
+                review_users: ($review.users // [] | join(" ")),
+                review_role: ($review.role // false)
+              }
+            | to_entries[] | "\(.key)<<\($d)\n\(.value)\n\($d)"' "$GITHUB_EVENT_PATH" >>"$GITHUB_OUTPUT"
+          echo "Pull request #$number, $kind." >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve the owners
+        id: owners
+        if: steps.state.outputs.lifecycle_users != ''
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.49.1
+        with:
+          github_user_ids: ${{ steps.state.outputs.lifecycle_users }}
+          bws_access_token: ${{ secrets.bws_access_token }}
+          bws_server_url: ${{ inputs.bws_server_url }}
+
+      - name: Resolve the review pings
+        id: reviewers
+        if: steps.state.outputs.review_users != ''
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.49.1
+        with:
+          github_user_ids: ${{ steps.state.outputs.review_users }}
+          bws_access_token: ${{ secrets.bws_access_token }}
+          bws_server_url: ${{ inputs.bws_server_url }}
+
+      - name: Post the lifecycle
+        if: steps.state.outputs.lifecycle_color != ''
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.49.1
+        with:
+          # A bot's post never falls back to the pull-requests channel.
+          webhook: >-
+            ${{ steps.state.outputs.lifecycle_channel == 'dependencies' && secrets.dependencies_webhook ||
+            steps.state.outputs.lifecycle_channel == 'pull_requests' && secrets.pull_requests_webhook || '' }}
+          color: ${{ steps.state.outputs.lifecycle_color }}
+          title: ${{ steps.state.outputs.title }}
+          url: ${{ steps.state.outputs.url }}
+          description: ${{ steps.state.outputs.lifecycle_description }}
+          mention_users: ${{ steps.owners.outputs.discord_ids }}
+          mention_roles: ${{ steps.state.outputs.lifecycle_role == 'true' && fromJSON(inputs.roles || '{}')[github.repository] || '' }}
+          dry_run: ${{ inputs.dry_run }}
+
+      - name: Post the review
+        if: steps.state.outputs.review_color != ''
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.49.1
+        with:
+          webhook: ${{ secrets.reviews_webhook }}
+          color: ${{ steps.state.outputs.review_color }}
+          title: ${{ steps.state.outputs.title }}
+          url: ${{ steps.state.outputs.url }}
+          description: ${{ steps.state.outputs.review_description }}
+          mention_users: ${{ steps.reviewers.outputs.discord_ids }}
+          mention_roles: ${{ steps.state.outputs.review_role == 'true' && fromJSON(inputs.roles || '{}')[github.repository] || '' }}
+          dry_run: ${{ inputs.dry_run }}
