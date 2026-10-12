@@ -42,7 +42,7 @@ const bot = (fields = {}) =>
 const prEvent = (action, fields = {}) => ({
   action,
   sender: { id: 2, login: "EmperorDada" },
-  pull_request: { number: 7, draft: false, updated_at: settled, user: { login: "kushuh", type: "User" } },
+  pull_request: { number: 7, draft: false, user: { login: "kushuh", type: "User" } },
   ...fields,
 });
 
@@ -53,15 +53,29 @@ const runEvent = (branch, fields = {}) => ({
     run_number: 41,
     run_attempt: 1,
     head_branch: branch,
+    head_sha: "c0ffee",
+    updated_at: "2026-10-12T11:00:00Z",
     html_url: "https://github.com/a-novel/service-authentication/actions/runs/900",
     ...fields,
   },
 });
 
-const run = (id, head_branch, conclusion, run_attempt = 1) => ({ id, head_branch, conclusion, run_attempt });
+const run = (
+  id,
+  head_branch,
+  conclusion,
+  { run_attempt = 1, head_sha = "0ld", updated_at = "2026-10-12T10:30:00Z" } = {}
+) => ({
+  id,
+  head_branch,
+  conclusion,
+  run_attempt,
+  head_sha,
+  updated_at,
+});
 
 /** Runs the decision against a stubbed gh and returns its outputs and the gh calls it made. */
-function notify(t, eventName, event, pr, { runs = [], jobs = [], pulls = "7" } = {}) {
+function notify(t, eventName, event, pr, { runs = [], jobs = [], pulls = "7", at = settled } = {}) {
   const w = workspace(t);
   w.write("output", "");
   w.write("event.json", JSON.stringify(event));
@@ -73,13 +87,16 @@ function notify(t, eventName, event, pr, { runs = [], jobs = [], pulls = "7" } =
     if (args.includes("graphql")) console.log(process.env.PR);
     else if (args.some((arg) => arg.endsWith("/pulls"))) console.log(process.env.PULLS);
     else if (args.some((arg) => arg.includes("/runs?"))) console.log(process.env.RUNS);
-    else if (args.some((arg) => arg.endsWith("/jobs"))) console.log(process.env.JOBS);`
+    else if (args.some((arg) => arg.endsWith("/jobs"))) console.log(process.env.JOBS);
+    else if (args.some((arg) => arg.includes("/actions/runs/"))) console.log(process.env.AT);`
   );
   succeeds(
     w.bash(decide, {
       GITHUB_EVENT_NAME: eventName,
       GITHUB_EVENT_PATH: `${w.cwd}/event.json`,
       GITHUB_REPOSITORY: "a-novel/service-authentication",
+      GITHUB_RUN_ID: "555",
+      AT: at,
       GH_LOG: `${w.cwd}/gh.log`,
       APP_TOKEN: "token",
       PR: JSON.stringify(pr),
@@ -126,8 +143,8 @@ test("notify-pr posts a person's pull request lifecycle and pings its owner, nev
       { assignees: { nodes: [] } },
       ["started", "**Ready for review** · nobody assigned", "", "true"],
     ],
-    ["assigned while it settles", "assigned", { pull_request: { number: 7, updated_at: settling } }, {}, [""]],
-    ["assigned later", "assigned", {}, {}, ["upcoming", "**Assignees changed** · assigned to kushuh", "1", "false"]],
+    ["assigned", "assigned", {}, {}, ["upcoming", "**Assignees changed** · assigned to kushuh", "1", "false"]],
+    ["assigned once closed", "assigned", {}, { state: "CLOSED" }, [""]],
     ["back to draft", "converted_to_draft", {}, { isDraft: true }, ["cancelled", "**Back to draft**", "", "false"]],
     ["merged", "closed", {}, { state: "MERGED" }, ["succeeded", "**Merged**", "", "false"]],
     ["closed", "closed", {}, { state: "CLOSED" }, ["cancelled", "**Closed** without merging", "", "false"]],
@@ -166,6 +183,7 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
   });
   const link = " · [read the review](https://github.com/a-novel/service-authentication/pull/7#r1)";
   const requested = { reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", ...dada } }] } };
+  const approved = { latestOpinionatedReviews: { nodes: [{ state: "APPROVED", author: { login: "EmperorDada" } }] } };
   for (const [name, eventName, action, event, pr, expected] of [
     [
       "ready without reviewers",
@@ -191,14 +209,7 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
       requested,
       ["started", "**Review requested** from EmperorDada", "2", "false"],
     ],
-    [
-      "reviewer requested while it settles",
-      "pull_request_target",
-      "review_requested",
-      { pull_request: { number: 7, updated_at: settling }, requested_reviewer: { id: 2, login: "EmperorDada" } },
-      requested,
-      [""],
-    ],
+    ["ready after a review", "pull_request_target", "opened", {}, approved, [""]],
     [
       "last reviewer removed",
       "pull_request_target",
@@ -206,6 +217,14 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
       { requested_reviewer: { id: 2, login: "EmperorDada" } },
       {},
       ["upcoming", "**Needs a reviewer**", "", "true"],
+    ],
+    [
+      "last request removed after a review",
+      "pull_request_target",
+      "review_request_removed",
+      { requested_reviewer: { id: 2, login: "EmperorDada" } },
+      approved,
+      ["cancelled", "**Review request removed** for EmperorDada", "", "false"],
     ],
     [
       "approved",
@@ -260,6 +279,23 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
   }
 });
 
+test("notify-pr folds the changes of a pull request's first ready minute into its ready post", (t) => {
+  const reviewer = { requested_reviewer: { id: 2, login: "EmperorDada" } };
+  // GitHub does not document whether these events bump updated_at, so the run's creation dates them.
+  const stale = { pull_request: { number: 7, updated_at: settling, user: { login: "kushuh", type: "User" } } };
+  for (const [name, action, event, at, posts] of [
+    ["assigned within the minute", "assigned", {}, settling, false],
+    ["assigned after it", "assigned", {}, settled, true],
+    ["assigned after it, stale updated_at", "assigned", stale, settled, true],
+    ["reviewer requested within the minute", "review_requested", reviewer, settling, false],
+    ["reviewer requested after it", "review_requested", reviewer, settled, true],
+    ["reviewer removed within the minute", "review_request_removed", reviewer, settling, false],
+  ]) {
+    const { outputs } = notify(t, "pull_request_target", prEvent(action, event), pullRequest(), { at });
+    assert.equal(Boolean(outputs.lifecycle_color || outputs.review_color), posts, name);
+  }
+});
+
 test("notify-pr describes status, reviews, links and dates beyond the headline", (t) => {
   const pr = pullRequest({
     mergeQueueEntry: { state: "QUEUED" },
@@ -303,7 +339,9 @@ test("notify-pr describes status, reviews, links and dates beyond the headline",
 test("notify-pr flags a bot's failing pull request once, then its refails, merge or close", (t) => {
   const failed = run(800, "renovate/golib", "failure");
   const queued = run(801, "gh-readonly-queue/master/pr-7-0123abcd", "failure");
-  const rerun = run(802, "renovate/golib", "success", 2);
+  const rerun = run(802, "renovate/golib", "success", { run_attempt: 2 });
+  // Renovate's opened and labeled events each start a run of the same commit.
+  const twin = (updated_at) => run(899, "renovate/golib", "failure", { head_sha: "c0ffee", updated_at });
   const other = [run(700, "renovate/other", "failure"), run(701, "gh-readonly-queue/master/pr-17-abcd", "failure")];
   for (const [name, eventName, event, pr, runs, expected] of [
     ["first failure", "workflow_run", runEvent("renovate/golib"), bot(), other, ["failed", "**CI failed**", "true"]],
@@ -314,6 +352,22 @@ test("notify-pr flags a bot's failing pull request once, then its refails, merge
       bot(),
       [failed],
       ["failed", "**CI failed again**", "false"],
+    ],
+    [
+      "same commit, already reported",
+      "workflow_run",
+      runEvent("renovate/golib"),
+      bot(),
+      [twin("2026-10-12T10:59:00Z")],
+      [""],
+    ],
+    [
+      "same commit, reported after this one",
+      "workflow_run",
+      runEvent("renovate/golib"),
+      bot(),
+      [twin("2026-10-12T11:01:00Z")],
+      ["failed", "**CI failed**", "true"],
     ],
     [
       "failed again in the queue",

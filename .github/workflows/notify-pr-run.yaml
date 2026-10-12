@@ -5,8 +5,8 @@ name: notify-pr (reusable)
 # review and failed CI events. A person's pull request posts its lifecycle to the pull-requests
 # channel, pinging its owner: the assignees, else the assignees of the issues it closes, else the
 # repository's role. Its reviews post to the reviews channel. A bot's pull request posts only when
-# its CI fails, pinging the repository's role on the first failure, and when it merges or closes
-# after one. Drafts post nothing, and a post never pings the person who caused it.
+# a commit of it fails CI, pinging the repository's role the first time, and when it merges or
+# closes after a failure. Drafts post nothing, and a post never pings the person who caused it.
 on:
   workflow_call:
     inputs:
@@ -107,10 +107,15 @@ jobs:
           fi
 
           # A ready pull request is read a minute later, so the assignees and reviewers automation adds
-          # meanwhile join its post. A dequeue's reason reaches the timeline just after the event.
+          # meanwhile join its post; a change from that minute posts nothing, dated by its run's
+          # creation. A dequeue's reason reaches the timeline just after the event.
+          at=""
           case "$kind" in
             opened | ready_for_review) sleep 60 ;;
             dequeued) sleep 10 ;;
+            assigned | unassigned | review_requested | review_request_removed)
+              at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+              ;;
           esac
 
           query='query($owner: String!, $name: String!, $number: Int!) {
@@ -143,13 +148,13 @@ jobs:
             -F number="$number" -f query="$query" --jq .data.repository.pullRequest)"
 
           # A bot's history decides its posts: every CI run since it opened, on its branch or in the
-          # queue. A rerun counts as a failure, since a green run is rarely rerun.
+          # queue, ordered by completion. A rerun counts as a failure, since a green run is rarely rerun.
           runs='[]'
           jobs='[]'
           if [ "$(jq -r .author.__typename <<<"$pr")" = Bot ] && { [ "$kind" = failed ] || [ "$kind" = closed ]; }; then
             runs="$(gh api --paginate \
               "repos/$GITHUB_REPOSITORY/actions/workflows/main.yaml/runs?created=>=$(jq -r .createdAt <<<"$pr")&per_page=100" \
-              --jq '.workflow_runs[] | {id, head_branch, conclusion, run_attempt}' | jq -sc .)"
+              --jq '.workflow_runs[] | {id, head_branch, head_sha, conclusion, run_attempt, updated_at}' | jq -sc .)"
             if [ "$kind" = failed ]; then
               jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$(jq -r .workflow_run.id <<<"$event")/jobs" \
                 --jq '[.jobs[] | select(.conclusion == "failure") | .name]')"
@@ -159,7 +164,7 @@ jobs:
           # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings.
           delimiter="EOF_$(openssl rand -hex 8)"
           jq -r --argjson pr "$pr" --argjson runs "$runs" --argjson jobs "$jobs" \
-            --arg kind "$kind" --arg repo "$GITHUB_REPOSITORY" --arg d "$delimiter" '
+            --arg kind "$kind" --arg at "$at" --arg repo "$GITHUB_REPOSITORY" --arg d "$delimiter" '
             . as $event
             | def logins: map(.login // .name) | join(", ");
             def ids: map(select(.databaseId != $event.sender.id) | .databaseId | tostring);
@@ -173,21 +178,26 @@ jobs:
             | ([$pr.latestOpinionatedReviews.nodes[] | select(.state == "APPROVED") | .author]) as $approvers
             | ([$pr.latestOpinionatedReviews.nodes[] | select(.state == "CHANGES_REQUESTED") | .author]) as $blockers
             | (($pr.ready.nodes[0].createdAt // $pr.createdAt) | fromdateiso8601 + 60 | todateiso8601) as $settled
-            | (($event.pull_request.updated_at // "") < $settled) as $settling
+            | ($at < $settled) as $settling
+            | ($reviewers == [] and $approvers == [] and $blockers == []) as $unreviewed
+            | ($event.workflow_run // {}) as $run
             | [$runs[] | select(.head_branch == $pr.headRefName or
                 (.head_branch | startswith("gh-readonly-queue/\($pr.baseRefName)/pr-\($pr.number)-")))] as $history
-            | ([$history[] | select(.id != $event.workflow_run.id and (.conclusion == "failure" or .run_attempt > 1))]
-                + (if ($event.workflow_run.run_attempt // 1) > 1 then [$event.workflow_run] else [] end)
-                | length) as $failures
+            # The failures finished before this run. A commit posts once, from its first failed run.
+            | ([$history[] | select((.conclusion == "failure" or .run_attempt > 1) and .id != $run.id and
+                 ($run == {} or [.updated_at, .id] < [$run.updated_at, $run.id]))]
+               + if ($run.run_attempt // 1) > 1 then [$run] else [] end) as $failed_before
+            | any($failed_before[]; .head_sha == $run.head_sha and .id != $run.id) as $reported
             | [$pr.dropped.nodes[].reason | ascii_downcase] as $drops
             | (if $pr.assignees.nodes == [] then "nobody assigned" else "assigned to \($pr.assignees.nodes | logins)" end) as $assigned
 
             # Posts by event: a color, a headline, and who to ping.
             | (if $bot then
-                if $kind == "failed" and $open then
+                if $kind == "failed" and $open and ($reported | not) then
                   {channel: "dependencies", color: "failed"}
-                  + if $failures == 0 then {headline: "**CI failed**", role: true} else {headline: "**CI failed again**"} end
-                elif $kind == "closed" and $failures > 0 then
+                  + if $failed_before == [] then {headline: "**CI failed**", role: true}
+                    else {headline: "**CI failed again**"} end
+                elif $kind == "closed" and $failed_before != [] then
                   {channel: "dependencies"}
                   + if $pr.state == "MERGED" then {color: "succeeded", headline: "**Merged** after failing CI"}
                     else {color: "cancelled", headline: "**Closed** after failing CI"} end
@@ -196,7 +206,7 @@ jobs:
                 {channel: "pull_requests", color: "started", headline: "**Ready for review** · \($assigned)"} + $to_owners
               elif $kind == "converted_to_draft" then
                 {channel: "pull_requests", color: "cancelled", headline: "**Back to draft**"}
-              elif ($kind == "assigned" or $kind == "unassigned") and ($settling | not) then
+              elif ($kind == "assigned" or $kind == "unassigned") and $open and ($settling | not) then
                 {channel: "pull_requests", color: "upcoming", headline: "**Assignees changed** · \($assigned)"} + $to_owners
               elif $kind == "closed" then
                 {channel: "pull_requests"}
@@ -212,17 +222,19 @@ jobs:
               else null end) as $lifecycle
             | (if $bot then null
               elif $kind == "opened" or $kind == "ready_for_review" or
-                ($kind == "review_request_removed" and $reviewers == [] and ($settling | not)) then
-                if $reviewers == [] then {color: "upcoming", headline: "**Needs a reviewer**", role: true}
-                else {color: "started", headline: "**Review requested** from \($reviewers | logins)",
-                  users: ([$reviewers[] | select(.__typename == "User")] | ids)} end
+                ($kind == "review_request_removed" and ($settling | not)) then
+                if $unreviewed then {color: "upcoming", headline: "**Needs a reviewer**", role: true}
+                elif $kind == "review_request_removed" then
+                  {color: "cancelled",
+                   headline: "**Review request removed** for \([$event.requested_reviewer // $event.requested_team] | logins)"}
+                elif $reviewers != [] then
+                  {color: "started", headline: "**Review requested** from \($reviewers | logins)",
+                   users: ([$reviewers[] | select(.__typename == "User")] | ids)}
+                else null end
               elif $kind == "review_requested" and ($settling | not) then
                 {color: "started",
                  headline: "**Review requested** from \([$event.requested_reviewer // $event.requested_team] | logins)",
                  users: ([$event.requested_reviewer // empty | {databaseId: .id}] | ids)}
-              elif $kind == "review_request_removed" and ($settling | not) then
-                {color: "cancelled",
-                 headline: "**Review request removed** for \([$event.requested_reviewer // $event.requested_team] | logins)"}
               # A reply in a review thread arrives as a bodiless "commented" review.
               elif $kind == "review_submitted" and ($event.review.state != "commented" or
                 (($event.review.body // "") != "" and $event.review.user.login != $event.pull_request.user.login)) then
@@ -255,9 +267,8 @@ jobs:
                   ($due // empty | "Due \(when("D")) (\(when("R")))"),
                   "Opened \($pr.createdAt | when("R")) by \($pr.author.login)"
                 ] | join(" · ")),
-                ($event.workflow_run // empty | if $kind == "failed" then
-                  "[\(.name) #\(.run_number)](\(.html_url)) failed\(if $jobs != [] then ": \($jobs | join(", "))" else "" end)"
-                  else empty end)
+                ($run | select($kind == "failed") |
+                  "[\(.name) #\(.run_number)](\(.html_url)) failed\(if $jobs != [] then ": \($jobs | join(", "))" else "" end)")
               ] as $details
             | {
                 title: "\($repo)#\($pr.number) · \($pr.title)",
