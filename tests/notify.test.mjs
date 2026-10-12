@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { step, succeeds, workspace } from "./helpers.mjs";
 
-test("notify-ci reports a failure, and a success only when it ends one", (t) => {
+test("notify-ci reports a failure, and a success only when it ends one, naming the author's login", (t) => {
   const decide = step(".github/workflows/notify-ci-run.yaml", "state");
   const run = (id, number, conclusion) => ({ id, run_number: number, conclusion });
-  for (const [conclusion, history, expected] of [
+  for (const [conclusion, history, expected, login = "kushuh"] of [
     ["failure", [], "failed"],
+    ["failure", [], "failed", ""],
     ["success", [run(41, 9, "failure")], "succeeded"],
     ["success", [run(41, 9, "success")], undefined],
     ["success", [run(41, 9, "cancelled"), run(40, 8, "failure")], "succeeded"],
@@ -15,7 +16,12 @@ test("notify-ci reports a failure, and a success only when it ends one", (t) => 
   ]) {
     const w = workspace(t);
     w.write("output", "");
-    w.stub("gh", `console.log(${JSON.stringify(JSON.stringify({ workflow_runs: history }))})`);
+    w.stub(
+      "gh",
+      `const commit = process.argv.includes('repos/a-novel/infra/commits/0123456789abcdef');
+      if (commit && process.env.LOGIN === '') process.exit(1);
+      console.log(commit ? process.env.LOGIN : ${JSON.stringify(JSON.stringify({ workflow_runs: history }))});`
+    );
     succeeds(
       w.bash(decide, {
         GITHUB_REPOSITORY: "a-novel/infra",
@@ -26,16 +32,20 @@ test("notify-ci reports a failure, and a success only when it ends one", (t) => 
         CONCLUSION: conclusion,
         MESSAGE: "fix(deploy): retry the image copy\n\nCo-authored-by: someone",
         SHA: "0123456789abcdef",
-        AUTHOR: "kushuh",
+        AUTHOR: "Geoffroy Vincent",
         SERVER_URL: "https://github.com",
+        LOGIN: login,
       })
     );
     const output = w.read("output");
     assert.equal(output.match(/^post=(.*)$/m)?.[1], expected, `${conclusion} after ${JSON.stringify(history)}`);
     if (expected) {
-      assert.match(
-        output,
-        /^fix\(deploy\): retry the image copy\n\[`0123456`\]\(https:\/\/github\.com\/a-novel\/infra\/commit\/0123456789abcdef\) by kushuh\n/m
+      assert.ok(
+        output.includes(
+          "fix(deploy): retry the image copy\n[`0123456`](https://github.com/a-novel/infra/commit/0123456789abcdef)" +
+            ` by ${login || "Geoffroy Vincent"}\n`
+        ),
+        output
       );
     }
   }
