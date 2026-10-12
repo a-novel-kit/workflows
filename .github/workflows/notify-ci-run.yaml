@@ -64,12 +64,15 @@ jobs:
             post=succeeded
           fi
 
+          # GitHub writes a squash merge under the profile name; the account that authored it reads
+          # better. Public commits need no extra token permission; the name stays as a fallback.
+          login="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq '.author.login // empty' 2>/dev/null)" || login=""
           delimiter="EOF_$(openssl rand -hex 8)"
           {
             echo "post=$post"
             echo "description<<$delimiter"
             printf '%s\n' "${MESSAGE%%$'\n'*}"
-            printf '[`%s`](%s/%s/commit/%s) by %s\n' "${SHA:0:7}" "$SERVER_URL" "$GITHUB_REPOSITORY" "$SHA" "$AUTHOR"
+            printf '[`%s`](%s/%s/commit/%s) by %s\n' "${SHA:0:7}" "$SERVER_URL" "$GITHUB_REPOSITORY" "$SHA" "${login:-$AUTHOR}"
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
