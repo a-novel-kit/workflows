@@ -78,9 +78,10 @@ SemVer release.
 | `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
 | `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                 |
 | `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
-| `assign-bot`             | Assign a PR to its author, or to the code owner when the author is a bot.                                         |
+| `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                           |
 | `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
 | `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                       |
+| `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.            |
 | `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |

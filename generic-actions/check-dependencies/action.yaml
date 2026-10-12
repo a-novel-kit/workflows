@@ -1,0 +1,71 @@
+name: check dependencies
+description: >
+  Hold a pull request that changes a dependency manifest (go.mod, a tool's .mod, go.work,
+  package.json, pnpm-workspace.yaml) until a reviewer adds the override label, so every dependency a
+  person adds, removes or bumps is acknowledged. Lockfiles only follow their manifests and pass. A
+  pull request whose author and every commit are bots passes, and so does a merge-queue group, whose
+  pull requests each passed on their own. The label approves the head it was added on: a push
+  removes it.
+
+inputs:
+  override_label:
+    required: false
+    default: allow-dependency-change
+    description: PR label that acknowledges the dependency change.
+  github_token:
+    required: true
+    description: >
+      Token with pull requests write: it lists the pull request's files, commits and labels, and
+      removes the label after a push.
+
+runs:
+  using: composite
+  steps:
+    - name: Check dependency manifests
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        LABEL: ${{ inputs.override_label }}
+        EVENT: ${{ github.event_name }}
+        ACTION: ${{ github.event.action }}
+        PR: ${{ github.event.pull_request.number }}
+        AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT" = merge_group ]; then
+          echo "A merge-queue group holds pull requests that each passed this check."
+          exit 0
+        fi
+
+        manifests="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' |
+          grep -E '(^|/)(go\.work|[^/]+\.mod|package\.json|pnpm-workspace\.yaml)$' || true)"
+        if [ -z "$manifests" ]; then
+          echo "No dependency manifest changed."
+          exit 0
+        fi
+
+        # A person's commit on a bot's branch is gated like any other change.
+        if [ "$AUTHOR_TYPE" = Bot ]; then
+          authors="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" --paginate --jq '.[].author.type // "none"')"
+          if ! grep -qvx Bot <<<"$authors"; then
+            echo "A bot wrote this pull request and every commit on it."
+            exit 0
+          fi
+        fi
+
+        # Read live, not from the event, so a rerun sees the labels the pull request has now.
+        labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --paginate --jq '.[].name')"
+        if grep -qxF "$LABEL" <<<"$labels"; then
+          if [ "$ACTION" != synchronize ]; then
+            echo "::notice::Dependency change acknowledged by \"$LABEL\"."
+            printf '## Dependency manifests\n\nAcknowledged by `%s`:\n\n%s\n' "$LABEL" "$(sed 's/^/- `/; s/$/`/' <<<"$manifests")" \
+              >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # The label acknowledged the previous head; this push needs a fresh review.
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$(jq -rn --arg label "$LABEL" '$label | @uri')" --silent
+        fi
+
+        printf '::error::This pull request changes dependency manifests: %s. A reviewer acknowledges them with the "%s" label.\n' \
+          "$(paste -sd, - <<<"$manifests" | sed 's/,/, /g')" "$LABEL"
+        exit 1
