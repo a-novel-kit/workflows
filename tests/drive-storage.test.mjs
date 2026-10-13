@@ -6,7 +6,7 @@ import { link, mkdtemp, readdir, readFile, rm, writeFile, mkdir, symlink } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Failure } from "../node-actions/test-playwright/drive/common.mjs";
+import { Failure, GitHub, testedHead } from "../node-actions/test-playwright/drive/common.mjs";
 import {
   cleanup,
   currentReference,
@@ -48,6 +48,52 @@ function publication() {
     github: { current: async () => true, successfulBrowserRun: async () => true },
   };
 }
+
+test("a pull request run tests its head, since GITHUB_SHA is then GitHub's merge commit", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "drive-head-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "event.json");
+  await writeFile(path, JSON.stringify({ pull_request: { head: { sha: "head" } } }));
+  for (const [name, expected] of [
+    ["pull_request", "head"],
+    ["push", "merge"],
+    ["merge_group", "merge"],
+  ])
+    assert.equal(testedHead({ GITHUB_EVENT_NAME: name, GITHUB_SHA: "merge", GITHUB_EVENT_PATH: path }), expected);
+});
+
+test("pull request batches keep their provenance, and only master pushes stage references", async () => {
+  const run = {
+    path: ".github/workflows/main.yaml",
+    head_repository: { full_name: "example/studio" },
+    head_sha: "head",
+    head_branch: "feature",
+    run_number: 4,
+    run_attempt: 1,
+    status: "completed",
+  };
+  const github = new GitHub("example/studio", "token");
+  const answer = (event, overrides = {}) =>
+    (github.request = async (path) =>
+      path.startsWith("git/ref/") ? { object: { sha: "head" } } : { ...run, event, ...overrides });
+  github.pages = async () => [];
+  const props = { properties: { run_id: "40", attempt: "1", run_number: "4", sha: "head" } };
+  for (const event of ["push", "pull_request"]) {
+    answer(event);
+    assert.deepEqual(await github.branch(props), ["feature", true]);
+  }
+  answer("workflow_dispatch");
+  await assert.rejects(github.branch(props), Failure);
+  answer("pull_request", { head_sha: "merge" });
+  await assert.rejects(github.branch(props), Failure);
+  for (const [event, expected] of [
+    ["push", true],
+    ["pull_request", false],
+  ]) {
+    answer(event, { head_branch: "master" });
+    assert.equal(await github.current("head", "40", "1"), expected);
+  }
+});
 
 test("failed or incomplete runs keep the current reference", async () => {
   const { old, pending, store, github } = publication();

@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { appendFile, glob, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, posix, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { Failure, runCli } from "./common.mjs";
+import { Failure, runCli, testedHead } from "./common.mjs";
 import { captureReview } from "./review.mjs";
 
 /** Require a complete, unique inventory and distinguish visual failures from functional errors. */
@@ -170,7 +170,7 @@ async function main() {
     approved: process.env.VISUAL_APPROVED === "true",
     seed: process.env.VISUAL_SEED === "true",
   });
-  await writeFile(".visual/verdict.json", JSON.stringify({ changed, sha: process.env.GITHUB_SHA }));
+  await writeFile(".visual/verdict.json", JSON.stringify({ changed, sha: testedHead() }));
 }
 
 runCli(import.meta.url, main, "Playwright comparison or evidence packaging failed");

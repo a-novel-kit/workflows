@@ -47,7 +47,12 @@ function fixture() {
               path: ".github/workflows/visual-tests.yaml",
               display_title: "Visual approval 1 head master labeled",
             }
-          : { head_sha: "head", path: ".github/workflows/main.yaml", event: "push" },
+          : {
+              head_sha: "head",
+              head_repository: { full_name: "example/studio" },
+              path: ".github/workflows/main.yaml",
+              event: "pull_request",
+            },
     graphql: async () => ({ repository: { mergeQueue: { entries: { nodes: [] } } } }),
     successfulJob: async () => true,
     successfulBrowserRun: async () => true,
@@ -101,6 +106,35 @@ test("proof requires a successful browser job and matching baseline", async () =
   assert.equal(await f.policy.proof(f.pr, "new-base"), null);
   f.comparison.target_url = "https://github.com/other/repo/actions/runs/42/attempts/2";
   assert.equal(await f.policy.proof(f.pr, "base"), null);
+  for (const run of [{ event: "push" }, { event: "merge_group" }, { head_repository: { full_name: "fork/studio" } }]) {
+    const proof = fixture();
+    const request = proof.github.request;
+    proof.github.request = async (path) =>
+      path.includes("/42/") ? { ...(await request(path)), ...run } : request(path);
+    assert.equal(await proof.policy.proof(proof.pr, "base"), run.event === "push" ? "approved" : null);
+  }
+});
+
+test("a branch run is allowed only for an approved, open, same-repository PR still at the tested head", async () => {
+  for (const [eventName, mutate, allowed] of [
+    ["pull_request", () => {}, true],
+    ["push", () => {}, true],
+    ["pull_request", (f) => (f.pr.head.sha = "newer"), false],
+    ["pull_request", (f) => (f.pr.state = "closed"), false],
+    ["pull_request", (f) => (f.pr.base.ref = "release"), false],
+    ["pull_request", (f) => (f.pr.head.repo.full_name = "fork/studio"), false],
+    ["pull_request", (f) => (f.event.actor.type = "Bot"), false],
+    ["workflow_dispatch", () => {}, false],
+  ]) {
+    const f = fixture();
+    mutate(f);
+    const request = f.github.request;
+    f.github.request = async (path) => (path === "pulls/1" ? f.pr : request(path));
+    const pages = f.github.pages;
+    f.github.pages = async (path) => (path.startsWith("pulls?") ? [f.pr] : pages(path));
+    const event = { pull_request: { number: 1, head: { sha: "head" } } };
+    assert.equal(await f.policy.allows(event, eventName, "head", "refs/heads/feature", "base"), allowed);
+  }
 });
 test("queue requires proof for every PR", async () => {
   const f = fixture(),
@@ -170,7 +204,7 @@ test("squash queue commits are attributed through their queue entries, never by 
   assert.deepEqual(await f.policy.associated("base", "squash-2", true), []);
 });
 
-/** A labeled PR whose finished main run began before the label and failed its browser job. */
+/** A labeled PR whose finished main run began its browser job before the receipt and failed it. */
 function refreshFixture() {
   const f = fixture();
   process.env.GITHUB_RUN_ID = "41";
@@ -181,12 +215,12 @@ function refreshFixture() {
     run_attempt: 2,
     head_sha: "head",
     head_branch: "feature",
-    event: "push",
+    event: "pull_request",
     path: ".github/workflows/main.yaml",
     status: "completed",
     run_started_at: "2026-09-01T09:00:00Z",
   };
-  const browser = { id: 7, name: "test-browser", conclusion: "failure" };
+  const browser = { id: 7, name: "test-browser", conclusion: "failure", started_at: "2026-09-01T09:30:00Z" };
   const requests = [],
     posts = [];
   f.github.request = async (path) => {
@@ -199,7 +233,7 @@ function refreshFixture() {
   };
   const pages = f.github.pages;
   f.github.pages = async (path) => (path.startsWith("pulls?") ? [f.pr] : pages(path));
-  f.policy.post = async (...args) => posts.push(args);
+  f.policy.post = async (...args) => (posts.push(args), { created_at: f.receipt.created_at });
   return { ...f, run, browser, requests, posts };
 }
 
@@ -259,21 +293,25 @@ test("a push removes the label that approved an earlier head", async () => {
   }
 });
 
-test("refresh reruns only a finished run that began before the label change", async () => {
+test("refresh reruns only a finished browser job that began before the receipt", async () => {
   for (const [mutate, rerun] of [
     [() => {}, true],
+    // A label change starts a pull request run alongside its approval run.
     [(f) => (f.run.run_started_at = "2026-09-01T10:00:00Z"), true],
-    [(f) => (f.run.run_started_at = "2026-09-01T10:00:01Z"), false],
+    [(f) => (f.browser.started_at = "2026-09-01T10:00:01Z"), true],
+    [(f) => (f.browser.started_at = "2026-09-01T10:00:02Z"), false],
+    [(f) => (f.run.event = "push"), true],
+    [(f) => (f.run.event = "merge_group"), false],
     [(f) => (f.run.status = "in_progress"), false],
     [(f) => (f.run.head_sha = "other"), false],
     [(f) => (f.browser.conclusion = "skipped"), false],
     [(f) => (f.browser.name = "test-unit"), false],
-    [(f) => (f.event = undefined), false],
   ]) {
     const f = refreshFixture();
     mutate(f);
-    assert.equal(Boolean(await f.policy.refresh(f.pr, f.event)), rerun);
+    assert.equal(Boolean(await f.policy.refresh(f.pr, f.receipt.created_at)), rerun);
     assert.equal(f.posts.length, Number(rerun));
+    assert(f.requests.includes("actions/workflows/main.yaml/runs?head_sha=head&per_page=100"));
   }
 });
 
@@ -282,6 +320,7 @@ test("main's completion refreshes once the label change has its receipt", async 
     [() => {}, true],
     [(f) => (f.receipt.created_at = "2026-09-01T09:59:59Z"), false],
     [(f) => f.events.pop(), false],
+    [(f) => (f.run.event = "push"), true],
     [(f) => (f.run.event = "merge_group"), false],
     [(f) => (f.pr.head.sha = "newer"), false],
     [(f) => (f.pr.base.ref = "release"), false],
@@ -343,6 +382,39 @@ test("approval CLI links the browser rerun from either trigger", (t) => {
       })
     );
     assert.match(ws.read("summary"), /\(https:\/\/github\.com\/example\/studio\/actions\/runs\/42\) reruns/);
+  }
+});
+
+test("a pull request comparison is recorded on its head, not GitHub's merge commit", (t) => {
+  for (const [name, payload, target] of [
+    ["pull_request", { pull_request: { head: { sha: "head" } } }, "head"],
+    ["push", {}, "merge"],
+  ]) {
+    const ws = workspace(t);
+    ws.write(".visual/context.json", JSON.stringify({ baseline: "base" }));
+    ws.write("event.json", JSON.stringify(payload));
+    const stub = ws.write(
+      "github.mjs",
+      `
+      import { appendFileSync } from "node:fs";
+      globalThis.fetch = async (url) => {
+        appendFileSync(${JSON.stringify(`${ws.cwd}/urls`)}, url + "\\n");
+        return new Response("{}");
+      };
+    `
+    );
+    succeeds(
+      ws.run(process.execPath, ["--import", stub, `${root}node-actions/test-playwright/drive/policy.mjs`, "record"], {
+        GITHUB_REPOSITORY: "example/studio",
+        GITHUB_EVENT_NAME: name,
+        GITHUB_EVENT_PATH: `${ws.cwd}/event.json`,
+        GITHUB_SHA: "merge",
+        GITHUB_RUN_ID: "42",
+        GITHUB_RUN_ATTEMPT: "1",
+        VISUAL_OUTCOME: "failure",
+      })
+    );
+    assert.equal(ws.read("urls"), `https://api.github.com/repos/example/studio/statuses/${target}\n`);
   }
 });
 

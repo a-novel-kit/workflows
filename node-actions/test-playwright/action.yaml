@@ -78,6 +78,8 @@ runs:
         github_token: ${{ inputs.github_token }}
         app_private_key: ${{ inputs.app_private_key }}
         client_id: ${{ inputs.client_id }}
+        # A pull request's screenshot approval binds its head, so test that commit, not the branch tip.
+        ref: ${{ github.event.pull_request.head.sha }}
     - name: Install Chromium and system dependencies
       shell: bash
       run: |

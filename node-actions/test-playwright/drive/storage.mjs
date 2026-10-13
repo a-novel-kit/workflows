@@ -8,7 +8,7 @@ import { buffer } from "node:stream/consumers";
 import { pipeline } from "node:stream/promises";
 import { setTimeout } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { Failure, GitHub, runCli } from "./common.mjs";
+import { Failure, GitHub, runCli, testedHead } from "./common.mjs";
 
 export const PROTOCOL = "playwright-v1";
 export const CHUNK = 16 * 1024 * 1024;
@@ -409,7 +409,7 @@ async function main() {
     );
   } else if (["upload", "stage"].includes(mode)) {
     const props = {
-      sha: env.GITHUB_SHA,
+      sha: testedHead(env),
       run_id: env.GITHUB_RUN_ID,
       run_number: env.GITHUB_RUN_NUMBER,
       attempt: env.GITHUB_RUN_ATTEMPT,

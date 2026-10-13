@@ -1,4 +1,5 @@
 // Shared GitHub provenance checks for screenshot publication and approval.
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** A safe operator-facing error that contains no credential or API payload. */
@@ -12,6 +13,15 @@ export function runCli(url, main, message) {
       process.exitCode = 1;
     });
   }
+}
+
+/** Events whose main.yaml run tests a pull request's head. */
+export const HEAD_EVENTS = ["push", "pull_request"];
+
+/** The commit a run tested: a pull request's head, since GITHUB_SHA is then GitHub's merge commit. */
+export function testedHead(env = process.env) {
+  if (env.GITHUB_EVENT_NAME !== "pull_request") return env.GITHUB_SHA;
+  return JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")).pull_request.head.sha;
 }
 
 /** Verify run and branch provenance using the caller's repository token. */
@@ -95,7 +105,7 @@ export class GitHub {
       run.head_repository.full_name !== this.repository ||
       run.head_sha !== props.sha ||
       run.run_number !== Number(props.run_number) ||
-      !["push", "merge_group"].includes(run.event)
+      ![...HEAD_EVENTS, "merge_group"].includes(run.event)
     ) {
       throw new Failure("Batch provenance does not match its GitHub run");
     }

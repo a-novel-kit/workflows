@@ -175,12 +175,14 @@ the original failing report under `.visual/comparison-report/`. Drive previews f
 the interactive HTML report. Existing Drive configuration and batch cleanup need no changes.
 `generic-actions/approve-playwright` records label approval for the reviewed PR head without waiting
 on main. A push removes the label, since it approved an earlier head; add it again after reviewing
-the new one. When the label changes after the head's main run started, it reruns that run's
-`test-browser` job once the run completes: at once if it already has, otherwise from the caller's
-`workflow_run` trigger on main. While screenshot changes await approval, the failing
+the new one. When the head's latest `test-browser` job began before that receipt, it reruns the job
+once its run completes: at once if it already has, otherwise from the caller's `workflow_run` trigger
+on main. A main that runs on pull requests tests the PR head and records its comparison there, and a
+label change also starts a new run. While screenshot changes await approval, the failing
 `visual-comparison` check names the `allow-screenshot-change` label and links the drift review
 directly; rerun `test-browser` once the page expires. Any other failure links main's run. See the
-[upgrade guides](./docs/migrations/v1.44.0.md) and [v1.45.3](./docs/migrations/v1.45.3.md).
+[upgrade guides](./docs/migrations/v1.44.0.md), [v1.45.3](./docs/migrations/v1.45.3.md) and
+[v1.53.0](./docs/migrations/v1.53.0.md).
 Use `generic-actions/approve-playwright` for exact-head label approval and
 `generic-actions/maintain-playwright` for trusted publication and cleanup; see the
 [Drive adoption guide](./docs/migrations/v1.33.0.md).
@@ -191,10 +193,11 @@ Compose project's services and volumes. See the [adoption guide](./docs/migratio
 
 `lint-translations` runs a platform's `i18n:structure`, `i18n:gaps` and `i18n:drift` scripts, the
 last two against the merge base with the default branch. The `allow-incomplete-translations` and
-`allow-translation-drift` labels accept gaps and drift; a merge group checks structure only. Skip the
-job on the default branch. A trusted `pull_request_target` caller runs
-`generic-actions/approve-translations`, which reruns the check when a label changes and removes both
-labels when a push reaches the PR. See the [adoption guide](./docs/migrations/v1.40.0.md).
+`allow-translation-drift` labels accept gaps and drift, except on the run for a pull request push;
+a merge group checks structure only. Skip the job on the default branch. A trusted
+`pull_request_target` caller runs `generic-actions/approve-translations`, which removes both labels
+when a push reaches the PR and, for a main that runs on branch pushes, reruns the check when a label
+changes. See the [adoption guide](./docs/migrations/v1.40.0.md).
 
 ### `security-actions`
 
