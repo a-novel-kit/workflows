@@ -94,20 +94,25 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.bot.outputs.token }}
-        APP_LOGIN: ${{ steps.bot.outputs.app_login }}
         BRANCH: ${{ inputs.branch }}
         CONFIGS: ${{ inputs.configs }}
         SUMMARY: ${{ steps.refresh.outputs.summary }}
       run: |
         set -euo pipefail
-        user_id="$(gh api "/users/$APP_LOGIN" --jq .id)"
-        git config url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf https://github.com/
-        git config user.name "$APP_LOGIN"
-        git config user.email "${user_id}+${APP_LOGIN}@users.noreply.github.com"
-        git switch -c "$BRANCH"
-        for config in $CONFIGS; do git add "${config%.yaml}.lock.json"; done
-        git commit -m "chore(deps): refresh apko locks"
-        git push --force origin "$BRANCH"
+        # The default branch requires signed commits. GitHub signs a commit the App creates through
+        # the API, never one it pushes.
+        tree="$(for config in $CONFIGS; do
+          jq -n --arg path "${config%.yaml}.lock.json" --rawfile content "${config%.yaml}.lock.json" \
+            '{path: $path, mode: "100644", type: "blob", content: $content}'
+        done | jq -s --arg base "$(git rev-parse 'HEAD^{tree}')" '{base_tree: $base, tree: .}' |
+          gh api "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)"
+        commit="$(gh api "repos/$GITHUB_REPOSITORY/git/commits" -f message="chore(deps): refresh apko locks" \
+          -f tree="$tree" -f "parents[]=$(git rev-parse HEAD)" --jq .sha)"
+        if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --silent 2>/dev/null; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" -f sha="$commit" -F force=true --silent
+        else
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" --silent
+        fi
         body="$(printf 'Re-resolves the apko locks. Every change below changes the images built from them.\n%s' "$SUMMARY")"
         if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
           gh pr edit "$BRANCH" --body "$body"
