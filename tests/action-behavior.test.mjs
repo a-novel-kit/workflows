@@ -363,6 +363,57 @@ test("refresh-apko-locks summarizes each lock's package changes and stays quiet 
   }
 });
 
+test("refresh-apko-locks commits through the API, which signs it, and moves the branch onto it", (t) => {
+  const w = workspace(t);
+  w.stub(
+    "gh",
+    `
+    const fs = require('fs'), args = process.argv.slice(2);
+    const input = args.includes('--input') ? JSON.parse(fs.readFileSync(0, 'utf8')) : undefined;
+    fs.appendFileSync('calls', JSON.stringify({ args, input }) + '\\n');
+    const path = args.find((arg) => arg.startsWith('repos/')) ?? '';
+    if (path.endsWith('/git/trees')) console.log('tree-sha');
+    else if (path.endsWith('/git/commits')) console.log('commit-sha');
+    else if (path.includes('/git/ref/')) process.exit(process.env.BRANCH_EXISTS === 'true' ? 0 : 1);
+  `
+  );
+  w.write("builds/db.apko.yaml", "contents: {}\n");
+  w.write("builds/db.apko.lock.json", "old");
+  succeeds(w.run("git", ["init", "-q"]));
+  succeeds(w.run("git", ["add", "."]));
+  succeeds(w.run("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "locks"]));
+  const head = succeeds(w.run("git", ["rev-parse", "HEAD"]));
+  const baseTree = succeeds(w.run("git", ["rev-parse", "HEAD^{tree}"]));
+  w.write("builds/db.apko.lock.json", "new");
+
+  const publish = step("generic-actions/refresh-apko-locks/action.yaml", "Open or update the pull request");
+  const ref = "repos/a-novel/example/git/refs";
+  for (const [exists, move] of [
+    ["true", ["api", "-X", "PATCH", `${ref}/heads/chore/deps/apko-locks`, "-f", "sha=commit-sha", "-F", "force=true"]],
+    ["false", ["api", ref, "-f", "ref=refs/heads/chore/deps/apko-locks", "-f", "sha=commit-sha"]],
+  ]) {
+    w.write("calls", "");
+    const env = { GITHUB_REPOSITORY: "a-novel/example", BRANCH: "chore/deps/apko-locks", BRANCH_EXISTS: exists };
+    succeeds(w.bash(publish, { ...env, CONFIGS: "builds/db.apko.yaml", SUMMARY: "\n- `zlib`: 1 → 2\n" }));
+    const [tree, commit, , update] = w.read("calls").trim().split("\n").map(JSON.parse);
+    assert.deepEqual(tree.input, {
+      base_tree: baseTree,
+      tree: [{ path: "builds/db.apko.lock.json", mode: "100644", type: "blob", content: "new" }],
+    });
+    assert.deepEqual(commit.args.slice(0, 8), [
+      "api",
+      "repos/a-novel/example/git/commits",
+      "-f",
+      "message=chore(deps): refresh apko locks",
+      "-f",
+      "tree=tree-sha",
+      "-f",
+      `parents[]=${head}`,
+    ]);
+    assert.deepEqual(update.args.slice(0, move.length), move, `branch exists: ${exists}`);
+  }
+});
+
 test("escalate pages Discord with push_mention and keeps the GitHub mention on the ticket", (t) => {
   const w = workspace(t);
   const path = "generic-actions/escalate/action.yaml";
