@@ -25,6 +25,12 @@ inputs:
     description: >
       Labels, separated by newlines or commas, that count only when a maintainer, an admin or the
       App applied them last: those that waive a check or spend resources.
+  event:
+    required: false
+    default: ${{ github.event_name }}
+    description: >
+      Event being gated. Defaults to the triggering one; a run relayed through `workflow_run` passes
+      `relay-context`'s, and `merge_group` passes without a review.
   pull_request_number:
     required: false
     default: ${{ github.event.pull_request.number }}
@@ -57,7 +63,7 @@ runs:
         GH_TOKEN: ${{ steps.token.outputs.token }}
         AGENT: ${{ steps.token.outputs.app-slug }}
         PRIVILEGED: ${{ inputs.privileged_labels }}
-        EVENT: ${{ github.event_name }}
+        EVENT: ${{ inputs.event }}
         PR: ${{ inputs.pull_request_number }}
         AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
         HEAD_SHA: ${{ inputs.head_sha }}

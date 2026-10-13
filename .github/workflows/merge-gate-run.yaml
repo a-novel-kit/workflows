@@ -52,6 +52,25 @@ on:
         required: false
         type: string
         default: "false"
+      pull_request_number:
+        description: >-
+          Pull request to gate. Defaults to the triggering one; a caller relaying `pull_request_review`
+          through `workflow_run` passes `relay-context`'s.
+        required: false
+        type: string
+        default: ""
+      head_sha:
+        description: Head to post the check on. Defaults to the triggering pull request's or merge group's head.
+        required: false
+        type: string
+        default: ""
+      merge_group_head_ref:
+        description: >-
+          Head ref of the merge-queue group to gate. Defaults to the triggering merge group; a caller
+          relaying `merge_group` through `workflow_run` passes `relay-context`'s.
+        required: false
+        type: string
+        default: ""
     secrets:
       app_private_key:
         description: The [Agent] bot App private key (PEM).
@@ -76,10 +95,14 @@ jobs:
           kill_switch: ${{ inputs.kill_switch }}
           planning_repo: ${{ inputs.planning_repo }}
           snapshot_dry_run: ${{ inputs.snapshot_dry_run }}
+          # An empty `with:` value overrides the action's default, so fall back to the event here.
+          pull_request_number: ${{ inputs.pull_request_number || github.event.pull_request.number }}
+          head_sha: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          merge_group_head_ref: ${{ inputs.merge_group_head_ref || github.event.merge_group.head_ref }}
 
   auto-merge:
-    # Only where there is a PR to enable (pull_request events), and never on a draft.
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
+    # Only where there is a PR to enable (pull request events), and never on a draft.
+    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     # The member check reads the event payload with no API call, and enable-auto-merge
     # mints its own [Agent] token, so no default-token permissions are needed.
