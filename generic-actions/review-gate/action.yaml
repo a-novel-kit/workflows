@@ -86,7 +86,7 @@ runs:
         declare -A roles=()
         trusted() { # $1=login  $2=account type
           if [ "$2" = Bot ]; then
-            [ "$1" = "$AGENT[bot]" ]
+            [ "$1" = "${AGENT}[bot]" ]
             return
           fi
           if [ -z "${roles[$1]+set}" ]; then
@@ -120,7 +120,9 @@ runs:
         [ -n "$approver" ] ||
           problems+="- No approval of this head from a maintainer or admin of this repository."$'\n'
         while IFS= read -r label; do
-          [ -n "$label" ] && grep -qxF -- "$label" <<<"$privileged" || continue
+          if [ -z "$label" ] || ! grep -qxF -- "$label" <<<"$privileged"; then
+            continue
+          fi
           IFS=$'\t' read -r _ login type < <(awk -F'\t' -v label="$label" '$1 == label { last = $0 } END { print last }' <<<"$applied")
           if [ -z "${login:-}" ] || ! trusted "$login" "$type"; then
             problems+="- \`$label\` was last applied by @${login:-unknown}; a maintainer or admin applies it again."$'\n'
