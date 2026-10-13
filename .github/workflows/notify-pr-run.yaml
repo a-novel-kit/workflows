@@ -289,7 +289,7 @@ jobs:
       - name: Resolve the owners
         id: owners
         if: steps.state.outputs.lifecycle_users != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.51.0
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.51.1
         with:
           github_user_ids: ${{ steps.state.outputs.lifecycle_users }}
           bws_access_token: ${{ secrets.bws_access_token }}
@@ -298,7 +298,7 @@ jobs:
       - name: Resolve the review pings
         id: reviewers
         if: steps.state.outputs.review_users != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.51.0
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.51.1
         with:
           github_user_ids: ${{ steps.state.outputs.review_users }}
           bws_access_token: ${{ secrets.bws_access_token }}
@@ -306,7 +306,7 @@ jobs:
 
       - name: Post the lifecycle
         if: steps.state.outputs.lifecycle_color != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.51.0
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.51.1
         with:
           # A bot's post never falls back to the pull-requests channel.
           webhook: >-
@@ -322,7 +322,7 @@ jobs:
 
       - name: Post the review
         if: steps.state.outputs.review_color != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.51.0
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.51.1
         with:
           webhook: ${{ secrets.reviews_webhook }}
           color: ${{ steps.state.outputs.review_color }}
