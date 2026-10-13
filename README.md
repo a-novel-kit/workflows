@@ -234,6 +234,7 @@ verbatim — so the required context would be one GitHub never posts, and the PR
 
 | Action                | Purpose                                                          |
 | --------------------- | ---------------------------------------------------------------- |
+| `deploy-release`      | Ask infra to deploy a release once all its images are published. |
 | `npm`                 | Publish the workspace packages to the GitHub registry.           |
 | `release-core`        | Cut a release in CI: bump the version, tag, push, release.       |
 | `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line (patch, not-latest). |

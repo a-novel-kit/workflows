@@ -1,0 +1,41 @@
+name: deploy release
+description: >
+  Ask the organization's infra repository to deploy a published release. It sends infra a `release`
+  repository dispatch naming the calling repository and its tag; infra's pin-release.yaml pins every
+  image of that release in one pull request, which merges like a Renovate update. Run it after every
+  image of the release is published, so infra never pins half of it.
+
+inputs:
+  client_id:
+    required: true
+    description: Client ID of the GitHub App that sends the dispatch. It needs contents write on infra.
+  app_private_key:
+    required: true
+    description: Private key of that App.
+  version:
+    required: true
+    description: The release tag to deploy, such as "v1.2.3".
+
+runs:
+  using: composite
+  steps:
+    - id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: infra
+        # A repository dispatch needs contents write, and nothing else.
+        permission-contents: write
+
+    - name: Dispatch the release to infra
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        gh api "repos/$GITHUB_REPOSITORY_OWNER/infra/dispatches" -f event_type=release \
+          -f "client_payload[repository]=$GITHUB_REPOSITORY" -f "client_payload[version]=$VERSION"
+        echo "Asked \`$GITHUB_REPOSITORY_OWNER/infra\` to deploy $GITHUB_REPOSITORY $VERSION." >>"$GITHUB_STEP_SUMMARY"
