@@ -1,5 +1,8 @@
 name: build docker service
-description: Build a docker container from a Dockerfile, and make sure it reports healthy when run.
+description: >
+  Build a docker container from a Dockerfile, and make sure it reports healthy when run. Pushes to the
+  default branch, releases, and pull requests labeled with-feature-env are tagged; every other build is
+  pushed by digest only.
 
 inputs:
   mode:
@@ -107,9 +110,12 @@ runs:
         images: ghcr.io/${{ inputs.image_name }}
         tags: |
           # Ref-derived tags for the tag-push flow, off when a version is passed.
-          type=ref,event=pr,enable=${{ inputs.version == '' }}
+          # A pull request is tagged only while labeled with-feature-env. The label approves the head
+          # it was added on, so a push, whose payload still carries it, is not tagged.
+          type=ref,event=pr,enable=${{ github.event.action != 'synchronize' && contains(github.event.pull_request.labels.*.name, 'with-feature-env') }}
           type=schedule,pattern=nightly,enable=${{ inputs.version == '' && inputs.mode == 'job' }}
-          type=ref,event=branch,enable=${{ inputs.version == '' }}
+          # Only the default branch is tagged; other branches and merge-queue groups push untagged.
+          type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
           type=ref,event=tag,enable=${{ inputs.version == '' }}
           type=semver,pattern=v{{version}},enable=${{ inputs.version == '' }}
           type=semver,pattern=v{{major}}.{{minor}},enable=${{ inputs.version == '' }}
@@ -188,12 +194,12 @@ runs:
         # Restore only: the push build shares this job's warm buildx cache from the
         # load build above, so it re-tags and pushes the already-built layers.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
-        push: ${{ inputs.reproducible != 'true' }}
+        # A build without tags still pushes, by digest alone, for the jobs that pull it by digest.
         # A reproducible push rewrites file times to SOURCE_DATE_EPOCH, and skips inline
         # provenance, which records the build time; the attestation below covers it.
-        outputs: ${{ inputs.reproducible == 'true' && 'type=registry,rewrite-timestamp=true' || '' }}
+        outputs: type=image,push=true,push-by-digest=${{ steps.meta.outputs.tags == '' }}${{ inputs.reproducible == 'true' && ',rewrite-timestamp=true' || '' }}
         provenance: ${{ inputs.reproducible == 'true' && 'false' || '' }}
-        tags: ${{ steps.meta.outputs.tags }}
+        tags: ${{ steps.meta.outputs.tags || format('ghcr.io/{0}', inputs.image_name) }}
         labels: ${{ steps.labels.outputs.labels }}
         file: ${{ inputs.file }}
         secret-envs: ${{ inputs.secret-envs }}
@@ -204,7 +210,9 @@ runs:
       with:
         subject-name: ghcr.io/${{ inputs.image_name }}
         subject-digest: ${{ steps.build.outputs.digest }}
-        push-to-registry: true
+        # The registry copy adds a sha256-<digest> tag, so an untagged image's attestation stays
+        # in GitHub's attestation store, where `gh attestation verify` still finds it.
+        push-to-registry: ${{ steps.meta.outputs.tags != '' }}
         # Linked-artifact records need a broader permission and add no value to
         # digest/source verification, so publish only the signed attestation.
         create-storage-record: false

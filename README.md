@@ -43,6 +43,12 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 | `docker`     | Build an image, verify it runs **healthy**, push it, and attest its provenance. |
 | `docker-job` | Build an image, verify it **exits 0**, push it, and attest its provenance.      |
 
+Both actions tag only the builds a deployment can name: pushes to the default branch, releases, and
+a pull request while it carries the `with-feature-env` label. The label tags the head it was added on,
+so the next push builds untagged; add it again to tag the new head. Every other build is pushed by
+digest alone, for the jobs of the same run that pull it, and its attestation stays out of the
+registry.
+
 Both actions fail the caller after a successful push unless GitHub can sign and publish provenance
 for the exact output digest. Every calling job therefore grants only the permissions the official
 GitHub attestation flow requires:
