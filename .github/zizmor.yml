@@ -30,27 +30,24 @@ rules:
   github-app:
     ignore:
       # Each mints an App token with `owner:` and no `repositories:`, which zizmor reads as
-      # over-broad. For these six it is the requirement, not an oversight — each is an org-wide
+      # over-broad. For these five it is the requirement, not an oversight — each is an org-wide
       # sweep, and the suggested fix (naming specific repositories) would blind it:
       #
       #   token-expiry.yaml — enumerates the ORGANISATION's PATs. Its one permission,
       #     organization-personal-access-tokens:read, is an org-level grant; a repository list
       #     does not narrow an org-level read, it just breaks it.
-      #   watchdog.yaml — scans every repo in the org for stale required checks and stuck hotfix
-      #     runs. Naming repositories would mean the sweep silently stops covering whatever is not
-      #     on the list, which is the exact failure it exists to catch.
-      #   reconcile-board.yaml — same shape: an org-scoped PR search feeding the board reconcile.
+      #   reconcile-board.yaml — an org-scoped PR search feeding the board reconcile. Naming
+      #     repositories would mean the sweep silently stops covering whatever is not on the list.
       #   notify-issues-run.yaml — reads the org board, whose issues live in every repository.
       #   notify-pr-run.yaml — reads the issues a pull request closes, which can live in any
       #     repository, with their board dates.
       #   notify-stuck-run.yaml — searches the org's open pull requests for stuck bot ones, which
       #     can live in any repository.
       #
-      # All six already hold the narrow line that IS available to them: a default token that is
+      # All five already hold the narrow line that IS available to them: a default token that is
       # unused or read-only, and read-only `permission-*` scopes on the App token.
       # Widen any of them and this suppression stops being justified.
       - token-expiry.yaml
-      - watchdog.yaml
       - reconcile-board.yaml
       - notify-issues-run.yaml
       - notify-pr-run.yaml
