@@ -78,36 +78,37 @@ SemVer release.
 
 ### `generic-actions`
 
-| Action                   | Purpose                                                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                               |
-| `approve-pr`             | Admin or maintainer escape hatch: approve a PR as the [Agent] App (self-approval).                                |
-| `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                 |
-| `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
-| `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                           |
-| `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
-| `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                       |
-| `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.            |
-| `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
-| `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
-| `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
-| `discord-post`           | Post one Discord embed with a state-colored bar; pings only the ids passed in, never fails the job.               |
-| `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked, fail-soft.                              |
-| `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.               |
-| `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.            |
-| `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
-| `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                           |
-| `epic-membership`        | Resolve an Epic's authorized member set — open PRs labeled `epic:<N>`.                                            |
-| `escalate`               | File/update a deduped escalation ticket (+ drive its board Status); page SEV1 via a push webhook.                 |
-| `lint-dockerfile`        | Run hadolint over the repo's Dockerfiles (advisory or gating; a no-Dockerfile repo passes).                       |
-| `lint-shell`             | Run shellcheck over the repo's tracked shell scripts (advisory or gating; a no-shell repo passes).                |
-| `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                              |
-| `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
-| `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.              |
-| `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
-| `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                            |
-| `review-gate`            | Required check: a maintainer or admin approved the head, and applied every privileged label last.                 |
-| `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
+| Action                   | Purpose                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                                 |
+| `approve-pr`             | Admin or maintainer escape hatch: approve a PR as the [Agent] App (self-approval).                                  |
+| `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                   |
+| `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                       |
+| `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                             |
+| `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                          |
+| `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                         |
+| `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.              |
+| `classify-bot-change`    | In strict auto-approval, let a bot PR through only as a release pin or a version update Renovate put on auto-merge. |
+| `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                          |
+| `codecov`                | Upload the coverage artifact to Codecov.                                                                            |
+| `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                           |
+| `discord-post`           | Post one Discord embed with a state-colored bar; pings only the ids passed in, never fails the job.                 |
+| `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked, fail-soft.                                |
+| `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.                 |
+| `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.              |
+| `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check).   |
+| `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                             |
+| `epic-membership`        | Resolve an Epic's authorized member set — open PRs labeled `epic:<N>`.                                              |
+| `escalate`               | File/update a deduped escalation ticket (+ drive its board Status); page SEV1 via a push webhook.                   |
+| `lint-dockerfile`        | Run hadolint over the repo's Dockerfiles (advisory or gating; a no-Dockerfile repo passes).                         |
+| `lint-shell`             | Run shellcheck over the repo's tracked shell scripts (advisory or gating; a no-shell repo passes).                  |
+| `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                                |
+| `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                    |
+| `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.                |
+| `renovate`               | Run self-hosted Renovate as the bot.                                                                                |
+| `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                              |
+| `review-gate`            | Required check: a maintainer or admin approved the head, and applied every privileged label last.                   |
+| `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                            |
 
 `check-append-only` needs the full base history. It rejects every change except additions under
 the configured path; the `append-only-override` PR label is the reviewed escape hatch. The label
