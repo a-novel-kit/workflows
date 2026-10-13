@@ -1,0 +1,161 @@
+name: review-gate
+description: >
+  Posts the `review-gate` check-run as the [Agent] App. A person's pull request passes once someone
+  holding the maintain or admin role on the repository approved its current head, or the App did
+  through `approve-pr`, and once every privileged label on it was last applied by such a person or by
+  the App. Anyone with write access can approve and label, so these two rules are what tie merging to
+  the maintainer tier. A bot's pull request needs no approval when GitHub signed every commit on it
+  for a bot, but its privileged labels count only on the same terms. A merge-queue group passes,
+  since its pull requests each passed at enqueue. A failed read posts `failure`: re-running the job
+  evaluates again.
+
+inputs:
+  client_id:
+    required: true
+    description: >
+      Client ID of the [Agent] App. Needs checks write to post the check, plus pull-requests and
+      issues read for the reviews, commits, labels and label history. Its approvals count as a
+      maintainer's.
+  app_private_key:
+    required: true
+    description: Private key (PEM) of that App.
+  privileged_labels:
+    required: false
+    default: ""
+    description: >
+      Labels, separated by newlines or commas, that count only when a maintainer, an admin or the
+      App applied them last: those that waive a check or spend resources.
+  pull_request_number:
+    required: false
+    default: ${{ github.event.pull_request.number }}
+    description: >
+      Number of the pull request to gate. Defaults to the triggering one; a `workflow_run` caller,
+      such as the Dependabot job, passes it because its event carries no pull request.
+  head_sha:
+    required: false
+    default: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+    description: Head SHA to post the check on. Defaults to the pull request's or the merge group's head.
+
+runs:
+  using: composite
+  steps:
+    - name: Mint token
+      id: token
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-checks: write
+        permission-issues: read
+        permission-pull-requests: read
+
+    - name: Evaluate and post review-gate
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        AGENT: ${{ steps.token.outputs.app-slug }}
+        PRIVILEGED: ${{ inputs.privileged_labels }}
+        EVENT: ${{ github.event_name }}
+        PR: ${{ inputs.pull_request_number }}
+        AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+        HEAD_SHA: ${{ inputs.head_sha }}
+      run: |
+        set -euo pipefail
+
+        post_check() { # $1=conclusion  $2=summary
+          jq -n --arg sha "$HEAD_SHA" --arg conclusion "$1" --arg summary "$2" \
+            '{name: "review-gate", head_sha: $sha, status: "completed", conclusion: $conclusion,
+              output: {title: "review-gate", summary: $summary}}' |
+            gh api "repos/$GITHUB_REPOSITORY/check-runs" --method POST --input - >/dev/null || exit 1
+          printf 'review-gate=%s @ %s\n\n%s\n' "$1" "${HEAD_SHA:0:12}" "$2" | tee -a "$GITHUB_STEP_SUMMARY"
+        }
+
+        # The check is required, so passing on an unread list would let the pull request merge.
+        hold() {
+          post_check failure "Couldn't read $1. Re-run this job to evaluate again."
+          exit 0
+        }
+
+        if [ "$EVENT" = merge_group ]; then
+          post_check success "A merge-queue group holds pull requests that each passed this check."
+          exit 0
+        fi
+
+        if [ -z "$AUTHOR_TYPE" ]; then
+          AUTHOR_TYPE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.type)" || hold "the pull request"
+        fi
+        # Anyone pushing can claim a bot's email, so a commit counts as a bot's only when GitHub signed
+        # it as web-flow, which it does only for commits it writes for the bot itself.
+        bot_written=false
+        if [ "$AUTHOR_TYPE" = Bot ]; then
+          unsigned="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" |
+            jq '[add[] | select(.author.type != "Bot" or .committer.login != "web-flow" or (.commit.verification.verified | not))] | length')" ||
+            hold "the commits"
+          [ "$unsigned" = 0 ] && bot_written=true
+        fi
+
+        # A 404 means no such account; any other failed lookup holds.
+        declare -A roles=()
+        trusted() { # $1=login  $2=account type
+          if [ "$2" = Bot ]; then
+            [ "$1" = "${AGENT}[bot]" ]
+            return
+          fi
+          if [ -z "${roles[$1]+set}" ]; then
+            local out
+            if out="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq .role_name 2>&1)"; then
+              roles[$1]="$out"
+            elif [[ $out == *"HTTP 404"* ]]; then
+              roles[$1]=""
+            else
+              hold "@$1's role"
+            fi
+          fi
+          [ "${roles[$1]}" = admin ] || [ "${roles[$1]}" = maintain ]
+        }
+
+        # Reviews arrive oldest first; each reviewer's last approval, change request or dismissal
+        # stands, and only an approval of the current head counts.
+        approver=""
+        if [ "$bot_written" = false ]; then
+          reviews="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
+            --jq '.[] | select(.state != "COMMENTED") | [.user.login, .user.type, .state, .commit_id] | @tsv')" ||
+            hold "the reviews"
+          while IFS=$'\t' read -r login type state commit; do
+            if [ "$state" = APPROVED ] && [ "$commit" = "$HEAD_SHA" ] && trusted "$login" "$type"; then
+              approver="$login"
+              break
+            fi
+          done < <(awk -F'\t' 'NF { last[$1] = $0 } END { for (login in last) print last[login] }' <<<"$reviews")
+        fi
+
+        labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --paginate --jq '.[].name')" ||
+          hold "the labels"
+        applied="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/events" --paginate \
+          --jq '.[] | select(.event == "labeled") | [.label.name, .actor.login, .actor.type] | @tsv')" ||
+          hold "the label history"
+        privileged="$(tr ',' '\n' <<<"$PRIVILEGED" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d')"
+
+        problems=""
+        if [ "$bot_written" = false ] && [ -z "$approver" ]; then
+          problems+="- No approval of this head from a maintainer or admin of this repository."$'\n'
+        fi
+        while IFS= read -r label; do
+          if [ -z "$label" ] || ! grep -qxF -- "$label" <<<"$privileged"; then
+            continue
+          fi
+          IFS=$'\t' read -r _ login type < <(awk -F'\t' -v label="$label" '$1 == label { last = $0 } END { print last }' <<<"$applied")
+          if [ -z "${login:-}" ] || ! trusted "$login" "$type"; then
+            problems+="- \`$label\` was last applied by @${login:-unknown}; a maintainer or admin applies it again."$'\n'
+          fi
+        done <<<"$labels"
+
+        if [ -n "$problems" ]; then
+          post_check failure "$problems"
+        elif [ "$bot_written" = true ]; then
+          post_check success "GitHub signed every commit for a bot; every privileged label was applied by a maintainer or admin."
+        else
+          post_check success "Approved by @$approver; every privileged label was applied by a maintainer or admin."
+        fi
