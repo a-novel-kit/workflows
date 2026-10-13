@@ -23,6 +23,13 @@ on:
         description: Login of the Dependabot security-updates bot whose PRs are auto-approved.
         required: true
         type: string
+      strict:
+        description: >-
+          For a repository whose merges reach production. Approve only a release pin, or a version
+          update Renovate itself put on auto-merge; every other bot PR waits for a person.
+        required: false
+        type: boolean
+        default: false
     secrets:
       bot_private_key:
         description: The [Agent] bot App private key (PEM) — signs the approval token.
@@ -112,20 +119,47 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # In strict mode Renovate's own auto-merge decision stands, so its production configuration,
+      # majors and moved tags wait for a person.
+      - name: Classify the change
+        id: classify
+        if: ${{ inputs.strict && steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
+        uses: a-novel-kit/workflows/generic-actions/classify-bot-change@v1.54.1
+        with:
+          github_token: ${{ steps.token.outputs.token }}
+          pull_request: ${{ steps.pr.outputs.url }}
+          head_sha: ${{ steps.pr.outputs.sha }}
+          bot: ${{ steps.pr.outputs.author }}
+
       - name: Approve
-        if: ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
+        if: >-
+          ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' &&
+          (!inputs.strict || steps.classify.outputs.decision == 'pin' ||
+          steps.classify.outputs.decision == 'renovate') }}
         uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.54.1
         with:
           pull_request: ${{ steps.pr.outputs.url }}
           github_token: ${{ steps.token.outputs.token }}
+          # Strict mode approves the classified commit, so a later push needs its own approval.
+          head_sha: ${{ inputs.strict && steps.pr.outputs.sha || '' }}
 
       # Put the approved PR in the merge queue so it merges hands-off. The queue re-validates the
       # required checks on the group and owns the merge method; `--squash` is the org's only allowed
       # method and makes the command explicit in a repo with no queue. Where there is one, gh just
-      # logs that the strategy is queue-controlled.
+      # logs that the strategy is queue-controlled. In strict mode a Renovate update already carries
+      # Renovate's own auto-merge, which re-enabling would replace with the agent's.
       - name: Enable auto-merge
-        if: ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
+        if: >-
+          ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' &&
+          (!inputs.strict || steps.classify.outputs.decision == 'pin') }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ steps.pr.outputs.url }}
-        run: gh pr merge "$PR" --auto --squash
+          SHA: ${{ inputs.strict && steps.pr.outputs.sha || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SHA" ]; then
+            gh pr merge "$PR" --auto --squash
+          else
+            gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
+          fi

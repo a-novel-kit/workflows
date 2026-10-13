@@ -89,6 +89,7 @@ SemVer release.
 | `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                       |
 | `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.            |
 | `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
+| `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.      |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
 | `discord-post`           | Post one Discord embed with a state-colored bar; pings only the ids passed in, never fails the job.               |
