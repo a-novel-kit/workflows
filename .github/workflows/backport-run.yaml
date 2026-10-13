@@ -74,7 +74,7 @@ jobs:
       contents: read
     steps:
       # workflow_dispatch is open to any write user, so this gate keeps hotfixes admin-only.
-      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.55.0
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.56.0
         with:
           roles: admin
 
@@ -243,7 +243,7 @@ jobs:
       # passes the dispatch severity, a wired push webhook pages SEV1, and dry-run only logs it.
       - name: Escalate on failure
         if: ${{ failure() }}
-        uses: a-novel-kit/workflows/generic-actions/escalate@v1.55.0
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.56.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
