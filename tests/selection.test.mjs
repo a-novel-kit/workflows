@@ -100,7 +100,7 @@ test("Docker provenance uses the published digest and security tools require cal
   const index = steps.findIndex((s) => s.uses?.startsWith("actions/attest@"));
   assert(index > steps.findIndex((s) => s.id === "build"));
   assert.equal(steps[index].with["subject-digest"], "${{ steps.build.outputs.digest }}");
-  assert.equal(steps[index].with["push-to-registry"], true);
+  assert.equal(steps[index].with["push-to-registry"], "${{ steps.meta.outputs.tags != '' }}");
   // docker-job publishes through docker, so it inherits the same attestation.
   const job = manifest("build-actions/docker-job/action.yaml");
   assert.deepEqual(
@@ -123,13 +123,31 @@ test("Docker provenance uses the published digest and security tools require cal
   }
 });
 
+test("docker tags a branch build only on the default branch or a with-feature-env pull request", () => {
+  const steps = manifest("build-actions/docker/action.yaml").runs.steps;
+  const rules = steps.find((s) => s.id === "meta").with.tags.split("\n");
+  // The label approves the head it was added on, and a push's payload still carries it.
+  assert(
+    rules.includes(
+      "type=ref,event=pr,enable=${{ github.event.action != 'synchronize' && contains(github.event.pull_request.labels.*.name, 'with-feature-env') }}"
+    )
+  );
+  assert(
+    rules.includes(
+      "type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}"
+    )
+  );
+  // Without a tag, the push needs the bare image name to push by digest.
+  const push = steps.find((s) => s.id === "build");
+  assert.equal(push.with.tags, "${{ steps.meta.outputs.tags || format('ghcr.io/{0}', inputs.image_name) }}");
+});
+
 test("a reproducible docker build is content-addressed and drops build-time metadata", (t) => {
   const steps = manifest("build-actions/docker/action.yaml").runs.steps;
   const push = steps.find((s) => s.id === "build");
-  assert.equal(push.with.push, "${{ inputs.reproducible != 'true' }}");
   assert.equal(
     push.with.outputs,
-    "${{ inputs.reproducible == 'true' && 'type=registry,rewrite-timestamp=true' || '' }}"
+    "type=image,push=true,push-by-digest=${{ steps.meta.outputs.tags == '' }}${{ inputs.reproducible == 'true' && ',rewrite-timestamp=true' || '' }}"
   );
   assert.equal(push.with.provenance, "${{ inputs.reproducible == 'true' && 'false' || '' }}");
   assert.equal(push.with.labels, "${{ steps.labels.outputs.labels }}");
