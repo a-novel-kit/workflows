@@ -276,26 +276,51 @@ test("classify-bot-change writes one decision even when a filename carries a new
   assert.match(w.read("gh.log"), new RegExp(`repos/a-novel/infra/compare/master\\.\\.\\.${"e".repeat(40)}`));
 });
 
-test("approve-bot approves the given commit, or the current head without one", (t) => {
+test("approve-bot approves the given commit only while it is the head", (t) => {
   const approve = step("generic-actions/approve-bot/action.yaml", "approve PR");
-  for (const [headSha, expected] of [
-    ["", ["pr", "review", "--approve", "7"]],
-    [
-      sha("c"),
-      [
-        "api",
-        "repos/a-novel/infra/pulls/7/reviews",
-        "--method",
-        "POST",
-        "-f",
-        "event=APPROVE",
-        "-f",
-        `commit_id=${sha("c")}`,
-      ],
-    ],
+  const pull = "repos/a-novel/infra/pulls/7";
+  const post = [
+    "api",
+    `${pull}/reviews`,
+    "--method",
+    "POST",
+    "-f",
+    "event=APPROVE",
+    "-f",
+    `commit_id=${sha("c")}`,
+    "--jq",
+    ".id",
+  ];
+  const read = ["api", pull, "--jq", ".head.sha"];
+  const dismiss = [
+    "api",
+    `${pull}/reviews/42/dismissals`,
+    "--method",
+    "PUT",
+    "-f",
+    "event=DISMISS",
+    "-f",
+    "message=The head moved past the approved commit.",
+  ];
+  for (const [name, headSha, heads, expected] of [
+    ["no commit approves the head", "", [], [["pr", "review", "--approve", "7"]]],
+    ["a head that stays keeps the approval", sha("c"), [sha("c"), sha("c")], [read, post, read]],
+    ["a head that already moved is not approved", sha("c"), [sha("d")], [read]],
+    ["a head that moves meanwhile withdraws the approval", sha("c"), [sha("c"), sha("d")], [read, post, read, dismiss]],
   ]) {
     const w = workspace(t);
-    w.stub("gh", `require("fs").writeFileSync(process.env.GH_LOG, JSON.stringify(process.argv.slice(2)));`);
+    w.write("heads", heads.join("\n"));
+    w.stub(
+      "gh",
+      `const fs = require("fs");
+      const args = process.argv.slice(2);
+      fs.appendFileSync(process.env.GH_LOG, JSON.stringify(args) + "\\n");
+      if (args.includes(".head.sha")) {
+        const [next, ...rest] = fs.readFileSync(process.env.HEADS, "utf8").split("\\n");
+        fs.writeFileSync(process.env.HEADS, rest.join("\\n"));
+        console.log(next);
+      } else if (args.includes(".id")) console.log("42");`
+    );
     succeeds(
       w.bash(approve, {
         PR_URL: "7",
@@ -303,8 +328,14 @@ test("approve-bot approves the given commit, or the current head without one", (
         GH_TOKEN: "token",
         GH_REPO: "a-novel/infra",
         GH_LOG: `${w.cwd}/gh.log`,
+        HEADS: `${w.cwd}/heads`,
       })
     );
-    assert.deepEqual(JSON.parse(w.read("gh.log")), expected, headSha || "no commit");
+    const calls = w
+      .read("gh.log")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.deepEqual(calls, expected, name);
   }
 });

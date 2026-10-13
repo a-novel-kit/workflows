@@ -12,8 +12,9 @@ inputs:
     required: false
     default: ""
     description: >
-      Commit the approval applies to. Empty approves the current head; a commit keeps a push made
-      after the caller checked the pull request from inheriting the approval.
+      Commit the approval applies to. Empty approves the current head. With a commit, the approval is
+      made only while that commit is the head, and withdrawn if the head moves while it is made, so a
+      later push never inherits it.
 
 runs:
   using: "composite"
@@ -24,9 +25,20 @@ runs:
         set -euo pipefail
         if [ -z "$HEAD_SHA" ]; then
           gh pr review --approve "$PR_URL"
-        else
-          gh api "repos/$GH_REPO/pulls/${PR_URL##*/}/reviews" --method POST \
-            -f event=APPROVE -f commit_id="$HEAD_SHA" >/dev/null
+          exit 0
+        fi
+        pull="repos/$GH_REPO/pulls/${PR_URL##*/}"
+        if [ "$(gh api "$pull" --jq .head.sha)" != "$HEAD_SHA" ]; then
+          echo "::notice::The head moved past ${HEAD_SHA:0:12}; not approving it."
+          exit 0
+        fi
+        review="$(gh api "$pull/reviews" --method POST -f event=APPROVE -f commit_id="$HEAD_SHA" --jq .id)"
+        # Whether GitHub counts an older commit's approval after a push is undocumented, so a head that
+        # moved meanwhile withdraws it. A push after this read dismisses the approval as stale.
+        if [ "$(gh api "$pull" --jq .head.sha)" != "$HEAD_SHA" ]; then
+          gh api "$pull/reviews/$review/dismissals" --method PUT -f event=DISMISS \
+            -f message="The head moved past the approved commit." >/dev/null
+          echo "::notice::The head moved past ${HEAD_SHA:0:12}; withdrew the approval."
         fi
       env:
         PR_URL: ${{ inputs.pull_request }}

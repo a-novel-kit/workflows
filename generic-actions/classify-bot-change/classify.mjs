@@ -34,7 +34,7 @@ const annotatedVersion = new RegExp(semver, "g");
  * The removed and added lines of each change, a run of them between context lines, each with the
  * line before it on its own side. Pairing within a change keeps a line from moving past context.
  */
-function hunks(patch) {
+function changes(patch) {
   const out = [];
   let before = "";
   let after = "";
@@ -86,7 +86,7 @@ function versionOnly(filename, before, after) {
   return was.digests.join() === now.digests.join() || was.versions.join() !== now.versions.join();
 }
 
-/** Every hunk pairs its removed and added lines one to one, each pair version-only. */
+/** A change pairs its removed and added lines one to one, each pair version-only. */
 const pairsUp = (filename, { removed, added }) =>
   removed.length === added.length && removed.every((line, index) => versionOnly(filename, line, added[index]));
 
@@ -109,9 +109,10 @@ export async function classify({ files, bot, autoMergeEnabledBy, autoMergeArmed,
       tfvars.test(file.filename) &&
       file.status === "modified" &&
       file.patch !== undefined &&
-      hunks(file.patch).every(
-        (hunk) =>
-          [...hunk.removed, ...hunk.added].every(({ text }) => releasePin.test(text)) && pairsUp(file.filename, hunk)
+      changes(file.patch).every(
+        (change) =>
+          [...change.removed, ...change.added].every(({ text }) => releasePin.test(text)) &&
+          pairsUp(file.filename, change)
       )
   );
   if (pinOnly) return { decision: "pin", reason: "it changes nothing but release pins" };
@@ -124,11 +125,11 @@ export async function classify({ files, bot, autoMergeEnabledBy, autoMergeArmed,
   for (const file of files) {
     if (integrity.test(file.filename) && file.status === "modified") continue;
     if (file.status !== "modified" || file.patch === undefined) return review(`${file.filename} is ${file.status}`);
-    for (const hunk of hunks(file.patch)) {
+    for (const change of changes(file.patch)) {
       // A module update adds and drops indirect requirements, which name only a module and its version.
       const keep = ({ text }) => !modfile.test(file.filename) || !indirectRequirement.test(text);
-      const removed = hunk.removed.filter(keep);
-      const added = hunk.added.filter(keep);
+      const removed = change.removed.filter(keep);
+      const added = change.added.filter(keep);
       if (!pairsUp(file.filename, { removed, added })) return review(`${file.filename} changes more than versions`);
       for (const [index, { text }] of added.entries()) {
         const commits = (line) => line.match(/@[0-9a-f]{40}\b/g)?.join();
