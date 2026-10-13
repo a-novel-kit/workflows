@@ -5,8 +5,8 @@ description: >
   in terraform.tfvars); "renovate" means Renovate first put it on auto-merge, auto-merge is still on,
   and every changed line only moves a dependency reference's version, or a digest together with its
   version, apart from checksum files; "review" means a person approves it. A digest that moves
-  without its version is a moved tag, and a head that moved since the caller read it was never
-  classified: both always need review.
+  without its version is a moved tag and always needs review. The classified diff is that of the
+  exact commit the caller approves.
 
 inputs:
   github_token:
@@ -18,8 +18,8 @@ inputs:
   head_sha:
     required: true
     description: >
-      Head commit the caller approves. A pull request whose head moved since classifies "review", so
-      the approval cannot land on a commit nobody classified.
+      Commit the caller approves. Its own diff against the base is classified, so the approval and
+      the classification name the same commit whatever the branch does meanwhile.
   bot:
     required: true
     description: Login of the dependency bot, whose own auto-merge marks an update Renovate chose to merge.

@@ -30,7 +30,10 @@ const moduleVersions = [
 ];
 const annotatedVersion = new RegExp(semver, "g");
 
-/** The removed and added lines of each hunk, each with the line before it on its own side. */
+/**
+ * The removed and added lines of each change, a run of them between context lines, each with the
+ * line before it on its own side. Pairing within a change keeps a line from moving past context.
+ */
 function hunks(patch) {
   const out = [];
   let before = "";
@@ -40,14 +43,17 @@ function hunks(patch) {
     if (line.startsWith("@@")) {
       out.push({ removed: [], added: [] });
       before = after = "";
-    } else if (!out.length) continue;
+    } else if (!out.length || line.startsWith("\\")) continue;
     else if (line.startsWith("-")) {
       out.at(-1).removed.push({ text, context: before });
       before = text;
     } else if (line.startsWith("+")) {
       out.at(-1).added.push({ text, context: after });
       after = text;
-    } else before = after = text;
+    } else {
+      out.push({ removed: [], added: [] });
+      before = after = text;
+    }
   }
   return out;
 }
@@ -88,26 +94,15 @@ const review = (reason) => ({ decision: "review", reason });
 
 /**
  * Classify a pull request's changed files: "pin" for a release pin, "renovate" for a version
- * update Renovate put on auto-merge, "review" for anything a person must approve. headSha is the
- * head after the files were listed, which must still be the expected commit the approval binds
- * to. changedFiles is the pull request's own count, since the files listing stops at 3000.
+ * update Renovate put on auto-merge, "review" for anything a person must approve. files is the diff
+ * of the exact commit the caller approves, which a comparison caps at 300 files.
  * autoMergeEnabledBy is whoever first enabled auto-merge and autoMergeArmed whether it is on now,
  * so a maintainer's hold stands. resolveTag(repository, tag) returns the commit a tag names, so a
  * moved action pin must be the commit of its new version.
  */
-export async function classify({
-  files,
-  changedFiles,
-  headSha,
-  expectedSha,
-  bot,
-  autoMergeEnabledBy,
-  autoMergeArmed,
-  resolveTag,
-}) {
-  if (headSha !== expectedSha) return review(`its head moved from ${expectedSha} to ${headSha}`);
+export async function classify({ files, bot, autoMergeEnabledBy, autoMergeArmed, resolveTag }) {
   if (files.length === 0) return review("it changes no file");
-  if (files.length !== changedFiles) return review(`GitHub listed ${files.length} of its ${changedFiles} files`);
+  if (files.length >= 300) return review("its comparison may stop at 300 files");
 
   const pinOnly = files.every(
     (file) =>
@@ -130,7 +125,7 @@ export async function classify({
     if (integrity.test(file.filename) && file.status === "modified") continue;
     if (file.status !== "modified" || file.patch === undefined) return review(`${file.filename} is ${file.status}`);
     for (const hunk of hunks(file.patch)) {
-      // A module update adds and drops indirect requirements, which build nothing until imported.
+      // A module update adds and drops indirect requirements, which name only a module and its version.
       const keep = ({ text }) => !modfile.test(file.filename) || !indirectRequirement.test(text);
       const removed = hunk.removed.filter(keep);
       const added = hunk.added.filter(keep);
@@ -160,9 +155,9 @@ async function main() {
   const { REPOSITORY, PULL_REQUEST, HEAD_SHA, BOT, GITHUB_OUTPUT } = process.env;
   const [owner, name] = REPOSITORY.split("/");
   const number = Number(PULL_REQUEST.split("/").at(-1));
-  const files = JSON.parse(gh("api", "--paginate", "--slurp", `repos/${REPOSITORY}/pulls/${number}/files`)).flat();
-  // Read after the listing, so a push in between shows as a moved head.
-  const pull = JSON.parse(gh("api", `repos/${REPOSITORY}/pulls/${number}`, "--jq", "{changed_files, sha: .head.sha}"));
+  const base = gh("api", `repos/${REPOSITORY}/pulls/${number}`, "--jq", ".base.ref").trim();
+  // The diff of the exact commit the caller approves, whatever the branch does meanwhile.
+  const { files } = JSON.parse(gh("api", `repos/${REPOSITORY}/compare/${base}...${HEAD_SHA}`, "--jq", "{files}"));
   // The first to enable auto-merge decided it; recover-prs re-arms a dropped pull request as the agent.
   const { autoMergeRequest, timelineItems } = JSON.parse(
     gh(
@@ -190,9 +185,6 @@ async function main() {
   };
   const { decision, reason } = await classify({
     files,
-    changedFiles: pull.changed_files,
-    headSha: pull.sha,
-    expectedSha: HEAD_SHA,
     bot: BOT,
     autoMergeEnabledBy: timelineItems.nodes[0]?.actor?.login,
     autoMergeArmed: Boolean(autoMergeRequest?.enabledAt),

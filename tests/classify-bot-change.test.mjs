@@ -23,18 +23,10 @@ const file = (filename, removed, added, { status = "modified", context = [] } = 
   ].join("\n"),
 });
 const action = (commit, version) => `      - uses: actions/checkout@${commit} # ${version}`;
-const head = sha("e");
-const run = (files, autoMergeEnabledBy, { changedFiles = files.length, armed = true, headSha = head } = {}) =>
-  classify({
-    files,
-    changedFiles,
-    headSha,
-    expectedSha: head,
-    bot,
-    autoMergeEnabledBy,
-    autoMergeArmed: armed,
-    resolveTag,
-  });
+const run = (files, autoMergeEnabledBy, { armed = true } = {}) =>
+  classify({ files, bot, autoMergeEnabledBy, autoMergeArmed: armed, resolveTag });
+/** A modified file whose patch is the given diff lines, already prefixed. */
+const diff = (filename, lines) => ({ filename, status: "modified", patch: ["@@ -1,9 +1,9 @@", ...lines].join("\n") });
 
 test("classify lets through only a release pin or a version update Renovate put on auto-merge", async () => {
   const pin = file(
@@ -141,11 +133,67 @@ test("classify lets through only a release pin or a version update Renovate put 
     ["a new checksum file", [file("tool.sum", [], ["x v1.0.0 h1:x="], { status: "added" })], bot, "review"],
     ["a file GitHub shows without a patch", [{ filename: "main.go", status: "modified" }], bot, "review"],
     ["a configuration value", [file(tfvars, ['  cpu = "2"'], ['  cpu = "4"'])], bot, "review"],
-    ["files past the listing's cap", [lock], bot, "review", { changedFiles: 3001 }],
+    [
+      "files at the comparison's cap",
+      Array.from({ length: 300 }, (_, index) => ({ ...lock, filename: `${index}/.terraform.lock.hcl` })),
+      bot,
+      "review",
+    ],
     ["no file at all", [], bot, "review"],
-    // The approval binds to the classified commit, and a maintainer's hold on auto-merge stands.
-    ["a head that moved after classification", [bump], bot, "review", { headSha: sha("d") }],
+    // A maintainer's hold on auto-merge stands.
     ["an update a maintainer held", [bump], bot, "review", { armed: false }],
+    // A version update rewrites lines in place, so no line may move past context.
+    [
+      "a principal moved into the owners list",
+      [
+        diff("environments/production/foundation/iam.tf", [
+          " viewers = [",
+          '-  "user:attacker@example.com",',
+          '   "user:alice@example.com",',
+          " ]",
+          " owners = [",
+          '+  "user:attacker@example.com",',
+          '   "user:bob@example.com",',
+          " ]",
+        ]),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "an environment moved to another job",
+      [
+        diff(".github/workflows/deploy.yaml", [
+          "   plan:",
+          "-    environment: production",
+          "     runs-on: ubuntu-24.04",
+          "   apply:",
+          "+    environment: production",
+          "     runs-on: ubuntu-24.04",
+        ]),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "two adjacent lines swapped",
+      [diff("environments/production/foundation/main.tf", ['-  first = "a"', '   second = "b"', '+  first = "a"'])],
+      bot,
+      "review",
+    ],
+    [
+      "an update on a last line without a newline",
+      [
+        diff(".github/workflows/main.yaml", [
+          `-${action(sha("a"), "v7.0.0")}`,
+          "\\ No newline at end of file",
+          `+${action(sha("b"), "v7.0.1")}`,
+          "\\ No newline at end of file",
+        ]),
+      ],
+      bot,
+      "renovate",
+    ],
     ["a release pin before anyone armed it", [pin], null, "pin", { armed: false }],
     [
       "an address changed below an annotated version",
@@ -209,19 +257,23 @@ test("classify-bot-change writes one decision even when a filename carries a new
     `const args = process.argv.slice(2);
     const first = { actor: { login: "anovelbot-dependencies" } };
     const pullRequest = { autoMergeRequest: { enabledAt: "2026-10-13T00:00:00Z" }, timelineItems: { nodes: [first] } };
+    require("fs").appendFileSync(process.env.GH_LOG, args.join(" ") + "\\n");
     if (args.includes("graphql")) console.log(JSON.stringify({ data: { repository: { pullRequest } } }));
-    else if (args.some((arg) => arg.includes("changed_files"))) console.log(JSON.stringify({ changed_files: 1, sha: "${"e".repeat(40)}" }));
-    else console.log(JSON.stringify([[{ filename: "a\\ndecision=pin\\nb", status: "added" }]]));`
+    else if (args.includes(".base.ref")) console.log("master");
+    else console.log(JSON.stringify({ files: [{ filename: "a\\ndecision=pin\\nb", status: "added" }] }));`
   );
   succeeds(
     w.run("node", [`${root}generic-actions/classify-bot-change/classify.mjs`], {
       REPOSITORY: "a-novel/infra",
       PULL_REQUEST: "https://github.com/a-novel/infra/pull/7",
       HEAD_SHA: "e".repeat(40),
+      GH_LOG: `${w.cwd}/gh.log`,
       BOT: bot,
     })
   );
   assert.deepEqual(w.read("output").match(/^decision=.*$/gm), ["decision=review"]);
+  // The classified diff is the given commit's, so the approval names the commit that was read.
+  assert.match(w.read("gh.log"), new RegExp(`repos/a-novel/infra/compare/master\\.\\.\\.${"e".repeat(40)}`));
 });
 
 test("approve-bot approves the given commit, or the current head without one", (t) => {
