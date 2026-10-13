@@ -56,26 +56,19 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Fail closed unless the dispatcher is a repo admin, the Epic number is numeric, and the typed
-      # confirmation matches exactly. workflow_dispatch is open to any write user, so this gate is
-      # what keeps a destructive rollback admin-only and deliberate.
-      - name: Require admin + numeric epic + typed confirmation
+      # workflow_dispatch is open to any write user, so these gates keep a destructive rollback
+      # admin-only and deliberate.
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.53.0
+        with:
+          roles: admin
+
+      - name: Require numeric epic + typed confirmation
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO_FULL: ${{ github.repository }}
-          ACTOR: ${{ github.actor }}
           EPIC: ${{ inputs.epic_number }}
           CONFIRM: ${{ inputs.confirm }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          # Admin gate: `|| echo ""` keeps a failed lookup from tripping `set -e`, and an empty
-          # permission falls through and fails closed.
-          perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
-          if [ "$perm" != "admin" ]; then
-            echo "::error::epic-rollback is admin-only; @${ACTOR} has permission '${perm:-none}'."
-            exit 1
-          fi
           # Numeric validation before the number ever reaches the `label:"epic:<N>"` search grammar.
           if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
             echo "::error::epic_number must be an integer, got \"${EPIC:-}\"."
@@ -86,7 +79,7 @@ jobs:
             echo "::error::confirmation mismatch — type \"revert-epic-${EPIC}\" exactly to proceed."
             exit 1
           fi
-          echo "@${ACTOR} is a repo admin; confirmation matches — proceeding with rollback of epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Confirmation matches — proceeding with rollback of epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: a-novel-kit/workflows/generic-actions/epic-rollback@v1.53.0
         with:

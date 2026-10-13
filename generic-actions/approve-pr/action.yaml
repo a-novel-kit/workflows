@@ -1,11 +1,11 @@
 name: approve-pr
 description: >
-  Approves a pull request through the App on a repo admin's behalf — in practice,
-  an admin approving their own PR. Self-approval is normally forbidden because it
-  makes review pointless, but it is tolerated for admins as an escape hatch: to act
+  Approves a pull request through the App on behalf of a repo admin or maintainer — in
+  practice, one approving their own PR. Self-approval is normally forbidden because it
+  makes review pointless, but it is tolerated for them as an escape hatch: to act
   under urgency, or to set things up when no other contributor is available to
-  review. The admin check keeps it to that case, refusing to run for anyone who is
-  not a repo admin. Wraps `approve-bot`.
+  review. `require-role` keeps it to that case, refusing to run for anyone below
+  Maintain. Wraps `approve-bot`.
 
 inputs:
   client_id:
@@ -31,7 +31,7 @@ inputs:
 runs:
   using: composite
   steps:
-    # Org-level halt, read before the admin check or any mint. A human-triggered mutation aborts
+    # Org-level halt, read before the role check or any mint. A human-triggered mutation aborts
     # loudly so the operator sees the halt and lifts it deliberately.
     - name: Halt guard (kill-switch)
       shell: bash
@@ -41,7 +41,7 @@ runs:
         set -euo pipefail
         # Fail-safe: running only for an explicit off-token (empty/unset, 0, off, false, no,
         # disabled); any other value engages the halt. A failing step stops the composite, so the
-        # admin check, the mint and the approval never run.
+        # role check, the mint and the approval never run.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
           *)
@@ -50,24 +50,9 @@ runs:
             ;;
         esac
 
-    # Fail closed unless the invoking actor is a repo admin, including on reruns: workflow_dispatch is
-    # open to anyone with write access. The collaborator-permission endpoint needs
-    # only Metadata:read, so the default token suffices.
-    - name: Require admin
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        REPO_FULL: ${{ github.repository }}
-        ACTOR: ${{ github.triggering_actor }}
-      run: |
-        set -euo pipefail
-        # Discard even partial output when the permission lookup fails.
-        perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null) || perm=""
-        if [ "$perm" != "admin" ]; then
-          echo "::error::approve-pr is admin-only; @${ACTOR} has permission '${perm:-none}'."
-          exit 1
-        fi
-        echo "@${ACTOR} is a repo admin — recording an [Agent] approval." | tee -a "$GITHUB_STEP_SUMMARY"
+    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.53.0
+      with:
+        roles: admin,maintain
 
     # Mint a token scoped to writing the PR review. The nested action addresses
     # the pull request directly, so it does not need a checkout or contents access.

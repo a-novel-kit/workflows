@@ -175,26 +175,8 @@ test("a reproducible docker build is content-addressed and drops build-time meta
   }
 });
 
-test("admin approval requires the current actor's rights and stays in the checked repository", (t) => {
+test("self-approval stays in the checked repository", () => {
   const action = manifest("generic-actions/approve-pr/action.yaml");
-  assert.equal(action.runs.steps.find((s) => s.name === "Require admin").env.ACTOR, "${{ github.triggering_actor }}");
-  const w = workspace(t);
-  w.stub("gh", "console.log(process.env.PERMISSION); process.exit(Number(process.env.API_FAIL ?? 0));");
-  for (const [permission, failed, expected] of [
-    ["admin", "0", 0],
-    ["write", "0", 1],
-    ["admin", "1", 1],
-  ]) {
-    assert.equal(
-      w.bash(step("generic-actions/approve-pr/action.yaml", "Require admin"), {
-        ACTOR: "invoking-user",
-        REPO_FULL: "owner/repo",
-        PERMISSION: permission,
-        API_FAIL: failed,
-      }).status,
-      expected
-    );
-  }
   const token = action.runs.steps.find((s) => s.id === "token");
   assert.equal(token.with.repositories, "${{ github.event.repository.name }}");
   assert.equal(token.with["permission-pull-requests"], "write");

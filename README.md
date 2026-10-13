@@ -81,7 +81,7 @@ SemVer release.
 | Action                   | Purpose                                                                                                           |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                               |
-| `approve-pr`             | Admin-only escape hatch: approve a PR as the [Agent] App (self-approval).                                         |
+| `approve-pr`             | Admin or maintainer escape hatch: approve a PR as the [Agent] App (self-approval).                                |
 | `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                 |
 | `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
 | `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                           |
@@ -105,6 +105,7 @@ SemVer release.
 | `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
 | `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.              |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
+| `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                            |
 | `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
 
 `check-append-only` needs the full base history. It rejects every change except additions under

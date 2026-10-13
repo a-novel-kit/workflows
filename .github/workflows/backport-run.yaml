@@ -73,20 +73,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      # workflow_dispatch is open to any write user, so this gate is what keeps hotfixes admin-only.
-      - name: Require admin
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO_FULL: ${{ github.repository }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          # `|| echo ""` keeps a failed lookup from tripping `set -e`; an empty permission fails closed.
-          perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
-          if [ "$perm" != "admin" ]; then
-            echo "::error::hotfixes are admin-only; @${ACTOR} has permission '${perm:-none}'."
-            exit 1
-          fi
+      # workflow_dispatch is open to any write user, so this gate keeps hotfixes admin-only.
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.53.0
+        with:
+          roles: admin
 
       - name: Mint git token
         id: token
