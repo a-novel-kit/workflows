@@ -1,0 +1,183 @@
+name: notify-stuck (reusable)
+
+# Tells Discord when a bot's pull request is stuck: green, yet not in the merge queue long after its
+# last commit. A failing one already posts from notify-pr-run, but a rule can hold a green one with no
+# event at all, such as an unsigned commit or a check that never reports. Each org's `.github` repo
+# calls this when a Google Cloud clock dispatches it every hour, since GitHub starts scheduled
+# workflows hours late. It posts each pull request that turned stuck since the caller's previous
+# successful run, so a late or failed run is caught up by the next, and each head posts once. A first
+# run posts every pull request stuck at that moment.
+#
+# The post goes to the dependencies channel and pings the repository's role. A pull request waiting
+# on a person's review also posts to the reviews channel, pinging its requested reviewers or else the
+# role, and its dependencies post stays quiet.
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        required: true
+        type: string
+        description: The org's [Agent] bot App client id; the default token cannot search the org's pull requests.
+      stuck_hours:
+        required: false
+        type: string
+        default: "2"
+        description: Hours after its head's commit that a green bot pull request outside the merge queue counts as stuck.
+      roles:
+        required: false
+        type: string
+        default: "{}"
+        description: JSON map from "<org>/<repo>" to the Discord role pinged for a stuck pull request (vars.DISCORD_REPO_ROLES).
+      bws_server_url:
+        required: false
+        type: string
+        default: ""
+        description: Bitwarden server holding the GitHub-to-Discord map (vars.BWS_SERVER_URL). Empty means the US cloud.
+      dry_run:
+        required: false
+        type: string
+        default: "false"
+        description: When "true", write each message to the step summary instead of posting it.
+    secrets:
+      private_key:
+        required: true
+        description: The [Agent] bot App private key (PEM).
+      dependencies_webhook:
+        required: false
+        description: Discord webhook of the org's dependencies channel (DEPENDENCIES_WEBHOOK). Empty skips those posts.
+      reviews_webhook:
+        required: false
+        description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK). Empty skips those posts.
+      bws_access_token:
+        required: false
+        description: Read-only token for the GitHub-to-Discord map (BWS_READ_TOKEN). Empty posts without user pings.
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # Reads the caller's runs; the pull requests go through the App.
+    permissions:
+      actions: read
+    outputs:
+      events: ${{ steps.scan.outputs.events }}
+    steps:
+      - name: Mint read token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-pull-requests: read
+
+      - name: Find the stuck pull requests
+        id: scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_TOKEN: ${{ steps.token.outputs.token }}
+          CALLER: ${{ github.workflow_ref }}
+          STUCK_HOURS: ${{ inputs.stuck_hours }}
+        run: |
+          set -euo pipefail
+          # The window runs from the previous successful run's creation to this one's, so consecutive
+          # runs never overlap and each head posts once.
+          workflow="${CALLER%@*}"
+          since="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "${workflow##*/}" --status success \
+            --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
+          until="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+
+          query='query($q: String!, $endCursor: String) {
+            search(query: $q, type: ISSUE, first: 50, after: $endCursor) {
+              pageInfo { hasNextPage endCursor }
+              nodes { ... on PullRequest {
+                number title url isInMergeQueue mergeStateStatus reviewDecision
+                author { __typename }
+                repository { nameWithOwner }
+                autoMergeRequest { enabledAt }
+                reviewRequests(first: 10) { nodes { requestedReviewer {
+                  __typename ... on User { databaseId login } ... on Team { name }
+                } } }
+                commits(last: 1) { nodes { commit {
+                  committedDate signature { isValid } statusCheckRollup { state }
+                } } }
+                dropped: timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 1) {
+                  nodes { ... on RemovedFromMergeQueueEvent { reason } }
+                }
+              } }
+            }
+          }'
+          # A red head is notify-pr-run's, and a pending one may be waiting on purpose, such as for
+          # renovate/stability-days. GitHub timestamps share one ISO 8601 UTC format, so they compare
+          # as strings.
+          events="$(GH_TOKEN="$APP_TOKEN" gh api graphql --paginate -f query="$query" \
+            -F q="org:${GITHUB_REPOSITORY_OWNER} is:pr is:open draft:false" |
+            jq -sc --arg since "$since" --arg until "$until" --argjson hours "$STUCK_HOURS" '[.[].data.search.nodes[]
+              | select(.author.__typename == "Bot" and (.isInMergeQueue | not))
+              | .commits.nodes[0].commit as $head
+              | select($head.statusCheckRollup.state == "SUCCESS")
+              | ($head.committedDate | fromdateiso8601 + $hours * 3600 | todateiso8601) as $stuck
+              | select($stuck > $since and $stuck <= $until)
+              | [.reviewRequests.nodes[].requestedReviewer | select(.)] as $reviewers
+              | (.reviewDecision == "REVIEW_REQUIRED") as $review
+              | {
+                  repo: .repository.nameWithOwner, number, title, url, review: $review,
+                  review_description: (if $review | not then ""
+                    elif $reviewers == [] then "**Stuck waiting on a review** · nobody requested"
+                    else "**Stuck waiting on a review** · requested from \($reviewers | map(.login // .name) | join(", "))" end),
+                  user_ids: ([$reviewers[] | select(.__typename == "User") | .databaseId | tostring] | join(" ")),
+                  description: ([
+                    "**Stuck** · green but not merging \($hours)h after its last commit",
+                    (.mergeStateStatus | ascii_downcase),
+                    ((.reviewDecision // "no review") | ascii_downcase | gsub("_"; " ")),
+                    (if .autoMergeRequest then empty else "auto-merge off" end),
+                    (if $head.signature.isValid then empty else "unsigned head" end),
+                    (.dropped.nodes[0].reason // empty | "last dropped: \(ascii_downcase | gsub("_"; " "))")
+                  ] | join(" · "))
+                }]')"
+          echo "events=$events" >>"$GITHUB_OUTPUT"
+          echo "$(jq length <<<"$events") stuck pull request(s) between ${since:-the start} and $until." >>"$GITHUB_STEP_SUMMARY"
+
+  post:
+    needs: scan
+    if: needs.scan.outputs.events != '[]'
+    runs-on: ubuntu-latest
+    permissions: {}
+    strategy:
+      # One post at a time keeps the channel under Discord's rate limit.
+      max-parallel: 1
+      matrix:
+        event: ${{ fromJSON(needs.scan.outputs.events) }}
+    steps:
+      - name: Post to the dependencies channel
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.51.2
+        with:
+          webhook: ${{ secrets.dependencies_webhook }}
+          color: in-progress
+          title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
+          url: ${{ matrix.event.url }}
+          description: ${{ matrix.event.description }}
+          mention_roles: ${{ !matrix.event.review && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
+          dry_run: ${{ inputs.dry_run }}
+
+      # Resolved in the posting job: masked Discord ids cannot cross a job boundary.
+      - name: Resolve the reviewers
+        id: reviewers
+        if: matrix.event.review && matrix.event.user_ids != ''
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.51.2
+        with:
+          github_user_ids: ${{ matrix.event.user_ids }}
+          bws_access_token: ${{ secrets.bws_access_token }}
+          bws_server_url: ${{ inputs.bws_server_url }}
+
+      - name: Post to the reviews channel
+        if: matrix.event.review
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.51.2
+        with:
+          webhook: ${{ secrets.reviews_webhook }}
+          color: in-progress
+          title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
+          url: ${{ matrix.event.url }}
+          description: ${{ matrix.event.review_description }}
+          mention_users: ${{ steps.reviewers.outputs.discord_ids }}
+          mention_roles: ${{ matrix.event.user_ids == '' && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
+          dry_run: ${{ inputs.dry_run }}
