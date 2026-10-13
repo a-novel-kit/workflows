@@ -9,12 +9,6 @@ inputs:
   github_token:
     required: true
     description: The GitHub token to use for the action.
-  app_private_key:
-    required: true
-    description: The GitHub App private key.
-  client_id:
-    required: false
-    description: GitHub App client id (recommended).
 
 runs:
   using: "composite"
@@ -22,8 +16,6 @@ runs:
     - uses: a-novel-kit/workflows/node-actions/setup-node@v1.54.1
       id: app_token
       with:
-        client_id: ${{ inputs.client_id }}
-        app_private_key: ${{ inputs.app_private_key }}
         github_token: ${{ inputs.github_token }}
     - name: build
       shell: bash

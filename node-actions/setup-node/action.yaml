@@ -1,41 +1,33 @@
 name: setup node
-description: Authenticate as the GitHub App, set up pnpm and Node against the GitHub package registry, and install dependencies.
+description: >
+  Check out the repository, set up pnpm and Node against the GitHub package registry, and install
+  dependencies. The checkout uses the workflow token: the repositories and their packages are public,
+  so an App token would add only a credential every pull request's own workflow could read.
 
 inputs:
   github_token:
     required: true
     description: The GitHub token to use for the action.
-  app_private_key:
-    required: true
-    description: The GitHub App private key.
-  client_id:
-    required: false
-    description: GitHub App client id (recommended).
   ref:
     required: false
     description: >
-      Ref to check out (forwarded to pull-bot). Defaults to github.head_ref; pass a
-      release tag when publishing from a dispatched release so the build is the
-      bumped commit, not the pre-bump default branch.
+      Ref to check out. Defaults to github.head_ref; pass a release tag when publishing from a
+      dispatched release so the build is the bumped commit, not the pre-bump default branch.
     default: ""
 
 outputs:
   token:
-    description: The bot token.
-    value: ${{ steps.app_token.outputs.token }}
-  app_login:
-    description: The login name of the bot.
-    value: ${{ steps.app_token.outputs.app_login }}
+    description: The token the checkout used, for a later checkout such as an LFS one.
+    value: ${{ inputs.github_token }}
 
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.54.1
-      id: app_token
+    - uses: actions/checkout@v7
       with:
-        client_id: ${{ inputs.client_id }}
-        app_private_key: ${{ inputs.app_private_key }}
-        ref: ${{ inputs.ref }}
+        token: ${{ inputs.github_token }}
+        ref: ${{ inputs.ref != '' && inputs.ref || github.head_ref }}
+        persist-credentials: false
     - uses: pnpm/action-setup@v6
     - uses: actions/setup-node@v7
       with:
@@ -66,7 +58,7 @@ runs:
       run: pnpm i --frozen-lockfile
     # Only pushes to the default branch that install its own commit save: other refs restore
     # its cache, a merge-queue branch's cache is unreachable once the branch is deleted, and a
-    # pull_request_target run reports the base branch as its ref while pull-bot checks out the
+    # pull_request_target run reports the base branch as its ref while the checkout takes the
     # PR head. Pruning drops packages the lockfile no longer uses, which the fallback key would
     # otherwise carry forever.
     - id: pnpm-prune

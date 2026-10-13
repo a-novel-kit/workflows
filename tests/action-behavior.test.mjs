@@ -382,3 +382,33 @@ test("escalate pages Discord with push_mention and keeps the GitHub mention on t
   assert.match(page, /^cc <@&42>$/m);
   assert.doesNotMatch(page, /@octocat/);
 });
+
+test("Node actions check out with the workflow token and only audit mints an App token", () => {
+  // Every pull request's own workflow can read a key its jobs are handed, so CI holds none.
+  for (const path of [
+    "node-actions/setup-node/action.yaml",
+    "node-actions/lint-node/action.yaml",
+    "node-actions/test-node/action.yaml",
+    "node-actions/build-node/action.yaml",
+    "node-actions/lint-translations/action.yaml",
+    "node-actions/test-playwright/action.yaml",
+    "github-pages-actions/publish-storybook/action.yaml",
+    "publish-actions/npm/action.yaml",
+  ]) {
+    const action = manifest(path);
+    assert.equal(action.inputs?.app_private_key, undefined, path);
+    const uses = action.runs.steps.map((s) => s.uses ?? "");
+    assert(!uses.some((u) => u.includes("pull-bot") || u.startsWith("actions/create-github-app-token")), path);
+  }
+  const checkout = manifest("node-actions/setup-node/action.yaml").runs.steps.find((s) =>
+    s.uses?.startsWith("actions/checkout@")
+  );
+  assert.equal(checkout.with.token, "${{ inputs.github_token }}");
+  assert.equal(checkout.with["persist-credentials"], false);
+
+  // audit commits as the bot, with a token that can only write contents.
+  const mint = manifest("node-actions/audit/action.yaml").runs.steps.find((s) =>
+    s.uses?.startsWith("actions/create-github-app-token@")
+  );
+  assert.equal(mint.with["permission-contents"], "write");
+});
