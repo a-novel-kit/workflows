@@ -66,6 +66,13 @@ inputs:
     description: >
       Head SHA to anchor the check to. Defaults to the PR head (or the merge-queue group's
       head); the sweep passes the sibling PR's current head when re-posting.
+  merge_group_head_ref:
+    required: false
+    default: ${{ github.event.merge_group.head_ref }}
+    description: >
+      Head ref of the merge-queue group to gate, such as `refs/heads/gh-readonly-queue/master/pr-7-<sha>`.
+      Defaults to the triggering merge group; a run relayed through `workflow_run` passes it from
+      `relay-context`. Empty off the queue.
   planning_repo:
     required: false
     default: .github
@@ -138,8 +145,8 @@ runs:
         KILL_SWITCH: ${{ inputs.kill_switch }}
         HEAD_SHA: ${{ inputs.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
-        IN_QUEUE: ${{ github.event.merge_group.head_sha }}
-        MG_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        IN_QUEUE: ${{ inputs.merge_group_head_ref }}
+        MG_HEAD_REF: ${{ inputs.merge_group_head_ref }}
         # The triggering PR's labels from the event payload: the full set on a pull_request
         # event, empty on a merge_group or sweep run, which carry no pull_request payload.
         # The native pull_request path classifies from these with no API call.
@@ -358,7 +365,7 @@ runs:
         HEAD_SHA: ${{ inputs.head_sha }}
         EPIC: ${{ steps.discover.outputs.epic_number }}
         MEMBERS: ${{ steps.membership.outputs.members }}
-        IN_QUEUE: ${{ github.event.merge_group.head_sha }}
+        IN_QUEUE: ${{ inputs.merge_group_head_ref }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
       run: |
         set -euo pipefail

@@ -1,0 +1,74 @@
+name: relay-context
+description: >
+  Turns a `workflow_run` event from the relay workflow into the context a privileged gate needs. A
+  pull request's own workflow can rewrite or imitate the relay, so its run is only a wake-up signal:
+  only a `pull_request_review` or `merge_group` run counts, a merge group must sit on a
+  `gh-readonly-queue/` branch, and a review's head is read from its pull request rather than from the
+  run. Any other run leaves every output empty, and the caller skips its gate.
+
+inputs:
+  github_token:
+    required: false
+    default: ${{ github.token }}
+    description: Token that reads the repository's pull requests (pull-requests read).
+
+outputs:
+  event:
+    description: '"pull_request_review" or "merge_group", or empty when the run is ignored.'
+    value: ${{ steps.context.outputs.event }}
+  pull_request_number:
+    description: The reviewed pull request's number. Empty for a merge group.
+    value: ${{ steps.context.outputs.pull_request_number }}
+  head_sha:
+    description: The reviewed pull request's current head, or the merge group's head.
+    value: ${{ steps.context.outputs.head_sha }}
+  merge_group_head_ref:
+    description: The merge group's head ref, such as refs/heads/gh-readonly-queue/master/pr-7-<sha>.
+    value: ${{ steps.context.outputs.merge_group_head_ref }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the relayed event
+      id: context
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        EVENT: ${{ github.event.workflow_run.event }}
+        RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        RUN_PULL_REQUESTS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+      run: |
+        set -euo pipefail
+        case "$EVENT" in
+          merge_group)
+            # Only the merge queue creates these branches, and GitHub records the event.
+            if [[ ! "$RUN_HEAD_BRANCH" =~ ^gh-readonly-queue/ ]] || [[ ! "$RUN_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::notice::Ignoring a merge_group run on ${RUN_HEAD_BRANCH:-no branch}."
+              exit 0
+            fi
+            printf 'event=merge_group\nhead_sha=%s\nmerge_group_head_ref=refs/heads/%s\n' \
+              "$RUN_HEAD_SHA" "$RUN_HEAD_BRANCH" >>"$GITHUB_OUTPUT"
+            ;;
+          pull_request_review)
+            number="$(jq -r '.[0].number // empty' <<<"$RUN_PULL_REQUESTS")"
+            if [ -z "$number" ]; then
+              number="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RUN_HEAD_SHA/pulls" \
+                --jq '[.[] | select(.state == "open")][0].number // empty')"
+            fi
+            if [ -z "$number" ]; then
+              echo "::notice::No open pull request for ${RUN_HEAD_SHA}."
+              exit 0
+            fi
+            # The gate posts on the pull request's head as it is now, not on the head the run reports.
+            head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq 'select(.state == "open") | .head.sha')"
+            if [ -z "$head" ]; then
+              echo "::notice::Pull request #${number} is not open."
+              exit 0
+            fi
+            printf 'event=pull_request_review\npull_request_number=%s\nhead_sha=%s\n' "$number" "$head" >>"$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "::notice::Ignoring a relayed ${EVENT:-unknown} run."
+            ;;
+        esac

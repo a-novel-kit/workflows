@@ -82,7 +82,7 @@ inputs:
     required: false
     default: ${{ github.event.pull_request.number }}
     description: >
-      Per-PR only, and the mode selector: non-empty (or a `merge_group` event) runs per-PR, otherwise
+      Per-PR only, and the mode selector: non-empty (or a merge-group head ref) runs per-PR, otherwise
       the sweep. Defaults to the triggering PR; empty on a sweep run.
   head_sha:
     required: false
@@ -90,6 +90,13 @@ inputs:
     description: >
       Per-PR only. Head SHA to anchor the epic-freeze check to — the PR head, or the merge-queue
       group's head on a `merge_group` event.
+  merge_group_head_ref:
+    required: false
+    default: ${{ github.event.merge_group.head_ref }}
+    description: >
+      Head ref of the merge-queue group to gate, such as `refs/heads/gh-readonly-queue/master/pr-7-<sha>`.
+      Defaults to the triggering merge group; a run relayed through `workflow_run` passes it from
+      `relay-context`. Empty off the queue.
   grace_minutes:
     required: false
     default: "45"
@@ -140,17 +147,17 @@ inputs:
 runs:
   using: composite
   steps:
-    # Mode, computed before the tokens: per-PR when a pull_request_number was supplied or the event is a
-    # merge_group, else the sweep. Gating the write-token mint on it keeps per-PR to checks + reads.
+    # Mode, computed before the tokens: per-PR when a pull_request_number or a merge-group head ref was
+    # supplied, else the sweep. Gating the write-token mint on it keeps per-PR to checks + reads.
     - name: Select mode (per-PR vs sweep)
       id: mode
       shell: bash
       env:
-        EVENT_NAME: ${{ github.event_name }}
+        IN_QUEUE: ${{ inputs.merge_group_head_ref }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
       run: |
         set -euo pipefail
-        if [ "${EVENT_NAME:-}" = "merge_group" ] || [ -n "${PR_NUMBER:-}" ]; then
+        if [ -n "${IN_QUEUE:-}" ] || [ -n "${PR_NUMBER:-}" ]; then
           echo "mode=per-pr" >> "$GITHUB_OUTPUT"
           echo "detect-partial-landing: PER-PR mode."
         else
@@ -284,8 +291,8 @@ runs:
         REPO_FULL: ${{ inputs.org }}/${{ inputs.repo }}
         HEAD_SHA: ${{ inputs.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
-        IN_QUEUE: ${{ github.event.merge_group.head_sha }}
-        MG_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        IN_QUEUE: ${{ inputs.merge_group_head_ref }}
+        MG_HEAD_REF: ${{ inputs.merge_group_head_ref }}
         # The triggering PR's own number + labels from the event payload (present on pull_request, empty
         # on merge_group / sweep), which lets the standalone fast-path classify with no API call.
         EVENT_PR: ${{ github.event.pull_request.number }}

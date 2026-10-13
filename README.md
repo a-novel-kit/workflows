@@ -105,6 +105,7 @@ SemVer release.
 | `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                              |
 | `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
 | `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.              |
+| `relay-context`          | Resolve a relayed review or merge group for a privileged `workflow_run` gate; any other run wakes nothing.        |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
 | `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                            |
 | `review-gate`            | Required check: a maintainer or admin approved the head, and applied every privileged label last.                 |
