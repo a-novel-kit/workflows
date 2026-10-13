@@ -2,8 +2,8 @@
 # dedicated Discord channel only when a token crosses a milestone in the ping policy below, so quiet
 # days stay silent. Each ping @mentions one configured admin, who triages, and shows the token owner's
 # login in the message. Per-owner pinging waits on the Bitwarden resolver; wire it where `did` is
-# resolved below. The caller owns the schedule and concurrency, as it does for watchdog, while this
-# owns the enumeration, the policy and the pings.
+# resolved below. The caller owns when it runs and its concurrency, while this owns the enumeration,
+# the policy and the pings.
 #
 # Firing the caller from the UI with test_run=true posts for every PAT regardless of the policy,
 # still admin-only and still for real: an end-to-end drill of the channel and the formatting.
