@@ -1,0 +1,34 @@
+name: require-role
+description: >
+  Fails the job unless the person who started this run attempt holds one of the allowed roles on the
+  repository. Anyone with write access can dispatch or re-run a workflow, so a workflow reserved for
+  admins or maintainers calls this as its first step. It checks `github.triggering_actor`, because
+  `github.actor` still names the original dispatcher on a re-run, and it reads the role name, because
+  the legacy permission field reports Maintain as write.
+
+inputs:
+  roles:
+    required: true
+    description: >
+      Comma-separated repository roles allowed to proceed, such as "admin" or "admin,maintain". A
+      custom repository role matches by its name.
+
+runs:
+  using: composite
+  steps:
+    - name: Require role
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO_FULL: ${{ github.repository }}
+        ACTOR: ${{ github.triggering_actor }}
+        ROLES: ${{ inputs.roles }}
+      run: |
+        set -euo pipefail
+        # A failed lookup leaves the role empty, which no allowed list matches.
+        role=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.role_name' 2>/dev/null) || role=""
+        if [[ -z "$role" || ",${ROLES// /}," != *",${role},"* ]]; then
+          echo "::error::@${ACTOR} has role '${role:-none}'; this workflow requires one of: ${ROLES}."
+          exit 1
+        fi
+        echo "@${ACTOR} holds the ${role} role." | tee -a "$GITHUB_STEP_SUMMARY"

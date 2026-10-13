@@ -86,23 +86,10 @@ runs:
             ;;
         esac
 
-    # Re-check the dispatcher is a repo admin here as well as in the caller's dispatch shell. The
-    # collaborator-permission endpoint needs only Metadata:read, and `|| echo ""` keeps a failed
-    # lookup from tripping `set -e`; an empty permission fails closed.
-    - name: Require admin (defense in depth)
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        REPO_FULL: ${{ github.repository }}
-        ACTOR: ${{ github.actor }}
-      run: |
-        set -euo pipefail
-        perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
-        if [ "$perm" != "admin" ]; then
-          echo "::error::release-train is admin-only; @${ACTOR} has permission '${perm:-none}'."
-          exit 1
-        fi
-        echo "@${ACTOR} is a repo admin (action-level re-check passed)." | tee -a "$GITHUB_STEP_SUMMARY"
+    # Re-check the role here as well as in the caller, which a hand-written or drifted copy could drop.
+    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.53.0
+      with:
+        roles: admin
 
     # Read token: the ledger search, per-repo commit ranges and tag or release reads span every repo
     # in the org, and the single-repo GITHUB_TOKEN cannot see siblings.

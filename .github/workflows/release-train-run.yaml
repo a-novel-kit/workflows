@@ -42,31 +42,23 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Fail closed unless the dispatcher is a repo admin and the Epic number is numeric.
-      # workflow_dispatch is open to any write user, so this gate is what keeps the release train
-      # admin-only.
-      - name: Require admin + numeric epic
+      # workflow_dispatch is open to any write user, so this gate keeps the release train admin-only.
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.53.0
+        with:
+          roles: admin
+
+      - name: Require numeric epic
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO_FULL: ${{ github.repository }}
-          ACTOR: ${{ github.actor }}
           EPIC: ${{ inputs.epic_number }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          # Admin gate: `|| echo ""` keeps a failed lookup from tripping `set -e`, and an empty
-          # permission falls through and fails closed.
-          perm=$(gh api "repos/${REPO_FULL}/collaborators/${ACTOR}/permission" -q '.permission' 2>/dev/null || echo "")
-          if [ "$perm" != "admin" ]; then
-            echo "::error::release-train is admin-only; @${ACTOR} has permission '${perm:-none}'."
-            exit 1
-          fi
           # Numeric validation before the number ever reaches the `label:"epic:<N>"` search grammar.
           if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
             echo "::error::epic_number must be an integer, got \"${EPIC:-}\"."
             exit 1
           fi
-          echo "@${ACTOR} is a repo admin — proceeding with the release train for epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Proceeding with the release train for epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: a-novel-kit/workflows/generic-actions/release-train@v1.53.0
         with:
