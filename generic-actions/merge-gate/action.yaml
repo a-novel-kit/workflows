@@ -11,11 +11,12 @@ description: >
   and cannot be trusted to define the set. For a labeled PR this action resolves the
   Epic's authorized open sibling PRs (via the epic-membership action) and passes only when
   EVERY member is merge-ready (non-draft, approved and passing `review-gate`), so a set of
-  concurrent cross-repo PRs lands together instead of partially. The `Closes` walk survives only as a discovery HINT:
-  for an unlabeled PR whose closing issue has a parent Epic, the action suggests adding the
-  `epic:<N>` label but still treats the PR as standalone. A PR with no `epic:<N>` label is
-  standalone and always passes (the fast path — classified from the event payload alone, so
-  the flood of ordinary PRs never depends on an API call and can't be frozen by a blip).
+  concurrent cross-repo PRs lands together instead of partially. The `Closes` walk survives
+  only as a discovery HINT: for an unlabeled PR whose closing issue has a parent Epic, the
+  action suggests adding the `epic:<N>` label but still treats the PR as standalone. A PR
+  with no `epic:<N>` label is standalone and always passes (the fast path — classified from
+  the event payload alone, so the flood of ordinary PRs never depends on an API call and
+  can't be frozen by a blip).
 
   Holds are posted as `conclusion: failure`, NEVER `neutral`. GitHub counts `neutral`
   (alongside `success` and `skipped`) as a PASSING required check, so a neutral "hold" would

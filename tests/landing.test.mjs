@@ -415,7 +415,6 @@ test("membership reads a missing Epic as no snapshot but fails on an unreadable 
 
 test("membership reads each member's review-gate from the Agent App's checks only", (t) => {
   const resolve = step("generic-actions/epic-membership/action.yaml", "resolve");
-  const w = workspace(t);
   // Any workflow can post a check run named review-gate; only the Agent App's counts.
   const suites = [
     { app: { slug: "github-actions" }, checkRuns: { nodes: [{ conclusion: "SUCCESS" }] } },
@@ -429,21 +428,40 @@ test("membership reads each member's review-gate from the Agent App's checks onl
     repository: { nameWithOwner: "a-novel-kit/x" },
     commits: { nodes: [{ commit: { checkSuites: { nodes: checkSuites } } }] },
   });
-  const search = { pageInfo: { hasNextPage: false }, nodes: [node(1, suites), node(2, [suites[0]])] };
-  w.stub(
-    "gh",
-    `const args = process.argv.slice(2);
-    if (args[1] !== 'graphql') { console.error('gh: Not Found (HTTP 404)'); process.exit(1); }
-    console.log(JSON.stringify({ data: { search: ${JSON.stringify(search)} } }));`
-  );
-  succeeds(
-    w.bash(resolve, { OWNER: "a-novel-kit", EPIC: "900", PLANNING_REPO: ".github", RUNNER_TEMP: w.cwd, AGENT: "agent" })
-  );
-  const members = JSON.parse(w.read("output").match(/^members=(.*)$/m)[1]);
-  assert.deepEqual(
-    members.map((m) => m.reviewGate),
-    ["FAILURE", null]
-  );
+  const open = [node(1, suites), node(2, [suites[0]])];
+  const snapshot = marker({ status: "frozen", members: open.map(({ number }) => ({ repo: "a-novel-kit/x", number })) });
+  // Without a snapshot the set comes from the label search; with a frozen one, from a per-member
+  // re-read. Each builds its own query and projection.
+  for (const [body, data] of [
+    ["", { data: { search: { pageInfo: { hasNextPage: false }, nodes: open } } }],
+    [snapshot, response(...open.map((n) => ({ ...n, state: "OPEN" })))],
+  ]) {
+    const w = workspace(t);
+    const issue = body
+      ? `console.log(${JSON.stringify(body)})`
+      : "console.error('gh: Not Found (HTTP 404)'); process.exit(1)";
+    w.stub(
+      "gh",
+      `import * as fs from 'node:fs'; const args = process.argv.slice(2);
+      if (args[1] !== 'graphql') { ${issue}; }
+      fs.writeFileSync('query', args.join(' ')); console.log(${JSON.stringify(JSON.stringify(data))});`
+    );
+    succeeds(
+      w.bash(resolve, {
+        OWNER: "a-novel-kit",
+        EPIC: "900",
+        PLANNING_REPO: ".github",
+        RUNNER_TEMP: w.cwd,
+        AGENT: "agent",
+      })
+    );
+    assert.match(w.read("query"), /checkName:"review-gate"/);
+    const members = JSON.parse(w.read("output").match(/^members=(.*)$/m)[1]);
+    assert.deepEqual(
+      members.map((m) => m.reviewGate),
+      ["FAILURE", null]
+    );
+  }
 });
 
 test("the enqueue-token scope saves its read in the sweep's search shape", () => {
