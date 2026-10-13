@@ -17,12 +17,6 @@ inputs:
   github_token:
     required: true
     description: A GitHub token with read access to the caller's package dependencies.
-  app_private_key:
-    required: true
-    description: A GitHub App private key with read access to the caller repository.
-  client_id:
-    required: false
-    description: The GitHub App client ID.
 
 outputs:
   page_url:
@@ -35,8 +29,6 @@ runs:
     - uses: a-novel-kit/workflows/node-actions/setup-node@v1.54.1
       with:
         github_token: ${{ inputs.github_token }}
-        app_private_key: ${{ inputs.app_private_key }}
-        client_id: ${{ inputs.client_id }}
     - name: Build Storybook
       shell: bash
       working-directory: ${{ inputs.working_directory }}

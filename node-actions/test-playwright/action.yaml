@@ -5,12 +5,6 @@ inputs:
   github_token:
     required: true
     description: The GitHub token used to install packages.
-  app_private_key:
-    required: true
-    description: The GitHub App private key used to check out the repository.
-  client_id:
-    required: false
-    description: GitHub App client id.
   component_test_action:
     required: false
     default: test:browser
@@ -76,8 +70,6 @@ runs:
     - uses: a-novel-kit/workflows/node-actions/setup-node@v1.54.1
       with:
         github_token: ${{ inputs.github_token }}
-        app_private_key: ${{ inputs.app_private_key }}
-        client_id: ${{ inputs.client_id }}
         # A pull request's screenshot approval binds its head, so test that commit, not the branch tip.
         ref: ${{ github.event.pull_request.head.sha }}
     - name: Install Chromium and system dependencies

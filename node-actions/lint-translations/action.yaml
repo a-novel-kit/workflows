@@ -9,12 +9,6 @@ inputs:
   github_token:
     required: true
     description: Token with contents and packages read for setup, and pull requests read to find the branch's PR labels.
-  app_private_key:
-    required: true
-    description: The GitHub App private key.
-  client_id:
-    required: false
-    description: GitHub App client id (recommended).
   structure_action:
     required: false
     default: i18n:structure
@@ -33,8 +27,6 @@ runs:
     - uses: a-novel-kit/workflows/node-actions/setup-node@v1.54.1
       id: setup
       with:
-        client_id: ${{ inputs.client_id }}
-        app_private_key: ${{ inputs.app_private_key }}
         github_token: ${{ inputs.github_token }}
         ref: ${{ github.event.pull_request.head.sha }}
 

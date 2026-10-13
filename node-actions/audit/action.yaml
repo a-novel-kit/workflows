@@ -16,17 +16,23 @@ runs:
   using: "composite"
   steps:
     - uses: a-novel-kit/workflows/node-actions/setup-node@v1.54.1
-      id: app_token
       with:
-        client_id: ${{ inputs.client_id }}
-        app_private_key: ${{ inputs.app_private_key }}
         github_token: ${{ inputs.github_token }}
+    # The fixes are committed as the bot, so its token can only write contents.
+    - name: Mint bot token
+      id: bot
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        permission-contents: write
     - name: get github app user id
       id: app_user_id
       shell: bash
-      run: echo "user_id=$(gh api "/users/${{ steps.app_token.outputs.app_login }}" --jq .id)" >> "$GITHUB_OUTPUT"
+      run: echo "user_id=$(gh api "/users/${APP_LOGIN}" --jq .id)" >> "$GITHUB_OUTPUT"
       env:
-        GH_TOKEN: ${{ steps.app_token.outputs.token }}
+        GH_TOKEN: ${{ steps.bot.outputs.token }}
+        APP_LOGIN: ${{ steps.bot.outputs.app-slug }}[bot]
     - name: run audit
       shell: bash
       # --fix takes a mode since pnpm 11; "override" pins vulnerable transitive
@@ -75,6 +81,6 @@ runs:
         git commit -m "chore(security): audit fix"
         git push
       env:
-        GH_TOKEN: ${{ steps.app_token.outputs.token }}
-        APP_LOGIN: ${{ steps.app_token.outputs.app_login }}
+        GH_TOKEN: ${{ steps.bot.outputs.token }}
+        APP_LOGIN: ${{ steps.bot.outputs.app-slug }}[bot]
         APP_USER_ID: ${{ steps.app_user_id.outputs.user_id }}
