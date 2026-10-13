@@ -406,7 +406,7 @@ test("membership reads a missing Epic as no snapshot but fails on an unreadable 
         console.error('gh: request failed (HTTP ${status})'); process.exit(1);
       }`
     );
-    const env = { OWNER: "a-novel-kit", EPIC: "900", PLANNING_REPO: ".github", RUNNER_TEMP: w.cwd, AGENT: "agent" };
+    const env = { OWNER: "a-novel-kit", EPIC: "900", PLANNING_REPO: ".github", RUNNER_TEMP: w.cwd };
     assert.equal(w.bash(resolve, env).status, expected);
     assert.equal(w.read("reads").length, reads);
     assert.equal(existsSync(join(w.cwd, "output")) && w.read("output").includes("members=[]"), expected === 0);
