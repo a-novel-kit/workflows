@@ -1,8 +1,8 @@
 name: assign bot
 description: >
-  Assign a pull request to its author, or — when the author is a bot/app
-  (Renovate, Dependabot), which can't be assigned — to the repository's code
-  owner, so dependency PRs still land in a human's queue.
+  Assign a pull request to its author. A bot's pull request stays unassigned: an assignee would be
+  notified of every version bump, and a failing one already reaches the team through the Discord
+  dependencies feed.
 
 inputs:
   github_token:
@@ -21,40 +21,13 @@ runs:
         AUTHOR: ${{ github.event.pull_request.user.login }}
         AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
       run: |
-        # Pick the assignee. A human author owns their own PR. A bot or app author
-        # such as Renovate cannot be assigned, since GitHub rejects assigning an
-        # agent with an App installation token (HTTP 403), so the repo's code owner
-        # takes it and dependency PRs still land in a human's queue. Assignees do
-        # not gate merge, so this never blocks the bot's auto-merge.
-        if [ "$AUTHOR_TYPE" != "Bot" ]; then
-          assignees="$AUTHOR"
-        else
-          # Resolve the catch-all (*) owners from CODEOWNERS, read through the API
-          # since this workflow has no checkout. GitHub's precedence is
-          # .github/ > root > docs/, and the last matching rule wins. Only @user
-          # owners can be assignees, so a @org/team entry is dropped.
-          assignees=""
-          for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
-            content=$(gh api "repos/$REPO/contents/$path" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null) || true
-            [ -n "$content" ] || continue
-            assignees=$(printf '%s\n' "$content" | grep -E '^\*[[:space:]]' | tail -1 \
-              | tr ' \t' '\n' | grep -E '^@[A-Za-z0-9-]+$' | sed 's/^@//' | paste -sd, -) || true
-            break
-          done
-          if [ -z "$assignees" ]; then
-            echo "Author $AUTHOR is a $AUTHOR_TYPE and no assignable code owner found — skipping."
-            exit 0
-          fi
-          echo "Author $AUTHOR is a $AUTHOR_TYPE — assigning code owner(s) instead."
+        set -euo pipefail
+        if [ "$AUTHOR_TYPE" = "Bot" ]; then
+          echo "Author $AUTHOR is a bot; leaving the pull request unassigned."
+          exit 0
         fi
-
-        echo "Assigning [$assignees] to PR #$PR"
-        args=()
-        old_ifs=$IFS
-        IFS=,
-        for a in $assignees; do args+=(-f "assignees[]=$a"); done
-        IFS=$old_ifs
+        echo "Assigning $AUTHOR to PR #$PR"
         gh api --method POST \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          "/repos/$REPO/issues/$PR/assignees" "${args[@]}"
+          "/repos/$REPO/issues/$PR/assignees" -f "assignees[]=$AUTHOR"
