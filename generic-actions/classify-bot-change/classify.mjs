@@ -19,7 +19,7 @@ const digests = [/@sha256:[0-9a-f]{64}/g, /@[0-9a-f]{40}\b/g];
 // Where a dependency reference puts its version. Anywhere else a dotted number, such as an IP
 // address or a CIDR base, stays literal.
 const versions = [
-  new RegExp(String.raw`(?<=@)v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?\b`, "g"),
+  new RegExp(String.raw`(?<=@)(?!\d+(?:\.\d+){3}\b)v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?\b`, "g"),
   new RegExp(String.raw`(?<=\/[\w.-]+:)${semver}(?=[@"\s]|$)`, "g"),
   new RegExp(String.raw`(?<=#\s*)${semver}(?=["\s]|$)`, "g"),
 ];
@@ -30,18 +30,24 @@ const moduleVersions = [
 ];
 const annotatedVersion = new RegExp(semver, "g");
 
-/** The removed and added lines of each hunk, each with the context line it follows. */
+/** The removed and added lines of each hunk, each with the line before it on its own side. */
 function hunks(patch) {
   const out = [];
-  let context = "";
+  let before = "";
+  let after = "";
   for (const line of patch.split("\n")) {
+    const text = line.slice(1);
     if (line.startsWith("@@")) {
       out.push({ removed: [], added: [] });
-      context = "";
+      before = after = "";
     } else if (!out.length) continue;
-    else if (line.startsWith("-")) out.at(-1).removed.push({ text: line.slice(1), context });
-    else if (line.startsWith("+")) out.at(-1).added.push({ text: line.slice(1), context });
-    else context = line.slice(1);
+    else if (line.startsWith("-")) {
+      out.at(-1).removed.push({ text, context: before });
+      before = text;
+    } else if (line.startsWith("+")) {
+      out.at(-1).added.push({ text, context: after });
+      after = text;
+    } else before = after = text;
   }
   return out;
 }
@@ -82,11 +88,24 @@ const review = (reason) => ({ decision: "review", reason });
 
 /**
  * Classify a pull request's changed files: "pin" for a release pin, "renovate" for a version
- * update Renovate put on auto-merge, "review" for anything a person must approve. changedFiles is
- * the pull request's own count, since the files listing stops at 3000. resolveTag(repository, tag)
- * returns the commit a tag names, so a moved action pin must be the commit of its new version.
+ * update Renovate put on auto-merge, "review" for anything a person must approve. headSha is the
+ * head after the files were listed, which must still be the expected commit the approval binds
+ * to. changedFiles is the pull request's own count, since the files listing stops at 3000.
+ * autoMergeEnabledBy is whoever first enabled auto-merge and autoMergeArmed whether it is on now,
+ * so a maintainer's hold stands. resolveTag(repository, tag) returns the commit a tag names, so a
+ * moved action pin must be the commit of its new version.
  */
-export async function classify({ files, changedFiles, bot, autoMergeEnabledBy, resolveTag }) {
+export async function classify({
+  files,
+  changedFiles,
+  headSha,
+  expectedSha,
+  bot,
+  autoMergeEnabledBy,
+  autoMergeArmed,
+  resolveTag,
+}) {
+  if (headSha !== expectedSha) return review(`its head moved from ${expectedSha} to ${headSha}`);
   if (files.length === 0) return review("it changes no file");
   if (files.length !== changedFiles) return review(`GitHub listed ${files.length} of its ${changedFiles} files`);
 
@@ -104,6 +123,7 @@ export async function classify({ files, changedFiles, bot, autoMergeEnabledBy, r
 
   const login = (name) => (name ?? "").replace(/\[bot\]$/, "");
   if (login(autoMergeEnabledBy) !== login(bot)) return review("Renovate did not put it on auto-merge");
+  if (!autoMergeArmed) return review("its auto-merge is off");
 
   const movedPins = [];
   for (const file of files) {
@@ -115,10 +135,13 @@ export async function classify({ files, changedFiles, bot, autoMergeEnabledBy, r
       const removed = hunk.removed.filter(keep);
       const added = hunk.added.filter(keep);
       if (!pairsUp(file.filename, { removed, added })) return review(`${file.filename} changes more than versions`);
-      added.forEach(({ text }, index) => {
+      for (const [index, { text }] of added.entries()) {
+        const commits = (line) => line.match(/@[0-9a-f]{40}\b/g)?.join();
+        if (commits(text) === commits(removed[index].text)) continue;
         const pin = text.match(actionPin);
-        if (pin && pin[2] !== removed[index].text.match(actionPin)?.[2]) movedPins.push(pin);
-      });
+        if (!pin) return review(`${file.filename} moves a commit pin it cannot verify`);
+        movedPins.push(pin);
+      }
     }
   }
 
@@ -134,13 +157,14 @@ function gh(...args) {
 }
 
 async function main() {
-  const { REPOSITORY, PULL_REQUEST, BOT, GITHUB_OUTPUT } = process.env;
+  const { REPOSITORY, PULL_REQUEST, HEAD_SHA, BOT, GITHUB_OUTPUT } = process.env;
   const [owner, name] = REPOSITORY.split("/");
   const number = Number(PULL_REQUEST.split("/").at(-1));
   const files = JSON.parse(gh("api", "--paginate", "--slurp", `repos/${REPOSITORY}/pulls/${number}/files`)).flat();
-  const changedFiles = Number(gh("api", `repos/${REPOSITORY}/pulls/${number}`, "--jq", ".changed_files"));
+  // Read after the listing, so a push in between shows as a moved head.
+  const pull = JSON.parse(gh("api", `repos/${REPOSITORY}/pulls/${number}`, "--jq", "{changed_files, sha: .head.sha}"));
   // The first to enable auto-merge decided it; recover-prs re-arms a dropped pull request as the agent.
-  const firstAutoMerge = JSON.parse(
+  const { autoMergeRequest, timelineItems } = JSON.parse(
     gh(
       "api",
       "graphql",
@@ -152,10 +176,11 @@ async function main() {
       `number=${number}`,
       "-f",
       "query=query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) " +
-        "{ pullRequest(number: $number) { timelineItems(itemTypes: [AUTO_MERGE_ENABLED_EVENT], first: 1) " +
+        "{ pullRequest(number: $number) { autoMergeRequest { enabledAt } " +
+        "timelineItems(itemTypes: [AUTO_MERGE_ENABLED_EVENT], first: 1) " +
         "{ nodes { ... on AutoMergeEnabledEvent { actor { login } } } } } } }"
     )
-  ).data.repository.pullRequest.timelineItems.nodes[0];
+  ).data.repository.pullRequest;
   const resolveTag = (repository, tag) => {
     try {
       return gh("api", `repos/${repository}/commits/${tag}`, "--jq", ".sha").trim();
@@ -165,9 +190,12 @@ async function main() {
   };
   const { decision, reason } = await classify({
     files,
-    changedFiles,
+    changedFiles: pull.changed_files,
+    headSha: pull.sha,
+    expectedSha: HEAD_SHA,
     bot: BOT,
-    autoMergeEnabledBy: firstAutoMerge?.actor?.login,
+    autoMergeEnabledBy: timelineItems.nodes[0]?.actor?.login,
+    autoMergeArmed: Boolean(autoMergeRequest?.enabledAt),
     resolveTag,
   });
   // A filename is the pull request author's choice, so it never reaches the output as a new line.

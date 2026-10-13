@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { classify } from "../generic-actions/classify-bot-change/classify.mjs";
-import { root, succeeds, workspace } from "./helpers.mjs";
+import { root, step, succeeds, workspace } from "./helpers.mjs";
 
 const bot = "anovelbot-dependencies[bot]";
 const sha = (char) => char.repeat(40);
@@ -23,8 +23,18 @@ const file = (filename, removed, added, { status = "modified", context = [] } = 
   ].join("\n"),
 });
 const action = (commit, version) => `      - uses: actions/checkout@${commit} # ${version}`;
-const run = (files, autoMergeEnabledBy, changedFiles = files.length) =>
-  classify({ files, changedFiles, bot, autoMergeEnabledBy, resolveTag });
+const head = sha("e");
+const run = (files, autoMergeEnabledBy, { changedFiles = files.length, armed = true, headSha = head } = {}) =>
+  classify({
+    files,
+    changedFiles,
+    headSha,
+    expectedSha: head,
+    bot,
+    autoMergeEnabledBy,
+    autoMergeArmed: armed,
+    resolveTag,
+  });
 
 test("classify lets through only a release pin or a version update Renovate put on auto-merge", async () => {
   const pin = file(
@@ -63,7 +73,9 @@ test("classify lets through only a release pin or a version update Renovate put 
   );
   const tfvars = "environments/production/foundation/terraform.tfvars";
 
-  for (const [name, files, enabledBy, decision, changedFiles] of [
+  const annotation = ["          # renovate: datasource=github-releases depName=example/tool"];
+
+  for (const [name, files, enabledBy, decision, options] of [
     ["a release pin", [pin], null, "pin"],
     ["an action update Renovate merges", [bump], bot, "renovate"],
     ["the same login without the [bot] suffix", [bump], "anovelbot-dependencies", "renovate"],
@@ -129,10 +141,63 @@ test("classify lets through only a release pin or a version update Renovate put 
     ["a new checksum file", [file("tool.sum", [], ["x v1.0.0 h1:x="], { status: "added" })], bot, "review"],
     ["a file GitHub shows without a patch", [{ filename: "main.go", status: "modified" }], bot, "review"],
     ["a configuration value", [file(tfvars, ['  cpu = "2"'], ['  cpu = "4"'])], bot, "review"],
-    ["files past the listing's cap", [lock], bot, "review", 3001],
+    ["files past the listing's cap", [lock], bot, "review", { changedFiles: 3001 }],
     ["no file at all", [], bot, "review"],
+    // The approval binds to the classified commit, and a maintainer's hold on auto-merge stands.
+    ["a head that moved after classification", [bump], bot, "review", { headSha: sha("d") }],
+    ["an update a maintainer held", [bump], bot, "review", { armed: false }],
+    ["a release pin before anyone armed it", [pin], null, "pin", { armed: false }],
+    [
+      "an address changed below an annotated version",
+      [
+        file(
+          ".github/workflows/main.yaml",
+          ['          version: "0.11.0"', '          allowed: "35.235.240.0/20"'],
+          ['          version: "0.12.0"', '          allowed: "203.0.113.0/20"'],
+          { context: annotation }
+        ),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "an impostor commit on a quoted action",
+      [
+        file(
+          ".github/workflows/main.yaml",
+          [`      - uses: "actions/checkout@${sha("a")}" # v7.0.0`],
+          [`      - uses: "actions/checkout@${sha("f")}" # v7.0.1`]
+        ),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "an impostor commit behind trailing text",
+      [
+        file(
+          ".github/workflows/main.yaml",
+          [`${action(sha("a"), "v7.0.0")} pinned`],
+          [`${action(sha("f"), "v7.0.1")} pinned`]
+        ),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "a database address after URL user info",
+      [
+        file(
+          ".github/workflows/main.yaml",
+          ["          DSN: postgres://app@10.20.0.6:5432/app"],
+          ["          DSN: postgres://app@203.0.113.7:5432/app"]
+        ),
+      ],
+      bot,
+      "review",
+    ],
   ]) {
-    assert.equal((await run(files, enabledBy, changedFiles)).decision, decision, name);
+    assert.equal((await run(files, enabledBy, options)).decision, decision, name);
   }
 });
 
@@ -143,16 +208,51 @@ test("classify-bot-change writes one decision even when a filename carries a new
     "gh",
     `const args = process.argv.slice(2);
     const first = { actor: { login: "anovelbot-dependencies" } };
-    if (args.includes("graphql")) console.log(JSON.stringify({ data: { repository: { pullRequest: { timelineItems: { nodes: [first] } } } } }));
-    else if (args.includes(".changed_files")) console.log("1");
+    const pullRequest = { autoMergeRequest: { enabledAt: "2026-10-13T00:00:00Z" }, timelineItems: { nodes: [first] } };
+    if (args.includes("graphql")) console.log(JSON.stringify({ data: { repository: { pullRequest } } }));
+    else if (args.some((arg) => arg.includes("changed_files"))) console.log(JSON.stringify({ changed_files: 1, sha: "${"e".repeat(40)}" }));
     else console.log(JSON.stringify([[{ filename: "a\\ndecision=pin\\nb", status: "added" }]]));`
   );
   succeeds(
     w.run("node", [`${root}generic-actions/classify-bot-change/classify.mjs`], {
       REPOSITORY: "a-novel/infra",
       PULL_REQUEST: "https://github.com/a-novel/infra/pull/7",
+      HEAD_SHA: "e".repeat(40),
       BOT: bot,
     })
   );
   assert.deepEqual(w.read("output").match(/^decision=.*$/gm), ["decision=review"]);
+});
+
+test("approve-bot approves the given commit, or the current head without one", (t) => {
+  const approve = step("generic-actions/approve-bot/action.yaml", "approve PR");
+  for (const [headSha, expected] of [
+    ["", ["pr", "review", "--approve", "7"]],
+    [
+      sha("c"),
+      [
+        "api",
+        "repos/a-novel/infra/pulls/7/reviews",
+        "--method",
+        "POST",
+        "-f",
+        "event=APPROVE",
+        "-f",
+        `commit_id=${sha("c")}`,
+      ],
+    ],
+  ]) {
+    const w = workspace(t);
+    w.stub("gh", `require("fs").writeFileSync(process.env.GH_LOG, JSON.stringify(process.argv.slice(2)));`);
+    succeeds(
+      w.bash(approve, {
+        PR_URL: "7",
+        HEAD_SHA: headSha,
+        GH_TOKEN: "token",
+        GH_REPO: "a-novel/infra",
+        GH_LOG: `${w.cwd}/gh.log`,
+      })
+    );
+    assert.deepEqual(JSON.parse(w.read("gh.log")), expected, headSha || "no commit");
+  }
 });

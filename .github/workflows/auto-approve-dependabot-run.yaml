@@ -128,6 +128,7 @@ jobs:
         with:
           github_token: ${{ steps.token.outputs.token }}
           pull_request: ${{ steps.pr.outputs.url }}
+          head_sha: ${{ steps.pr.outputs.sha }}
           bot: ${{ steps.pr.outputs.author }}
 
       - name: Approve
@@ -139,6 +140,8 @@ jobs:
         with:
           pull_request: ${{ steps.pr.outputs.url }}
           github_token: ${{ steps.token.outputs.token }}
+          # Strict mode approves the classified commit, so a later push needs its own approval.
+          head_sha: ${{ inputs.strict && steps.pr.outputs.sha || '' }}
 
       # Put the approved PR in the merge queue so it merges hands-off. The queue re-validates the
       # required checks on the group and owns the merge method; `--squash` is the org's only allowed
@@ -152,4 +155,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ steps.pr.outputs.url }}
-        run: gh pr merge "$PR" --auto --squash
+          SHA: ${{ inputs.strict && steps.pr.outputs.sha || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SHA" ]; then
+            gh pr merge "$PR" --auto --squash
+          else
+            gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
+          fi

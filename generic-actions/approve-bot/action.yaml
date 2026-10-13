@@ -8,15 +8,29 @@ inputs:
   github_token:
     required: true
     description: The GitHub token to use for the action.
+  head_sha:
+    required: false
+    default: ""
+    description: >
+      Commit the approval applies to. Empty approves the current head; a commit keeps a push made
+      after the caller checked the pull request from inheriting the approval.
 
 runs:
   using: "composite"
   steps:
     - name: approve PR
       shell: bash
-      run: gh pr review --approve "$PR_URL"
+      run: |
+        set -euo pipefail
+        if [ -z "$HEAD_SHA" ]; then
+          gh pr review --approve "$PR_URL"
+        else
+          gh api "repos/$GH_REPO/pulls/${PR_URL##*/}/reviews" --method POST \
+            -f event=APPROVE -f commit_id="$HEAD_SHA" >/dev/null
+        fi
       env:
         PR_URL: ${{ inputs.pull_request }}
+        HEAD_SHA: ${{ inputs.head_sha }}
         GH_TOKEN: ${{ inputs.github_token }}
         # Without a checkout, gh resolves a bare PR number only through GH_REPO.
         GH_REPO: ${{ github.repository }}

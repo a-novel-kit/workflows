@@ -2,10 +2,11 @@ name: classify bot change
 description: >
   Decide whether a dependency bot's pull request may merge without a person, for a repository whose
   merges reach production. "pin" means it changes nothing but release pins (ghcr.io/a-novel images
-  in terraform.tfvars); "renovate" means Renovate itself put it on auto-merge and every changed line
-  only moves a version, or a digest together with its version, apart from checksum files; "review"
-  means a person approves it. A digest that moves without its version is a moved tag and always
-  needs review.
+  in terraform.tfvars); "renovate" means Renovate first put it on auto-merge, auto-merge is still on,
+  and every changed line only moves a dependency reference's version, or a digest together with its
+  version, apart from checksum files; "review" means a person approves it. A digest that moves
+  without its version is a moved tag, and a head that moved since the caller read it was never
+  classified: both always need review.
 
 inputs:
   github_token:
@@ -14,6 +15,11 @@ inputs:
   pull_request:
     required: true
     description: URL of the pull request to classify.
+  head_sha:
+    required: true
+    description: >
+      Head commit the caller approves. A pull request whose head moved since classifies "review", so
+      the approval cannot land on a commit nobody classified.
   bot:
     required: true
     description: Login of the dependency bot, whose own auto-merge marks an update Renovate chose to merge.
@@ -36,6 +42,7 @@ runs:
         GH_TOKEN: ${{ inputs.github_token }}
         REPOSITORY: ${{ github.repository }}
         PULL_REQUEST: ${{ inputs.pull_request }}
+        HEAD_SHA: ${{ inputs.head_sha }}
         BOT: ${{ inputs.bot }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
