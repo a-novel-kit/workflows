@@ -228,7 +228,13 @@ test("the gate holds a frozen wave whose member closed without merging", (t) => 
       "gh",
       `import * as fs from 'node:fs'; const input = fs.readFileSync(0, 'utf8'); fs.writeFileSync('check.json', input);`
     );
-    const ready = members.map((m, i) => ({ ...m, state: states[i], isDraft: false, reviewDecision: "APPROVED" }));
+    const ready = members.map((m, i) => ({
+      ...m,
+      state: states[i],
+      isDraft: false,
+      reviewDecision: "APPROVED",
+      reviewGate: "SUCCESS",
+    }));
     succeeds(
       w.bash(evaluate, {
         REPO_FULL: ready[0].repo,
@@ -242,6 +248,37 @@ test("the gate holds a frozen wave whose member closed without merging", (t) => 
     assert.equal(check.conclusion, conclusion, states.join("+"));
     if (conclusion === "failure")
       assert.match(check.output.summary, /1 of 2 member\(s\) not ready[^]*closed without merging/);
+  }
+});
+
+test("the gate holds an Epic whose member has not passed review-gate", (t) => {
+  const evaluate = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
+  for (const [reviewGate, conclusion] of [
+    ["SUCCESS", "success"],
+    ["FAILURE", "failure"],
+    [null, "failure"],
+  ]) {
+    const w = workspace(t);
+    w.stub("gh", `import * as fs from 'node:fs'; fs.writeFileSync('check.json', fs.readFileSync(0, 'utf8'));`);
+    const open = members.map((m, i) => ({
+      ...m,
+      state: "OPEN",
+      isDraft: false,
+      reviewDecision: "APPROVED",
+      reviewGate: i ? reviewGate : "SUCCESS",
+    }));
+    succeeds(
+      w.bash(evaluate, {
+        REPO_FULL: open[0].repo,
+        HEAD_SHA: "head",
+        EPIC: "900",
+        PR_NUMBER: String(open[0].number),
+        MEMBERS: JSON.stringify(open),
+      })
+    );
+    const check = JSON.parse(w.read("check.json"));
+    assert.equal(check.conclusion, conclusion, String(reviewGate));
+    if (conclusion === "failure") assert.match(check.output.summary, new RegExp(`review-gate=${reviewGate ?? "none"}`));
   }
 });
 
