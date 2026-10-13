@@ -57,10 +57,10 @@ outputs:
       Compact JSON array of the authorized members, one object per member:
       {repo (nameWithOwner), number, headRefOid, isDraft, reviewDecision, reviewGate, state}, where
       reviewGate is the conclusion of the latest `review-gate` check the [Agent] App posted on the
-      member's head, or null. Before activation
-      the set is the live open `epic:<N>` PRs (state always `OPEN`); once the Epic carries an
-      activation snapshot it is the frozen set, each member's `state` re-read live
-      (`OPEN` / `MERGED` / `CLOSED`). `[]` when the Epic has no members.
+      member's head, or null. Before activation the set is the live open `epic:<N>` PRs (state
+      always `OPEN`); once the Epic carries an activation snapshot it is the frozen set, each
+      member's `state` re-read live (`OPEN` / `MERGED` / `CLOSED`). `[]` when the Epic has no
+      members.
     value: ${{ steps.resolve.outputs.members }}
   count:
     description: Integer count of members (length of the array).
@@ -71,8 +71,8 @@ runs:
   steps:
     # Mint an org-wide [Agent] token: the search spans every repo in the org, and the
     # default GITHUB_TOKEN is single-repo, so it cannot see sibling PRs. Setting `owner`
-    # with no `repositories` installs it org-wide; the two read scopes are all the search
-    # needs, and this action never writes.
+    # with no `repositories` installs it org-wide. The search needs issues and pull-requests
+    # read, the members' `review-gate` conclusions need checks read, and this action never writes.
     - name: Mint token
       id: token
       uses: actions/create-github-app-token@v3
@@ -80,6 +80,7 @@ runs:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
+        permission-checks: read
         permission-issues: read
         permission-pull-requests: read
 

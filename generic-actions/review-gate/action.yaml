@@ -4,9 +4,9 @@ description: >
   holding the maintain or admin role on the repository approved its current head, or the App did
   through `approve-pr`, and once every privileged label on it was last applied by such a person or by
   the App. Anyone with write access can approve and label, so these two rules are what tie merging to
-  the maintainer tier. A pull request whose author and every commit are bots passes, as does a
-  merge-queue group, whose pull requests each passed at enqueue. A failed read posts `failure`:
-  re-running the job evaluates again.
+  the maintainer tier. A bot's pull request passes when GitHub signed every commit on it for a bot,
+  as does a merge-queue group, whose pull requests each passed at enqueue. A failed read posts
+  `failure`: re-running the job evaluates again.
 
 inputs:
   client_id:
@@ -24,6 +24,16 @@ inputs:
     description: >
       Labels, separated by newlines or commas, that count only when a maintainer, an admin or the
       App applied them last: those that waive a check or spend resources.
+  pull_request_number:
+    required: false
+    default: ${{ github.event.pull_request.number }}
+    description: >
+      Number of the pull request to gate. Defaults to the triggering one; a `workflow_run` caller,
+      such as the Dependabot job, passes it because its event carries no pull request.
+  head_sha:
+    required: false
+    default: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+    description: Head SHA to post the check on. Defaults to the pull request's or the merge group's head.
 
 runs:
   using: composite
@@ -47,9 +57,9 @@ runs:
         AGENT: ${{ steps.token.outputs.app-slug }}
         PRIVILEGED: ${{ inputs.privileged_labels }}
         EVENT: ${{ github.event_name }}
-        PR: ${{ github.event.pull_request.number }}
+        PR: ${{ inputs.pull_request_number }}
         AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        HEAD_SHA: ${{ inputs.head_sha }}
       run: |
         set -euo pipefail
 
@@ -72,17 +82,22 @@ runs:
           exit 0
         fi
 
-        # A person's commit on a bot's branch is reviewed like any other change.
+        if [ -z "$AUTHOR_TYPE" ]; then
+          AUTHOR_TYPE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.type)" || hold "the pull request"
+        fi
+        # Anyone pushing can claim a bot's email, so a commit counts as a bot's only when GitHub signed
+        # it as web-flow, which it does only for commits it writes for the bot itself.
         if [ "$AUTHOR_TYPE" = Bot ]; then
-          authors="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" --paginate --jq '.[].author.type // "none"')" ||
+          unsigned="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" |
+            jq '[add[] | select(.author.type != "Bot" or .committer.login != "web-flow" or (.commit.verification.verified | not))] | length')" ||
             hold "the commits"
-          if ! grep -qvx Bot <<<"$authors"; then
-            post_check success "A bot wrote this pull request and every commit on it."
+          if [ "$unsigned" = 0 ]; then
+            post_check success "A bot wrote this pull request, and GitHub signed every commit on it for a bot."
             exit 0
           fi
         fi
 
-        # A failed role lookup leaves the role empty, which trusts nobody.
+        # A 404 means the account holds no role here; any other failed lookup holds.
         declare -A roles=()
         trusted() { # $1=login  $2=account type
           if [ "$2" = Bot ]; then
@@ -90,8 +105,14 @@ runs:
             return
           fi
           if [ -z "${roles[$1]+set}" ]; then
-            roles[$1]="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq .role_name 2>/dev/null)" ||
+            local out
+            if out="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq .role_name 2>&1)"; then
+              roles[$1]="$out"
+            elif [[ $out == *"HTTP 404"* ]]; then
               roles[$1]=""
+            else
+              hold "@$1's role"
+            fi
           fi
           [ "${roles[$1]}" = admin ] || [ "${roles[$1]}" = maintain ]
         }

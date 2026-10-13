@@ -395,12 +395,12 @@ runs:
 
         # A member is merge-ready when it is non-draft and approved, and, with review_gate on, its
         # `review-gate` check passed. Merged siblings have already left the open set, since
-        # epic-membership returns open PRs only, so an
-        # all-ready open set means the whole Epic is ready to land together. The same
-        # recompute runs on a merge_group event against the group head: a member that
-        # regressed since enqueue, back to draft or with its approval dismissed, makes the
-        # set no longer all-ready and the `failure` below dequeues the group. A shrinking
-        # set — a member closed unmerged — belongs to the partial-landing detector.
+        # epic-membership returns open PRs only, so an all-ready open set means the whole Epic
+        # is ready to land together. The same recompute runs on a merge_group event against the
+        # group head: a member that regressed since enqueue, back to draft or with its approval
+        # dismissed, makes the set no longer all-ready and the `failure` below dequeues the
+        # group. A shrinking set — a member closed unmerged — belongs to the partial-landing
+        # detector.
         # A PR carrying epic:<N> that is absent from the resolved set, labeled after the
         # snapshot froze or missed at capture, is held: it belongs to a later wave, and the
         # wave's verdict says nothing about its own readiness. Pre-snapshot the live set is
@@ -430,7 +430,7 @@ runs:
           | if .state == "CLOSED" then "  - \(.repo)#\(.number) (closed without merging: the wave cannot land whole)"
             elif (.state == "OPEN" or .state == null) and (.isDraft or (.reviewDecision != "APPROVED")
                 or ($gate == "true" and .reviewGate != "SUCCESS"))
-              then "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"), review-gate=\(.reviewGate // "none"))"
+              then "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none")\(if $gate == "true" then ", review-gate=\(.reviewGate // "none")" else "" end))"
             else empty end')
 
         total=$(printf '%s' "$MEMBERS" | jq '[.[] | select(.state != "MERGED")] | length')

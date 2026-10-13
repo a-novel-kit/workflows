@@ -5,10 +5,22 @@ import { step, succeeds, workspace } from "./helpers.mjs";
 const gate = step("generic-actions/review-gate/action.yaml", "Evaluate and post review-gate");
 const roles = { lead: "maintain", owner: "admin", dev: "write" };
 
-/** Runs the gate against a stubbed GitHub; returns the posted check and the paths it read. */
+/**
+ * Runs the gate against a stubbed GitHub; returns the posted check and the paths it read. An empty
+ * `author` stands for a caller with no pull request payload, which reads the author as `owner`.
+ */
 function evaluate(
   t,
-  { event = "pull_request", author = "User", commits = [], reviews = [], labels = [], applied = [], fail = "" } = {}
+  {
+    event = "pull_request",
+    author = "User",
+    owner = author,
+    commits = [],
+    reviews = [],
+    labels = [],
+    applied = [],
+    fail = "",
+  } = {}
 ) {
   const w = workspace(t);
   w.write("summary", "");
@@ -24,8 +36,13 @@ function evaluate(
     const tsv = (rows) => rows.map((row) => row.join("\\t")).join("\\n");
     const data = JSON.parse(process.env.DATA);
     const role = path.match(/collaborators\\/([^/]+)\\/permission$/);
-    if (role) { if (!(role[1] in data.roles)) process.exit(1); console.log(data.roles[role[1]]); }
-    else if (path.endsWith("/commits")) console.log(data.commits.join("\\n"));
+    if (role) {
+      if (role[1] === "flaky") { console.error("gh: Bad Gateway (HTTP 502)"); process.exit(1); }
+      if (!(role[1] in data.roles)) { console.error("gh: Not Found (HTTP 404)"); process.exit(1); }
+      console.log(data.roles[role[1]]);
+    }
+    else if (path.endsWith("/pulls/7")) console.log(data.owner);
+    else if (path.endsWith("/commits")) console.log(JSON.stringify([data.commits]));
     else if (path.endsWith("/reviews")) console.log(tsv(data.reviews));
     else if (path.endsWith("/labels")) console.log(data.labels.join("\\n"));
     else if (path.endsWith("/events")) console.log(tsv(data.applied));`
@@ -39,7 +56,7 @@ function evaluate(
     AUTHOR_TYPE: author,
     HEAD_SHA: "head",
     FAIL: fail,
-    DATA: JSON.stringify({ roles, commits, reviews, labels, applied }),
+    DATA: JSON.stringify({ roles, owner, commits, reviews, labels, applied }),
   });
   succeeds(result);
   const check = JSON.parse(w.read("check.json"));
@@ -47,6 +64,11 @@ function evaluate(
 }
 
 const approve = (login, commit = "head", type = "User") => [login, type, "APPROVED", commit];
+const signed = ({ type = "Bot", committer = "web-flow", verified = true } = {}) => ({
+  author: { type },
+  committer: { login: committer },
+  commit: { verification: { verified } },
+});
 
 test("review-gate counts only a current approval from a maintainer, an admin or the Agent App", (t) => {
   for (const [reviews, conclusion] of [
@@ -99,23 +121,38 @@ test("a privileged label counts only when a maintainer, an admin or the Agent Ap
   }
 });
 
-test("bots' pull requests and merge groups pass without a review", (t) => {
-  const bot = evaluate(t, { author: "Bot", commits: ["Bot", "Bot"] });
+test("a bot's pull request passes only when GitHub signed every commit for a bot", (t) => {
+  const bot = evaluate(t, { author: "Bot", commits: [signed(), signed()] });
   assert.equal(bot.conclusion, "success");
   assert.doesNotMatch(bot.reads, /\/reviews/);
-  assert.equal(evaluate(t, { author: "Bot", commits: ["Bot", "User"] }).conclusion, "failure");
+  // Dependabot's job runs on workflow_run, whose event carries no pull request.
+  assert.equal(evaluate(t, { author: "", owner: "Bot", commits: [signed()] }).conclusion, "success");
+  for (const commit of [signed({ type: "User" }), signed({ committer: "kushuh" }), signed({ verified: false })]) {
+    const check = evaluate(t, { author: "Bot", commits: [signed(), commit] });
+    assert.equal(check.conclusion, "failure", JSON.stringify(commit));
+    assert.match(check.reads, /\/reviews/);
+  }
+});
+
+test("merge groups pass without a review", (t) => {
   const queued = evaluate(t, { event: "merge_group" });
   assert.equal(queued.conclusion, "success");
   assert.doesNotMatch(queued.reads, /\/reviews/);
 });
 
-test("an unread list holds the pull request", (t) => {
-  for (const fail of ["/reviews", "/labels", "/events"]) {
-    const check = evaluate(t, { reviews: [approve("lead")], fail });
-    assert.equal(check.conclusion, "failure", fail);
-    assert.match(check.summary, /Couldn't read/);
+test("an unread list or role holds the pull request", (t) => {
+  for (const [options, unread] of [
+    [{ reviews: [approve("lead")], fail: "/reviews" }, "the reviews"],
+    [{ reviews: [approve("lead")], fail: "/labels" }, "the labels"],
+    [{ reviews: [approve("lead")], fail: "/events" }, "the label history"],
+    [{ author: "Bot", fail: "/commits" }, "the commits"],
+    [{ author: "", fail: "/pulls/7" }, "the pull request"],
+    [{ reviews: [approve("flaky")] }, "@flaky's role"],
+  ]) {
+    const check = evaluate(t, options);
+    assert.equal(check.conclusion, "failure", unread);
+    assert.match(check.summary, new RegExp(`Couldn't read ${unread}\\.`));
   }
-  assert.equal(evaluate(t, { author: "Bot", fail: "/commits" }).conclusion, "failure");
 });
 
 test("epic-membership reads each member's review-gate from the Agent App only", (t) => {
@@ -158,20 +195,21 @@ test("epic-membership reads each member's review-gate from the Agent App only", 
 
 test("merge-gate holds an Epic member that fails review-gate only once review_gate is on", (t) => {
   const evaluateEpic = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
-  const member = (number, reviewGate) => ({
+  const member = (number, reviewGate, isDraft = false) => ({
     repo: "a-novel-kit/x",
     number,
     headRefOid: "h",
-    isDraft: false,
+    isDraft,
     reviewDecision: "APPROVED",
     reviewGate,
     state: "OPEN",
   });
-  for (const [gateOn, second, conclusion] of [
-    ["false", null, "success"],
-    ["true", "SUCCESS", "success"],
-    ["true", "FAILURE", "failure"],
-    ["true", null, "failure"],
+  for (const [gateOn, second, conclusion, summary] of [
+    ["false", member(2, null), "success"],
+    ["true", member(2, "SUCCESS"), "success"],
+    ["true", member(2, "FAILURE"), "failure", /x#2 .*review-gate=FAILURE/],
+    ["true", member(2, null), "failure", /x#2 .*review-gate=none/],
+    ["false", member(2, null, true), "failure", /x#2 \(draft=true, review=APPROVED\)$/m],
   ]) {
     const w = workspace(t);
     w.stub("gh", `import * as fs from 'node:fs'; fs.writeFileSync('check.json', fs.readFileSync(0, 'utf8'));`);
@@ -182,11 +220,11 @@ test("merge-gate holds an Epic member that fails review-gate only once review_ga
         EPIC: "900",
         PR_NUMBER: "1",
         REVIEW_GATE: gateOn,
-        MEMBERS: JSON.stringify([member(1, "SUCCESS"), member(2, second)]),
+        MEMBERS: JSON.stringify([member(1, "SUCCESS"), second]),
       })
     );
     const check = JSON.parse(w.read("check.json"));
-    assert.equal(check.conclusion, conclusion, `${gateOn} ${second}`);
-    if (conclusion === "failure") assert.match(check.output.summary, /a-novel-kit\/x#2 .*review-gate=/);
+    assert.equal(check.conclusion, conclusion, `${gateOn} ${JSON.stringify(second)}`);
+    if (summary) assert.match(check.output.summary, summary);
   }
 });
