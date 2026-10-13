@@ -176,7 +176,7 @@ jobs:
           # the fix's own subject. A conflict leaves nothing behind and appends the commands to write
           # the line's form of the fix by hand to $INSTRUCTIONS, the escalation ticket's body.
           backport_fix() {
-            local sha="$1" line="$2" base="release/v$2" subject branch
+            local sha="$1" line="$2" base="release/v$2" subject branch signed
             # The title reuses the fix's subject, which reached the default branch Conventional.
             subject=$(git log -1 --format=%s "$sha")
             # `git cherry` prints `-` for a commit whose patch is already on the line.
@@ -200,7 +200,7 @@ jobs:
           \`${sha:0:12}\` (${subject}) does not apply to \`$base\`. Write the release line's form of the fix by hand:
 
               git switch --create $branch origin/$base
-              git cherry-pick -x $sha   # resolve the conflicts against the released code
+              git cherry-pick -S -x $sha   # the line requires signed commits; resolve against the released code
               git push --set-upstream origin $branch
               gh pr create --base $base --title $(printf '%q' "$subject [v$line]")
 
@@ -212,6 +212,13 @@ jobs:
               return 0
             fi
             git push --quiet origin "HEAD:refs/heads/$branch"
+            # The release line requires signed commits, and GitHub signs only the commits the App makes
+            # through its API. The push put the cherry-pick's tree on GitHub, so the App recreates the
+            # commit from it and moves the backport branch, which no ruleset requires signed, onto it.
+            signed=$(gh api "repos/$GITHUB_REPOSITORY/git/commits" -f message="$(git log -1 --format=%B)" \
+              -f tree="$(git rev-parse 'HEAD^{tree}')" -f "parents[]=$(git rev-parse HEAD^)" --jq .sha) || return 1
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" -f sha="$signed" -F force=true \
+              --silent || return 1
             gh pr create --base "$base" --head "$branch" --title "$subject [v$line]" \
               --body "Backports ${sha} from \`$DEFAULT_BRANCH\` to \`$base\`. Merging it cuts the next v${line} patch." \
               >> "$GITHUB_STEP_SUMMARY"

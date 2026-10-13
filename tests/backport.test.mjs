@@ -28,7 +28,22 @@ function repository(t) {
   git("init", "-q", "--bare", "remote.git");
   git("remote", "add", "origin", "remote.git");
   git("push", "-q", "origin", "master", "v1.4.0");
-  w.stub("gh", "require('node:fs').appendFileSync('pulls', JSON.stringify(process.argv.slice(2)) + '\\n')");
+  // Records every call. The API's commits and ref moves act on the bare origin, committed by GitHub,
+  // which is the committer of every commit it creates and signs.
+  w.stub(
+    "gh",
+    `
+    const args = process.argv.slice(2), field = (name) => args.find((arg) => arg.startsWith(name + '='))?.slice(name.length + 1);
+    require('node:fs').appendFileSync('pulls', JSON.stringify(args) + '\\n');
+    const origin = (...command) => require('node:child_process').execFileSync('git', ['--git-dir=remote.git', ...command], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'agent[bot]', GIT_AUTHOR_EMAIL: 'agent[bot]@users.noreply.github.com',
+        GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: 'noreply@github.com' },
+    }).trim();
+    if (args[1]?.endsWith('/git/commits')) console.log(origin('commit-tree', field('tree'), '-p', field('parents[]'), '-m', field('message')));
+    else if (args[2] === 'PATCH') origin('update-ref', 'refs/heads/' + args[3].split('/git/refs/heads/')[1], field('sha'));
+  `
+  );
   const sh = (script, env = {}) =>
     w.bash(`set -euo pipefail\n${backport}\n${pending}\n${script}`, {
       DEFAULT_BRANCH: "master",
@@ -43,11 +58,13 @@ function repository(t) {
       DRY_RUN: "false",
       APP_SLUG: "agent",
       RUNNER_TEMP: w.cwd,
+      GITHUB_REPOSITORY: "a-novel-kit/example",
       ...env,
     });
   const remote = (ref) => w.run("git", ["--git-dir=remote.git", "rev-parse", "--verify", "--quiet", ref]).stdout.trim();
-  const pulls = () => (existsSync(join(w.cwd, "pulls")) ? w.read("pulls").trim().split("\n").map(JSON.parse) : []);
-  return { w, git, commit, sh, backports, remote, pulls };
+  const calls = () => (existsSync(join(w.cwd, "pulls")) ? w.read("pulls").trim().split("\n").map(JSON.parse) : []);
+  const pulls = () => calls().filter((args) => args[0] === "pr");
+  return { w, git, commit, sh, backports, remote, calls, pulls };
 }
 
 test("the backport baseline is the line's highest stable tag, and a malformed line is data", (t) => {
@@ -77,7 +94,7 @@ test("a release line is created from its baseline once, and a line missing that 
 });
 
 test("a clean backport opens one pull request carrying the fix alone, never the default branch's unreleased work", (t) => {
-  const { git, commit, backports, remote, pulls } = repository(t);
+  const { git, commit, backports, remote, calls, pulls } = repository(t);
   commit("dashboard.js", "render();\n", "feat: unreleased dashboard");
   const fix = commit("limits.js", "const max = 5;\n", "fix: lower the request limit");
   git("push", "-q", "origin", "master");
@@ -86,10 +103,13 @@ test("a clean backport opens one pull request carrying the fix alone, never the 
   succeeds(backports(fix, { DRY_RUN: "true" }));
   assert.equal(remote("refs/heads/release/v1.4"), "");
   assert.equal(remote(`refs/heads/${branch}`), "");
-  assert.deepEqual(pulls(), []);
+  assert.deepEqual(calls(), []);
 
   succeeds(backports(fix));
   const picked = remote(`refs/heads/${branch}`);
+  git("fetch", "-q", "origin", branch);
+  // The release line requires signed commits, so the branch carries the API's copy of the cherry-pick.
+  assert.equal(git("log", "-1", "--format=%cn", picked), "GitHub");
   assert.equal(git("rev-parse", `${picked}^`), git("rev-parse", "v1.4.0"));
   assert.equal(git("show", `${picked}:limits.js`), "const max = 5;");
   assert.equal(git("ls-tree", "--name-only", picked), "auth.js\nlimits.js");
@@ -121,7 +141,7 @@ test("a fix written against unreleased work opens nothing and hands over the rel
   assert.equal(result.status, 1);
   assert.match(result.stderr, /does not apply to release\/v1\.4; conflicting paths: auth\.js/);
   const instructions = w.read("output").match(/^instructions<<(EOF_\w+)\n([^]*)\n\1$/m)?.[2] ?? "";
-  assert.match(instructions, new RegExp(`git cherry-pick -x ${fix}`));
+  assert.match(instructions, new RegExp(`git cherry-pick -S -x ${fix}`));
   assert.match(instructions, /--title fix:\\ refuse\\ banned\\ owners\\ \\\[v1\.4\\\]$/m);
   assert.equal(remote(`refs/heads/backport/v1.4-${fix.slice(0, 12)}`), "");
   assert.equal(remote("refs/heads/release/v1.4"), git("rev-parse", "v1.4.0"));
