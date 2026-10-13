@@ -10,12 +10,13 @@ description: >
   permission-gated assertion of membership, whereas a `Closes` keyword is author-controlled
   and cannot be trusted to define the set. For a labeled PR this action resolves the
   Epic's authorized open sibling PRs (via the epic-membership action) and passes only when
-  EVERY member is merge-ready (non-draft + approved), so a set of concurrent cross-repo PRs
-  lands together instead of partially. The `Closes` walk survives only as a discovery HINT:
-  for an unlabeled PR whose closing issue has a parent Epic, the action suggests adding the
-  `epic:<N>` label but still treats the PR as standalone. A PR with no `epic:<N>` label is
-  standalone and always passes (the fast path — classified from the event payload alone, so
-  the flood of ordinary PRs never depends on an API call and can't be frozen by a blip).
+  EVERY member is merge-ready (non-draft, approved and passing `review-gate`), so a set of
+  concurrent cross-repo PRs lands together instead of partially. The `Closes` walk survives
+  only as a discovery HINT: for an unlabeled PR whose closing issue has a parent Epic, the
+  action suggests adding the `epic:<N>` label but still treats the PR as standalone. A PR
+  with no `epic:<N>` label is standalone and always passes (the fast path — classified from
+  the event payload alone, so the flood of ordinary PRs never depends on an API call and
+  can't be frozen by a blip).
 
   Holds are posted as `conclusion: failure`, NEVER `neutral`. GitHub counts `neutral`
   (alongside `success` and `skipped`) as a PASSING required check, so a neutral "hold" would
@@ -383,13 +384,14 @@ runs:
           exit 0
         fi
 
-        # A member is merge-ready when it is non-draft and approved. Merged siblings have
-        # already left the open set, since epic-membership returns open PRs only, so an
-        # all-ready open set means the whole Epic is ready to land together. The same
-        # recompute runs on a merge_group event against the group head: a member that
-        # regressed since enqueue, back to draft or with its approval dismissed, makes the
-        # set no longer all-ready and the `failure` below dequeues the group. A shrinking
-        # set — a member closed unmerged — belongs to the partial-landing detector.
+        # A member is merge-ready when it is non-draft, approved, and its `review-gate` check, as the
+        # [Agent] App posted it, passed. Merged siblings have already left the open set, since
+        # epic-membership returns open PRs only, so an all-ready open set means the whole Epic
+        # is ready to land together. The same recompute runs on a merge_group event against the
+        # group head: a member that regressed since enqueue, back to draft or with its approval
+        # dismissed, makes the set no longer all-ready and the `failure` below dequeues the
+        # group. A shrinking set — a member closed unmerged — belongs to the partial-landing
+        # detector.
         # A PR carrying epic:<N> that is absent from the resolved set, labeled after the
         # snapshot froze or missed at capture, is held: it belongs to a later wave, and the
         # wave's verdict says nothing about its own readiness. Pre-snapshot the live set is
@@ -417,8 +419,9 @@ runs:
         # all-open live behavior.
         unready=$(printf '%s' "$MEMBERS" | jq -r '.[]
           | if .state == "CLOSED" then "  - \(.repo)#\(.number) (closed without merging: the wave cannot land whole)"
-            elif (.state == "OPEN" or .state == null) and (.isDraft or (.reviewDecision != "APPROVED"))
-              then "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"
+            elif (.state == "OPEN" or .state == null)
+                and (.isDraft or .reviewDecision != "APPROVED" or .reviewGate != "SUCCESS")
+              then "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"), review-gate=\(.reviewGate // "none"))"
             else empty end')
 
         total=$(printf '%s' "$MEMBERS" | jq '[.[] | select(.state != "MERGED")] | length')
