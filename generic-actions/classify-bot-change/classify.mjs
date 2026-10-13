@@ -10,45 +10,85 @@ const releasePin = /"ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}"/;
 // Checksums the toolchain verifies on its own, so their churn cannot change what runs.
 const integrity = /(^|\/)([^/]+\.sum|\.terraform\.lock\.hcl)$/;
 const modfile = /(^|\/)[^/]+\.mod$/;
-const requireEntry = /^\s*(require\s+)?[^\s()]+\s+v\S+(\s*\/\/\s*indirect)?\s*$/;
-const digest = /\b(?:sha256:)?[0-9a-f]{40,64}\b/g;
-const version = /\bv?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?\b/g;
+const indirectRequirement = /^\s*(require\s+)?[^\s()]+\s+v\S+\s*\/\/\s*indirect\s*$/;
+const renovateAnnotation = /#\s*renovate:\s*datasource=/;
+const actionPin = /uses:\s*([\w.-]+\/[\w.-]+)(?:\/[^@\s]*)?@([0-9a-f]{40})\s*#\s*(v?\d[\w.+-]*)\s*$/;
 
-/** The removed and added lines of each hunk of a unified diff. */
+const semver = String.raw`v?\d+(?:\.\d+)+(?:[-+][\w.-]+)?`;
+const digests = [/@sha256:[0-9a-f]{64}/g, /@[0-9a-f]{40}\b/g];
+// Where a dependency reference puts its version. Anywhere else a dotted number, such as an IP
+// address or a CIDR base, stays literal.
+const versions = [
+  new RegExp(String.raw`(?<=@)v?\d+(?:\.\d+)*(?:[-+][\w.-]+)?\b`, "g"),
+  new RegExp(String.raw`(?<=\/[\w.-]+:)${semver}(?=[@"\s]|$)`, "g"),
+  new RegExp(String.raw`(?<=#\s*)${semver}(?=["\s]|$)`, "g"),
+];
+const moduleVersions = [
+  /(?<=\s)v\d+\.\d+\.\d+[\w.+-]*/g,
+  /(?<=^go )\d+\.\d+(?:\.\d+)?$/g,
+  /(?<=^toolchain go)\d[\w.]*/g,
+];
+const annotatedVersion = new RegExp(semver, "g");
+
+/** The removed and added lines of each hunk, each with the context line it follows. */
 function hunks(patch) {
   const out = [];
+  let context = "";
   for (const line of patch.split("\n")) {
-    if (line.startsWith("@@")) out.push({ removed: [], added: [] });
-    else if (out.length && line.startsWith("-")) out.at(-1).removed.push(line.slice(1));
-    else if (out.length && line.startsWith("+")) out.at(-1).added.push(line.slice(1));
+    if (line.startsWith("@@")) {
+      out.push({ removed: [], added: [] });
+      context = "";
+    } else if (!out.length) continue;
+    else if (line.startsWith("-")) out.at(-1).removed.push({ text: line.slice(1), context });
+    else if (line.startsWith("+")) out.at(-1).added.push({ text: line.slice(1), context });
+    else context = line.slice(1);
   }
   return out;
 }
 
-const mask = (line) => line.replace(digest, "<digest>").replace(version, "<version>");
-const tokens = (line, pattern) => (line.match(pattern) ?? []).join(" ");
+/** The line with its versions and digests replaced by placeholders, and the values replaced. */
+function masked(text, patterns) {
+  const found = { versions: [], digests: [] };
+  let line = text;
+  for (const pattern of digests) line = line.replace(pattern, (value) => (found.digests.push(value), "@<digest>"));
+  for (const pattern of patterns) line = line.replace(pattern, (value) => (found.versions.push(value), "<version>"));
+  return { line, ...found };
+}
+
+/** The version patterns that apply to a changed line of the given file. */
+function patternsFor(filename, { context }) {
+  if (modfile.test(filename)) return [...versions, ...moduleVersions];
+  // Renovate's custom managers write a version on the line after their annotation.
+  if (renovateAnnotation.test(context)) return [...versions, annotatedVersion];
+  return versions;
+}
 
 /**
  * A line change is version-only when nothing but versions and digests differ, and no digest moves
  * without its version: the same version on another commit means its tag was moved.
  */
-function versionOnly(before, after) {
-  if (mask(before) !== mask(after)) return false;
-  return tokens(before, digest) === tokens(after, digest) || tokens(before, version) !== tokens(after, version);
+function versionOnly(filename, before, after) {
+  const was = masked(before.text, patternsFor(filename, before));
+  const now = masked(after.text, patternsFor(filename, after));
+  if (was.line !== now.line) return false;
+  return was.digests.join() === now.digests.join() || was.versions.join() !== now.versions.join();
 }
 
 /** Every hunk pairs its removed and added lines one to one, each pair version-only. */
-const pairsUp = ({ removed, added }) =>
-  removed.length === added.length && removed.every((line, index) => versionOnly(line, added[index]));
+const pairsUp = (filename, { removed, added }) =>
+  removed.length === added.length && removed.every((line, index) => versionOnly(filename, line, added[index]));
 
 const review = (reason) => ({ decision: "review", reason });
 
 /**
  * Classify a pull request's changed files: "pin" for a release pin, "renovate" for a version
- * update Renovate put on auto-merge, "review" for anything a person must approve.
+ * update Renovate put on auto-merge, "review" for anything a person must approve. changedFiles is
+ * the pull request's own count, since the files listing stops at 3000. resolveTag(repository, tag)
+ * returns the commit a tag names, so a moved action pin must be the commit of its new version.
  */
-export function classify({ files, bot, autoMergeEnabledBy }) {
+export async function classify({ files, changedFiles, bot, autoMergeEnabledBy, resolveTag }) {
   if (files.length === 0) return review("it changes no file");
+  if (files.length !== changedFiles) return review(`GitHub listed ${files.length} of its ${changedFiles} files`);
 
   const pinOnly = files.every(
     (file) =>
@@ -56,7 +96,8 @@ export function classify({ files, bot, autoMergeEnabledBy }) {
       file.status === "modified" &&
       file.patch !== undefined &&
       hunks(file.patch).every(
-        (hunk) => [...hunk.removed, ...hunk.added].every((line) => releasePin.test(line)) && pairsUp(hunk)
+        (hunk) =>
+          [...hunk.removed, ...hunk.added].every(({ text }) => releasePin.test(text)) && pairsUp(file.filename, hunk)
       )
   );
   if (pinOnly) return { decision: "pin", reason: "it changes nothing but release pins" };
@@ -64,16 +105,26 @@ export function classify({ files, bot, autoMergeEnabledBy }) {
   const login = (name) => (name ?? "").replace(/\[bot\]$/, "");
   if (login(autoMergeEnabledBy) !== login(bot)) return review("Renovate did not put it on auto-merge");
 
+  const movedPins = [];
   for (const file of files) {
-    if (integrity.test(file.filename)) continue;
+    if (integrity.test(file.filename) && file.status === "modified") continue;
     if (file.status !== "modified" || file.patch === undefined) return review(`${file.filename} is ${file.status}`);
     for (const hunk of hunks(file.patch)) {
       // A module update adds and drops indirect requirements, which build nothing until imported.
-      const keep = (line) => !modfile.test(file.filename) || !requireEntry.test(line);
-      if (!pairsUp({ removed: hunk.removed.filter(keep), added: hunk.added.filter(keep) })) {
-        return review(`${file.filename} changes more than versions`);
-      }
+      const keep = ({ text }) => !modfile.test(file.filename) || !indirectRequirement.test(text);
+      const removed = hunk.removed.filter(keep);
+      const added = hunk.added.filter(keep);
+      if (!pairsUp(file.filename, { removed, added })) return review(`${file.filename} changes more than versions`);
+      added.forEach(({ text }, index) => {
+        const pin = text.match(actionPin);
+        if (pin && pin[2] !== removed[index].text.match(actionPin)?.[2]) movedPins.push(pin);
+      });
     }
+  }
+
+  // GitHub resolves a commit that exists only in a fork through its parent's name.
+  for (const [, repository, commit, tag] of movedPins) {
+    if ((await resolveTag(repository, tag)) !== commit) return review(`${repository}@${tag} does not name ${commit}`);
   }
   return { decision: "renovate", reason: "Renovate put it on auto-merge and it changes nothing but versions" };
 }
@@ -82,12 +133,14 @@ function gh(...args) {
   return execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
-function main() {
+async function main() {
   const { REPOSITORY, PULL_REQUEST, BOT, GITHUB_OUTPUT } = process.env;
   const [owner, name] = REPOSITORY.split("/");
   const number = Number(PULL_REQUEST.split("/").at(-1));
   const files = JSON.parse(gh("api", "--paginate", "--slurp", `repos/${REPOSITORY}/pulls/${number}/files`)).flat();
-  const autoMerge = JSON.parse(
+  const changedFiles = Number(gh("api", `repos/${REPOSITORY}/pulls/${number}`, "--jq", ".changed_files"));
+  // The first to enable auto-merge decided it; recover-prs re-arms a dropped pull request as the agent.
+  const firstAutoMerge = JSON.parse(
     gh(
       "api",
       "graphql",
@@ -99,10 +152,24 @@ function main() {
       `number=${number}`,
       "-f",
       "query=query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) " +
-        "{ pullRequest(number: $number) { autoMergeRequest { enabledBy { login } } } } }"
+        "{ pullRequest(number: $number) { timelineItems(itemTypes: [AUTO_MERGE_ENABLED_EVENT], first: 1) " +
+        "{ nodes { ... on AutoMergeEnabledEvent { actor { login } } } } } } }"
     )
-  ).data.repository.pullRequest.autoMergeRequest;
-  const { decision, reason } = classify({ files, bot: BOT, autoMergeEnabledBy: autoMerge?.enabledBy?.login });
+  ).data.repository.pullRequest.timelineItems.nodes[0];
+  const resolveTag = (repository, tag) => {
+    try {
+      return gh("api", `repos/${repository}/commits/${tag}`, "--jq", ".sha").trim();
+    } catch {
+      return "";
+    }
+  };
+  const { decision, reason } = await classify({
+    files,
+    changedFiles,
+    bot: BOT,
+    autoMergeEnabledBy: firstAutoMerge?.actor?.login,
+    resolveTag,
+  });
   // A filename is the pull request author's choice, so it never reaches the output as a new line.
   const line = reason.replace(/[\u0000-\u001f\u007f]/g, " ");
   console.log(
@@ -111,4 +178,4 @@ function main() {
   appendFileSync(GITHUB_OUTPUT, `reason=${line}\ndecision=${decision}\n`);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) await main();

@@ -133,7 +133,8 @@ jobs:
       - name: Approve
         if: >-
           ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' &&
-          (!inputs.strict || steps.classify.outputs.decision != 'review') }}
+          (!inputs.strict || steps.classify.outputs.decision == 'pin' ||
+          steps.classify.outputs.decision == 'renovate') }}
         uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.54.0
         with:
           pull_request: ${{ steps.pr.outputs.url }}
