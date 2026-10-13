@@ -55,7 +55,9 @@ outputs:
   members:
     description: >
       Compact JSON array of the authorized members, one object per member:
-      {repo (nameWithOwner), number, headRefOid, isDraft, reviewDecision, state}. Before activation
+      {repo (nameWithOwner), number, headRefOid, isDraft, reviewDecision, reviewGate, state}, where
+      reviewGate is the conclusion of the latest `review-gate` check the [Agent] App posted on the
+      member's head, or null. Before activation
       the set is the live open `epic:<N>` PRs (state always `OPEN`); once the Epic carries an
       activation snapshot it is the frozen set, each member's `state` re-read live
       (`OPEN` / `MERGED` / `CLOSED`). `[]` when the Epic has no members.
@@ -86,11 +88,17 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
+        AGENT: ${{ steps.token.outputs.app-slug }}
         OWNER: ${{ github.repository_owner }}
         EPIC: ${{ inputs.epic_number }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
       run: |
         set -euo pipefail
+
+        # The head's `review-gate` conclusion, read from the [Agent] App's check suite only: any
+        # workflow can post a check run of that name.
+        GATE_FIELDS='commits(last:1){nodes{commit{checkSuites(first:10, filterBy:{checkName:"review-gate"}){nodes{app{slug} checkRuns(last:1, filterBy:{checkName:"review-gate"}){nodes{conclusion}}}}}}}'
+        GATE_JQ='([.commits.nodes[0].commit.checkSuites.nodes[]? | select(.app.slug == $agent) | .checkRuns.nodes[-1]?.conclusion] | last)'
 
         if [ -z "${EPIC:-}" ]; then
           echo "::error::epic_number is required"
@@ -175,8 +183,8 @@ runs:
           # name stays out of the match.
           alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
-              + "{pullRequest(number:\(.value.number|floor)){number isDraft reviewDecision headRefOid state repository{nameWithOwner}}}"
-            ) | join("\n")')
+              + "{pullRequest(number:\(.value.number|floor)){number isDraft reviewDecision headRefOid state repository{nameWithOwner} \($gate)}}"
+            ) | join("\n")' --arg gate "$GATE_FIELDS")
           want=$(printf '%s' "$frozen" | jq 'length')
           rh='{}'
           for attempt in 1 2 3; do
@@ -189,12 +197,12 @@ runs:
             fi
             [ "$attempt" -lt 3 ] && sleep 2
           done
-          members=$(printf '%s' "$rh" | jq -c --argjson members "$frozen" '
+          members=$(printf '%s' "$rh" | jq -c --argjson members "$frozen" --arg agent "$AGENT" '
             [ (.data // {}) | to_entries[]
               | (.key | ltrimstr("m") | tonumber) as $i
               | .value.pullRequest | select(. != null)
               | select($members[$i] != null and .number == ($members[$i].number | floor))
-              | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, state} ]
+              | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, reviewGate: '"$GATE_JQ"', state} ]
             | sort_by((.repo | ascii_downcase), .number)' 2>/dev/null || printf '[]')
           if [ "$(printf '%s' "$members" | jq 'length')" -ne "$want" ]; then
             echo "::warning::Epic #${EPIC}: could not re-read all ${want} frozen member(s) — reporting an empty set, which holds the Epic rather than gating on a partial one."
@@ -227,7 +235,7 @@ runs:
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{
               number isDraft reviewDecision headRefOid
-              repository{ nameWithOwner } } } } }'
+              repository{ nameWithOwner } '"$GATE_FIELDS"' } } } }'
 
         # Retry transient GraphQL failures a few times. This is a read helper with no side
         # effect, so an unresolvable set fails with a clear message and the caller chooses
@@ -278,12 +286,13 @@ runs:
         # stable, so an unsorted set churns downstream comparisons across runs.
         # reviewDecision stays null while GitHub reports no decision; this is the discovery
         # view, and the caller reads head SHA and review live.
-        members=$(printf '%s' "$agg" | jq -c '[.[] | {
+        members=$(printf '%s' "$agg" | jq -c --arg agent "$AGENT" '[.[] | {
           repo: .repository.nameWithOwner,
           number,
           headRefOid,
           isDraft,
           reviewDecision,
+          reviewGate: '"$GATE_JQ"',
           state: "OPEN"
         }] | sort_by((.repo | ascii_downcase), .number)')
         count=$(printf '%s' "$members" | jq 'length')

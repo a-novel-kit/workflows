@@ -106,6 +106,7 @@ SemVer release.
 | `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.              |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
 | `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                            |
+| `review-gate`            | Required check: a maintainer or admin approved the head, and applied every privileged label last.                 |
 | `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
 
 `check-append-only` needs the full base history. It rejects every change except additions under

@@ -10,8 +10,9 @@ description: >
   permission-gated assertion of membership, whereas a `Closes` keyword is author-controlled
   and cannot be trusted to define the set. For a labeled PR this action resolves the
   Epic's authorized open sibling PRs (via the epic-membership action) and passes only when
-  EVERY member is merge-ready (non-draft + approved), so a set of concurrent cross-repo PRs
-  lands together instead of partially. The `Closes` walk survives only as a discovery HINT:
+  EVERY member is merge-ready (non-draft + approved, and passing `review-gate` when
+  `review_gate` is on), so a set of concurrent cross-repo PRs lands together instead of
+  partially. The `Closes` walk survives only as a discovery HINT:
   for an unlabeled PR whose closing issue has a parent Epic, the action suggests adding the
   `epic:<N>` label but still treats the PR as standalone. A PR with no `epic:<N>` label is
   standalone and always passes (the fast path — classified from the event payload alone, so
@@ -89,6 +90,14 @@ inputs:
       (fail-open on a label-read blip). Engaging the switch does NOT retroactively disarm native
       auto-merge already armed on an idle ready PR: merge-gate holds it (the required check goes red),
       but there is a brief latency window before the next event / reconcile sweep re-posts the hold.
+  review_gate:
+    required: false
+    default: "false"
+    description: >
+      When "true", an Epic member is merge-ready only once the latest `review-gate` check the
+      [Agent] App posted on its head succeeded, so a member held for review holds its siblings.
+      Turn it on together with the `review-gate` workflow, or every Epic waits on a check that
+      never comes.
   snapshot_dry_run:
     required: false
     default: "false"
@@ -359,6 +368,7 @@ runs:
         MEMBERS: ${{ steps.membership.outputs.members }}
         IN_QUEUE: ${{ github.event.merge_group.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
+        REVIEW_GATE: ${{ inputs.review_gate }}
       run: |
         set -euo pipefail
 
@@ -383,8 +393,9 @@ runs:
           exit 0
         fi
 
-        # A member is merge-ready when it is non-draft and approved. Merged siblings have
-        # already left the open set, since epic-membership returns open PRs only, so an
+        # A member is merge-ready when it is non-draft and approved, and, with review_gate on, its
+        # `review-gate` check passed. Merged siblings have already left the open set, since
+        # epic-membership returns open PRs only, so an
         # all-ready open set means the whole Epic is ready to land together. The same
         # recompute runs on a merge_group event against the group head: a member that
         # regressed since enqueue, back to draft or with its approval dismissed, makes the
@@ -415,10 +426,11 @@ runs:
         # the partial-landing detector only acts once something has merged. `state == null`
         # tolerates an epic-membership version without `state`, so a version skew degrades to the
         # all-open live behavior.
-        unready=$(printf '%s' "$MEMBERS" | jq -r '.[]
+        unready=$(printf '%s' "$MEMBERS" | jq -r --arg gate "${REVIEW_GATE:-false}" '.[]
           | if .state == "CLOSED" then "  - \(.repo)#\(.number) (closed without merging: the wave cannot land whole)"
-            elif (.state == "OPEN" or .state == null) and (.isDraft or (.reviewDecision != "APPROVED"))
-              then "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"))"
+            elif (.state == "OPEN" or .state == null) and (.isDraft or (.reviewDecision != "APPROVED")
+                or ($gate == "true" and .reviewGate != "SUCCESS"))
+              then "  - \(.repo)#\(.number) (draft=\(.isDraft), review=\(.reviewDecision // "none"), review-gate=\(.reviewGate // "none"))"
             else empty end')
 
         total=$(printf '%s' "$MEMBERS" | jq '[.[] | select(.state != "MERGED")] | length')
