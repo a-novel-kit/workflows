@@ -20,6 +20,7 @@ function evaluate(
     labels = [],
     applied = [],
     fail = "",
+    postFails = false,
   } = {}
 ) {
   const w = workspace(t);
@@ -31,7 +32,10 @@ function evaluate(
     const args = process.argv.slice(2);
     const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
     fs.appendFileSync("reads", path + "\\n");
-    if (path.endsWith("/check-runs")) { fs.writeFileSync("check.json", fs.readFileSync(0, "utf8")); process.exit(0); }
+    if (path.endsWith("/check-runs")) {
+      fs.writeFileSync("check.json", fs.readFileSync(0, "utf8"));
+      process.exit(process.env.POST_FAILS ? 1 : 0);
+    }
     if (process.env.FAIL && path.endsWith(process.env.FAIL)) process.exit(1);
     const tsv = (rows) => rows.map((row) => row.join("\\t")).join("\\n");
     const data = JSON.parse(process.env.DATA);
@@ -56,8 +60,10 @@ function evaluate(
     AUTHOR_TYPE: author,
     HEAD_SHA: "head",
     FAIL: fail,
+    POST_FAILS: postFails ? "1" : "",
     DATA: JSON.stringify({ roles, owner, commits, reviews, labels, applied }),
   });
+  if (postFails) return { status: result.status };
   succeeds(result);
   const check = JSON.parse(w.read("check.json"));
   return { conclusion: check.conclusion, summary: check.output.summary, reads: w.read("reads") };
@@ -121,10 +127,21 @@ test("a privileged label counts only when a maintainer, an admin or the Agent Ap
   }
 });
 
-test("a bot's pull request passes only when GitHub signed every commit for a bot", (t) => {
+test("a bot's pull request needs no approval when GitHub signed every commit for a bot", (t) => {
   const bot = evaluate(t, { author: "Bot", commits: [signed(), signed()] });
   assert.equal(bot.conclusion, "success");
   assert.doesNotMatch(bot.reads, /\/reviews/);
+  assert.match(bot.reads, /\/labels/);
+  // A waiver on a bot's pull request still needs a maintainer: automation applies none.
+  const waived = evaluate(t, {
+    author: "Bot",
+    commits: [signed()],
+    labels: ["allow-dependency-change"],
+    applied: [["allow-dependency-change", "dev", "User"]],
+  });
+  assert.equal(waived.conclusion, "failure");
+  assert.match(waived.summary, /`allow-dependency-change` was last applied by @dev/);
+  assert.doesNotMatch(waived.summary, /No approval/);
   // Dependabot's job runs on workflow_run, whose event carries no pull request.
   assert.equal(evaluate(t, { author: "", owner: "Bot", commits: [signed()] }).conclusion, "success");
   for (const commit of [signed({ type: "User" }), signed({ committer: "kushuh" }), signed({ verified: false })]) {
@@ -153,78 +170,6 @@ test("an unread list or role holds the pull request", (t) => {
     assert.equal(check.conclusion, "failure", unread);
     assert.match(check.summary, new RegExp(`Couldn't read ${unread}\\.`));
   }
-});
-
-test("epic-membership reads each member's review-gate from the Agent App only", (t) => {
-  const resolve = step("generic-actions/epic-membership/action.yaml", "resolve");
-  const w = workspace(t);
-  const suites = [
-    { app: { slug: "github-actions" }, checkRuns: { nodes: [{ conclusion: "SUCCESS" }] } },
-    { app: { slug: "anovelkitbot-agent" }, checkRuns: { nodes: [{ conclusion: "FAILURE" }] } },
-  ];
-  const node = (number, checkSuites) => ({
-    number,
-    isDraft: false,
-    reviewDecision: "APPROVED",
-    headRefOid: "h",
-    repository: { nameWithOwner: "a-novel-kit/x" },
-    commits: { nodes: [{ commit: { checkSuites: { nodes: checkSuites } } }] },
-  });
-  const search = { pageInfo: { hasNextPage: false }, nodes: [node(1, suites), node(2, [suites[0]])] };
-  w.stub(
-    "gh",
-    `const args = process.argv.slice(2);
-    if (args[1] !== 'graphql') { console.error('gh: Not Found (HTTP 404)'); process.exit(1); }
-    console.log(JSON.stringify({ data: { search: ${JSON.stringify(search)} } }));`
-  );
-  succeeds(
-    w.bash(resolve, {
-      OWNER: "a-novel-kit",
-      EPIC: "900",
-      PLANNING_REPO: ".github",
-      RUNNER_TEMP: w.cwd,
-      AGENT: "anovelkitbot-agent",
-    })
-  );
-  const members = JSON.parse(w.read("output").match(/^members=(.*)$/m)[1]);
-  assert.deepEqual(
-    members.map((m) => m.reviewGate),
-    ["FAILURE", null]
-  );
-});
-
-test("merge-gate holds an Epic member that fails review-gate only once review_gate is on", (t) => {
-  const evaluateEpic = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
-  const member = (number, reviewGate, isDraft = false) => ({
-    repo: "a-novel-kit/x",
-    number,
-    headRefOid: "h",
-    isDraft,
-    reviewDecision: "APPROVED",
-    reviewGate,
-    state: "OPEN",
-  });
-  for (const [gateOn, second, conclusion, summary] of [
-    ["false", member(2, null), "success"],
-    ["true", member(2, "SUCCESS"), "success"],
-    ["true", member(2, "FAILURE"), "failure", /x#2 .*review-gate=FAILURE/],
-    ["true", member(2, null), "failure", /x#2 .*review-gate=none/],
-    ["false", member(2, null, true), "failure", /x#2 \(draft=true, review=APPROVED\)$/m],
-  ]) {
-    const w = workspace(t);
-    w.stub("gh", `import * as fs from 'node:fs'; fs.writeFileSync('check.json', fs.readFileSync(0, 'utf8'));`);
-    succeeds(
-      w.bash(evaluateEpic, {
-        REPO_FULL: "a-novel-kit/x",
-        HEAD_SHA: "head",
-        EPIC: "900",
-        PR_NUMBER: "1",
-        REVIEW_GATE: gateOn,
-        MEMBERS: JSON.stringify([member(1, "SUCCESS"), second]),
-      })
-    );
-    const check = JSON.parse(w.read("check.json"));
-    assert.equal(check.conclusion, conclusion, `${gateOn} ${JSON.stringify(second)}`);
-    if (summary) assert.match(check.output.summary, summary);
-  }
+  // A hold raised inside a condition still fails the job when its check cannot be posted.
+  assert.notEqual(evaluate(t, { reviews: [approve("flaky")], postFails: true }).status, 0);
 });

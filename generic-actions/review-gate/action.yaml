@@ -4,9 +4,10 @@ description: >
   holding the maintain or admin role on the repository approved its current head, or the App did
   through `approve-pr`, and once every privileged label on it was last applied by such a person or by
   the App. Anyone with write access can approve and label, so these two rules are what tie merging to
-  the maintainer tier. A bot's pull request passes when GitHub signed every commit on it for a bot,
-  as does a merge-queue group, whose pull requests each passed at enqueue. A failed read posts
-  `failure`: re-running the job evaluates again.
+  the maintainer tier. A bot's pull request needs no approval when GitHub signed every commit on it
+  for a bot, but its privileged labels count only on the same terms. A merge-queue group passes,
+  since its pull requests each passed at enqueue. A failed read posts `failure`: re-running the job
+  evaluates again.
 
 inputs:
   client_id:
@@ -67,7 +68,7 @@ runs:
           jq -n --arg sha "$HEAD_SHA" --arg conclusion "$1" --arg summary "$2" \
             '{name: "review-gate", head_sha: $sha, status: "completed", conclusion: $conclusion,
               output: {title: "review-gate", summary: $summary}}' |
-            gh api "repos/$GITHUB_REPOSITORY/check-runs" --method POST --input - >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/check-runs" --method POST --input - >/dev/null || exit 1
           printf 'review-gate=%s @ %s\n\n%s\n' "$1" "${HEAD_SHA:0:12}" "$2" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
@@ -87,17 +88,15 @@ runs:
         fi
         # Anyone pushing can claim a bot's email, so a commit counts as a bot's only when GitHub signed
         # it as web-flow, which it does only for commits it writes for the bot itself.
+        bot_written=false
         if [ "$AUTHOR_TYPE" = Bot ]; then
           unsigned="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" |
             jq '[add[] | select(.author.type != "Bot" or .committer.login != "web-flow" or (.commit.verification.verified | not))] | length')" ||
             hold "the commits"
-          if [ "$unsigned" = 0 ]; then
-            post_check success "A bot wrote this pull request, and GitHub signed every commit on it for a bot."
-            exit 0
-          fi
+          [ "$unsigned" = 0 ] && bot_written=true
         fi
 
-        # A 404 means the account holds no role here; any other failed lookup holds.
+        # A 404 means no such account; any other failed lookup holds.
         declare -A roles=()
         trusted() { # $1=login  $2=account type
           if [ "$2" = Bot ]; then
@@ -119,16 +118,18 @@ runs:
 
         # Reviews arrive oldest first; each reviewer's last approval, change request or dismissal
         # stands, and only an approval of the current head counts.
-        reviews="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
-          --jq '.[] | select(.state != "COMMENTED") | [.user.login, .user.type, .state, .commit_id] | @tsv')" ||
-          hold "the reviews"
         approver=""
-        while IFS=$'\t' read -r login type state commit; do
-          if [ "$state" = APPROVED ] && [ "$commit" = "$HEAD_SHA" ] && trusted "$login" "$type"; then
-            approver="$login"
-            break
-          fi
-        done < <(awk -F'\t' 'NF { last[$1] = $0 } END { for (login in last) print last[login] }' <<<"$reviews")
+        if [ "$bot_written" = false ]; then
+          reviews="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
+            --jq '.[] | select(.state != "COMMENTED") | [.user.login, .user.type, .state, .commit_id] | @tsv')" ||
+            hold "the reviews"
+          while IFS=$'\t' read -r login type state commit; do
+            if [ "$state" = APPROVED ] && [ "$commit" = "$HEAD_SHA" ] && trusted "$login" "$type"; then
+              approver="$login"
+              break
+            fi
+          done < <(awk -F'\t' 'NF { last[$1] = $0 } END { for (login in last) print last[login] }' <<<"$reviews")
+        fi
 
         labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --paginate --jq '.[].name')" ||
           hold "the labels"
@@ -138,8 +139,9 @@ runs:
         privileged="$(tr ',' '\n' <<<"$PRIVILEGED" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d')"
 
         problems=""
-        [ -n "$approver" ] ||
+        if [ "$bot_written" = false ] && [ -z "$approver" ]; then
           problems+="- No approval of this head from a maintainer or admin of this repository."$'\n'
+        fi
         while IFS= read -r label; do
           if [ -z "$label" ] || ! grep -qxF -- "$label" <<<"$privileged"; then
             continue
@@ -152,6 +154,8 @@ runs:
 
         if [ -n "$problems" ]; then
           post_check failure "$problems"
+        elif [ "$bot_written" = true ]; then
+          post_check success "GitHub signed every commit for a bot; every privileged label was applied by a maintainer or admin."
         else
           post_check success "Approved by @$approver; every privileged label was applied by a maintainer or admin."
         fi
