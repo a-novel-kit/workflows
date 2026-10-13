@@ -23,9 +23,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: $/node-actions/lint-node
+      # The branch's setup-node, called directly: lint-node pins its sibling to the last release,
+      # so it would test that release's setup-node instead of this branch's.
+      - uses: $/node-actions/setup-node
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+      - run: pnpm run lint
 
   test-actions:
     runs-on: ubuntu-latest
