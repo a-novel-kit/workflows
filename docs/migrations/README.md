@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.53.0](./v1.53.0.md) | Screenshot and translation gates support `main` running on pull requests; platforms can switch.                           |
 | [v1.52.0](./v1.52.0.md) | Docker builds are tagged only on `master`, releases and `with-feature-env` pull requests; others push by digest.          |
 | [v1.46.0](./v1.46.0.md) | A push to a PR removes `append-only-override`; pass `github_token` and grant `pull-requests: write`.                      |
 | [v1.45.3](./v1.45.3.md) | A push removes the screenshot and translation approval labels; `approve-playwright` needs `pull-requests: write`.         |

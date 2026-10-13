@@ -1,9 +1,10 @@
 name: lint translations
 description: >
-  Check a platform's translation catalogs: structure always, then on a branch push the gaps and drift
-  the branch introduced since its merge base with the default branch. The PR labels
-  allow-incomplete-translations and allow-translation-drift accept those two; a merge group checks
-  structure only. Later checks still run after an earlier finding, so one run reports every problem.
+  Check a platform's translation catalogs: structure always, then on a branch push or pull request the
+  gaps and drift the branch introduced since its merge base with the default branch. The PR labels
+  allow-incomplete-translations and allow-translation-drift accept those two, except on the run for a
+  pull request push, since each approved an earlier head; a merge group checks structure only. Later
+  checks still run after an earlier finding, so one run reports every problem.
 inputs:
   github_token:
     required: true
@@ -35,6 +36,7 @@ runs:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
         github_token: ${{ inputs.github_token }}
+        ref: ${{ github.event.pull_request.head.sha }}
 
     - name: Check catalog structure
       id: structure
@@ -50,20 +52,30 @@ runs:
 
     - name: Read approval labels
       id: labels
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' && github.event_name == 'push' }}
+      if: >-
+        ${{ !cancelled() && steps.setup.outcome == 'success' &&
+        (github.event_name == 'push' || github.event_name == 'pull_request') }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
-        BRANCH: ${{ github.ref_name }}
+        BRANCH: ${{ github.head_ref || github.ref_name }}
+        ACTION: ${{ github.event.action }}
       run: |
         set -euo pipefail
-        names=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json labels \
-          --jq '[.[0].labels[]?.name]')
+        # The labels approved an earlier head, and approve-translations is removing them.
+        if [ "${ACTION:-}" = synchronize ]; then
+          names='[]'
+        else
+          names=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json labels \
+            --jq '[.[0].labels[]?.name]')
+        fi
         echo "names=$names" >> "$GITHUB_OUTPUT"
 
     - name: Fetch the base branch
       id: base
-      if: ${{ !cancelled() && steps.setup.outcome == 'success' && github.event_name == 'push' }}
+      if: >-
+        ${{ !cancelled() && steps.setup.outcome == 'success' &&
+        (github.event_name == 'push' || github.event_name == 'pull_request') }}
       shell: bash
       env:
         BASE: ${{ github.event.repository.default_branch }}

@@ -19,7 +19,7 @@ if (command === 'pr' && sub === 'list') {
   const calls = Number(fs.existsSync('polls') ? fs.readFileSync('polls', 'utf8') : 0);
   fs.writeFileSync('polls', String(calls + 1));
   const status = statuses[Math.min(calls, statuses.length - 1)];
-  if (status && status !== 'none') console.log(JSON.stringify({ databaseId: 7, status }));
+  if (status && status !== 'none') console.log(JSON.stringify({ databaseId: 7, event: process.env.RUN_EVENT ?? 'push', status }));
 } else if (command === 'run' && sub === 'view') {
   console.log(process.env.JOB_ID ?? '');
 }`;
@@ -86,6 +86,20 @@ test("approval labels come from the branch's open PR", (t) => {
   ]);
 });
 
+test("a pull request push reads no approval label, since each approved an earlier head", (t) => {
+  const w = translations(t);
+  succeeds(
+    w.bash(step(lint, "labels"), {
+      GITHUB_REPOSITORY: "a-novel/platform",
+      BRANCH: "feat/copy",
+      ACTION: "synchronize",
+      PR_LABELS: '["allow-translation-drift"]',
+    })
+  );
+  assert.equal(w.read("output"), "names=[]\n");
+  assert.equal(w.read("calls"), "");
+});
+
 test("gaps and drift receive the merge base reference", (t) => {
   const w = translations(t);
   for (const [id, variable, name] of [
@@ -144,6 +158,24 @@ test("the rerun waits for the head's run, then reruns only the translation job",
   );
   assert.deepEqual(calls(w).at(-1), ["gh", "run", "rerun", "--repo", "a-novel/platform", "--job", "42"]);
   assert.equal(calls(w).filter(([tool]) => tool === "sleep").length, 2);
+});
+
+test("a pull request run is never rerun, since label changes start a new one", (t) => {
+  const w = translations(t);
+  succeeds(
+    w.bash(step(approve, "rerun"), {
+      GITHUB_REPOSITORY: "a-novel/platform",
+      HEAD_SHA: "bbb",
+      WORKFLOW: "main.yaml",
+      JOB: "lint-translations",
+      RUN_STATUSES: "in_progress",
+      RUN_EVENT: "pull_request",
+    })
+  );
+  assert.deepEqual(
+    calls(w).map((call) => call.slice(0, 3)),
+    [["gh", "run", "list"]]
+  );
 });
 
 test("the rerun fails loudly without a completed run or a matching job", (t) => {

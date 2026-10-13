@@ -1,6 +1,6 @@
 // Bind screenshot-change approval to a human label action and an exact PR head.
 import { appendFile, readFile } from "node:fs/promises";
-import { Failure, GitHub, runCli } from "./common.mjs";
+import { Failure, GitHub, HEAD_EVENTS, runCli, testedHead } from "./common.mjs";
 
 export const LABEL = "allow-screenshot-change";
 export const APPROVAL = "visual-change-approval";
@@ -88,8 +88,9 @@ export class Policy {
     const run = await this.github.request(`actions/runs/${match[1]}/attempts/${match[2]}`);
     if (
       run.head_sha !== pr.head.sha ||
+      run.head_repository?.full_name !== this.github.repository ||
       run.path !== ".github/workflows/main.yaml" ||
-      run.event !== "push" ||
+      !HEAD_EVENTS.includes(run.event) ||
       !(await this.github.successfulBrowserRun({ properties: { run_id: match[1], attempt: match[2] } }))
     )
       return null;
@@ -169,13 +170,23 @@ export class Policy {
       for (const pr of pulls) proofs.push(await this.proof(pr, baseline, merged ? pr.merged_at : undefined));
       return proofs.length > 0 && proofs.every(Boolean) && proofs.includes("approved");
     }
-    if (eventName !== "push") return false;
-    const branch = ref.replace(/^refs\/heads\//, "");
-    const pulls = await this.github.pages(
-      `pulls?state=open&head=${this.github.repository.split("/")[0]}:${encodeURIComponent(branch)}`
-    );
+    if (!HEAD_EVENTS.includes(eventName)) return false;
+    // The live PR must still point at the tested head; a push since then needs its own approval.
+    const pulls =
+      eventName === "pull_request"
+        ? [await this.github.request(`pulls/${Number(event.pull_request.number)}`)]
+        : await this.github.pages(
+            `pulls?state=open&head=${this.github.repository.split("/")[0]}:${encodeURIComponent(ref.replace(/^refs\/heads\//, ""))}`
+          );
     for (const pr of pulls)
-      if (pr.head.sha === sha && pr.base.ref === "master" && (await this.approved(pr))) return true;
+      if (
+        pr.state === "open" &&
+        pr.head.sha === sha &&
+        pr.base.ref === "master" &&
+        pr.head.repo?.full_name === this.github.repository &&
+        (await this.approved(pr))
+      )
+        return true;
     return false;
   }
 
@@ -193,7 +204,7 @@ export class Policy {
       approved = ["admin", "maintain", "write"].includes(permission.permission);
     }
     // Browser comparisons block unapproved changes; this receipt only records approval state.
-    await this.status(
+    const receipt = await this.status(
       pr.head.sha,
       APPROVAL,
       "success",
@@ -210,12 +221,12 @@ export class Policy {
       return { approved, revoked: true };
     }
     // The rerun checks this receipt only after its setup, by which time this job has succeeded.
-    return { approved, rerun: await this.refresh(pr, await this.latestLabel(pr)) };
+    return { approved, rerun: await this.refresh(pr, receipt.created_at) };
   }
 
-  /** Refresh the open PR whose head a completed push run of main tested. */
+  /** Refresh the open PR whose head a completed run of main tested. */
   async completed(run) {
-    if (run.event !== "push") return null;
+    if (!HEAD_EVENTS.includes(run.event)) return null;
     const owner = this.github.repository.split("/")[0];
     const pr = (await this.github.pages(`pulls?state=open&head=${owner}:${encodeURIComponent(run.head_branch)}`)).find(
       (candidate) =>
@@ -227,29 +238,29 @@ export class Policy {
     const label = await this.latestLabel(pr);
     const receipt = await this.latestStatus(pr.head.sha, APPROVAL);
     // Until a receipt follows the label change, its own approval run is pending and refreshes instead.
-    return label && receipt?.created_at >= label.created_at ? this.refresh(pr, label) : null;
+    return label && receipt?.created_at >= label.created_at ? this.refresh(pr, receipt.created_at) : null;
   }
 
-  /** Rerun the head's browser job when its latest main attempt finished but began before the label change. */
-  async refresh(pr, label) {
-    if (!label) return null;
+  /** Rerun the head's browser job when its latest main attempt finished but the job began before the receipt. */
+  async refresh(pr, receiptAt) {
     const { workflow_runs: runs } = await this.github.request(
-      `actions/workflows/main.yaml/runs?head_sha=${pr.head.sha}&event=push&per_page=100`
+      `actions/workflows/main.yaml/runs?head_sha=${pr.head.sha}&per_page=100`
     );
     const run = runs
       .filter(
         (candidate) =>
           candidate.head_sha === pr.head.sha &&
-          candidate.event === "push" &&
+          HEAD_EVENTS.includes(candidate.event) &&
           candidate.path === ".github/workflows/main.yaml"
       )
       .sort((a, b) => a.run_number - b.run_number)
       .at(-1);
     // A run still in progress is refreshed by its completion event.
-    if (run?.status !== "completed" || run.run_started_at > label.created_at) return null;
+    if (run?.status !== "completed") return null;
     const { jobs } = await this.github.request(`actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`);
     const job = jobs.find((entry) => entry.name === "test-browser");
-    if (!job || job.conclusion === "skipped") return null;
+    // A label change also starts a pull request run, whose browser job may check before the receipt exists.
+    if (!job || job.conclusion === "skipped" || job.started_at > receiptAt) return null;
     await this.post(`actions/jobs/${job.id}/rerun`);
     return run;
   }
@@ -289,7 +300,7 @@ async function main() {
     const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
     const allowed =
       Boolean(baseline) &&
-      (await policy.allows(event, env.GITHUB_EVENT_NAME, env.GITHUB_SHA, env.GITHUB_REF, baseline));
+      (await policy.allows(event, env.GITHUB_EVENT_NAME, testedHead(env), env.GITHUB_REF, baseline));
     await appendFile(env.GITHUB_ENV, `VISUAL_APPROVED=${allowed}\n`);
   } else if (mode === "record") {
     const success = env.VISUAL_OUTCOME === "success";
@@ -305,7 +316,7 @@ async function main() {
         : "Visual tests or evidence upload failed";
     // Only a successful comparison's run link serves as proof, so a pending one links its review.
     const target = pending && env.DRIFT_URL ? env.DRIFT_URL : policy.target();
-    await policy.status(env.GITHUB_SHA, COMPARISON, success ? "success" : "failure", description, target);
+    await policy.status(testedHead(env), COMPARISON, success ? "success" : "failure", description, target);
   } else throw new Failure("Unknown approval operation");
 }
 
