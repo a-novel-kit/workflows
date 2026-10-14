@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { functions, step, succeeds, workspace } from "./helpers.mjs";
 
 const dispatch = step(".github/workflows/backport-run.yaml", "Open backport pull requests");
-const backport = functions(dispatch, ["release_baseline", "ensure_release_line"]);
+const backport = functions(dispatch, ["release_baseline", "ensure_release_line", "fast_path"]);
 const pending = functions(step(".github/workflows/release-line-run.yaml", "pending"), ["line_pending"]);
 
 /** A repository released at v1.4.0 whose default branch is pushed to a bare origin. */
@@ -169,6 +169,22 @@ test("a backport refuses refs that are not default-branch commits before creatin
   }
   assert.equal(remote("refs/heads/release/v1.4"), "");
   assert.deepEqual(pulls(), []);
+});
+
+test("the dispatch names a normal release only when the fixes are all the default branch holds unreleased", (t) => {
+  const { git, commit, sh } = repository(t);
+  const fix = commit("auth.js", "if (user.id === owner && owner) allow();\n", "fix: owner check");
+  git("push", "-q", "origin", "master");
+  // The line's baseline is the latest release, and the default branch holds only the fix.
+  assert.match(succeeds(sh(`fast_path v1.4.0 ${fix}`)), /a normal patch release ships them/);
+  // No fix to ship, a newer release than the line, or other unreleased work: the backport is the path.
+  assert.equal(succeeds(sh("fast_path v1.4.0")), "");
+  git("tag", "v1.5.0");
+  assert.equal(succeeds(sh(`fast_path v1.4.0 ${fix}`)), "");
+  git("tag", "-d", "v1.5.0");
+  commit("limits.js", "const max = 20;\n", "feat: higher limit");
+  git("push", "-q", "origin", "master");
+  assert.equal(succeeds(sh(`fast_path v1.4.0 ${fix}`)), "");
 });
 
 test("a release line is pending until its head carries one of its own tags", (t) => {

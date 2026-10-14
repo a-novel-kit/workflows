@@ -121,9 +121,10 @@ jobs:
       contents: read
       actions: read # the lock step reads in-flight release runs
     steps:
-      # An asymmetric lock: wait out any in-flight release before cutting, so the two never
-      # interleave. Only the cut waits; the ordering is best-effort, and release-core-hotfix refuses a
-      # tag that already exists.
+      # An asymmetric lock: wait out any in-flight cut of a release before cutting, so the two never
+      # interleave. Only dispatched runs cut; a release tag's publishing run never conflicts. Only the
+      # cut waits; the ordering is best-effort, and release-core-hotfix refuses a tag that already
+      # exists.
       - name: Acquire lock (wait for in-flight release)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -132,7 +133,7 @@ jobs:
           set -euo pipefail
           deadline=$((SECONDS + 1800))
           while :; do
-            active=$(gh run list --repo "$REPO" --workflow release.yaml --limit 30 \
+            active=$(gh run list --repo "$REPO" --workflow release.yaml --event workflow_dispatch --limit 30 \
               --json status --jq '[.[] | select(.status | IN("in_progress","queued"))] | length' 2>/dev/null || echo "err")
             if [ "$active" = "0" ]; then
               break

@@ -162,6 +162,20 @@ jobs:
             echo "$sha"
           }
 
+          # Names the faster path: when the line's baseline is the latest release and the default branch
+          # holds nothing unreleased but the fixes, a normal patch release ships them with one review
+          # less. Prints nothing otherwise.
+          fast_path() {
+            local baseline="$1" latest unreleased
+            shift
+            latest=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            [ "$#" -gt 0 ] && [ "$latest" = "$baseline" ] || return 0
+            git merge-base --is-ancestor "$baseline" "origin/$DEFAULT_BRANCH" || return 0
+            unreleased=$(git rev-list "$baseline..origin/$DEFAULT_BRANCH" | grep -vxF -f <(printf '%s\n' "$@") || true)
+            [ -z "$unreleased" ] || return 0
+            echo "\`$DEFAULT_BRANCH\` holds nothing unreleased since \`$baseline\` but these fixes: a normal patch release ships them with one review less than a backport."
+          }
+
           # Cherry-picks one resolved fix onto the release line as its own pull request, titled with
           # the fix's own subject. A conflict leaves nothing behind and appends the commands to write
           # the line's form of the fix by hand to $INSTRUCTIONS, the escalation ticket's body.
@@ -227,6 +241,7 @@ jobs:
             exit 1
           fi
           ensure_release_line "$LINE" "$baseline"
+          fast_path "$baseline" "${fixes[@]}" >> "$GITHUB_STEP_SUMMARY"
 
           INSTRUCTIONS="$RUNNER_TEMP/backport-instructions.md"
           failed=0
