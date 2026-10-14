@@ -14,7 +14,8 @@
 name: recover stuck pull requests
 
 on:
-  pull_request:
+  # Runs this default-branch copy; neither job checks out the pull request.
+  pull_request_target: # zizmor: ignore[dangerous-triggers] Both jobs only call the GitHub API.
     types: [dequeued, closed]
 
 jobs:
