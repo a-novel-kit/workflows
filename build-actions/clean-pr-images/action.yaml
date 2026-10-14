@@ -1,0 +1,38 @@
+name: clean pull request images
+description: >
+  Delete a closed pull request's `pr-<N>` image from each listed container package that has one, unless
+  another tag also names it. Its untagged builds, children and attestations wait for the next
+  `clean-images` sweep.
+
+inputs:
+  pull_request:
+    required: true
+    description: Number of the closed pull request.
+  packages:
+    required: true
+    description: JSON array of container package names without their owner, such as ["service-json-keys/rest"].
+  github_token:
+    required: true
+    description: >
+      Token with packages write. Each package must grant the calling repository the Admin role, which
+      GitHub gives the repository whose workflow first published it.
+  dry_run:
+    required: false
+    default: "false"
+    description: When "true", report what would be deleted without deleting it.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: "24"
+        package-manager-cache: false
+    - name: Delete the pull request's tagged images
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PULL_REQUEST: ${{ inputs.pull_request }}
+        PACKAGES: ${{ inputs.packages }}
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: node "$GITHUB_ACTION_PATH/../clean-images/keep.mjs" close
