@@ -228,7 +228,8 @@ test("release train waits for a cut's approval and never for a rehearsal", (t) =
       approval,
     ]);
     assert.equal(succeeds(result), expected);
-    assert.equal(w.read("summary").includes("https://github.com/owner/repo/actions/runs/42"), announced);
+    const link = "- ⏳ **owner/repo** — cut awaiting approval: https://github.com/owner/repo/actions/runs/42";
+    assert.equal(w.read("summary").trim(), announced ? link : "");
   }
 });
 
