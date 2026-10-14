@@ -38,10 +38,11 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 ### `build-actions`
 
-| Action       | Purpose                                                                         |
-| ------------ | ------------------------------------------------------------------------------- |
-| `docker`     | Build an image, verify it runs **healthy**, push it, and attest its provenance. |
-| `docker-job` | Build an image, verify it **exits 0**, push it, and attest its provenance.      |
+| Action         | Purpose                                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------------------- |
+| `docker`       | Build an image, verify it runs **healthy**, push it, and attest its provenance.                      |
+| `docker-job`   | Build an image, verify it **exits 0**, push it, and attest its provenance.                           |
+| `clean-images` | Delete a package's week-old images no deployment names; keep releases, `master` builds and open PRs. |
 
 Both actions tag only the builds a deployment can name: pushes to the default branch, releases, and
 a pull request while it carries the `with-feature-env` label. The label tags the head it was added on,
