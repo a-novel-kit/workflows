@@ -35,8 +35,6 @@ on:
       - closed
       - reopened
       - dequeued
-  pull_request_review:
-    types: [submitted, dismissed]
 
 permissions: {}
 
