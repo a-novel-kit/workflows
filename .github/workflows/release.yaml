@@ -1,8 +1,9 @@
 name: release
 
-# Releases are cut from the GitHub UI: Actions ▸ release ▸ pick a type ▸ Run. workflow_call exposes
-# the same inputs, so an agent can drive an identical release headlessly. The protected `release`
-# environment is the "who can publish" gate, through its required reviewers.
+# Releases are cut from the GitHub UI (Actions ▸ release ▸ pick a type ▸ Run) or by the release
+# train, through workflow_call's identical inputs. `plan` rehearses with no credential; `cut` runs in
+# the protected `release` environment, the "who can publish" gate whose key only it reads, and
+# pushes the version commit, the tags and the GitHub Release as the release App.
 on:
   workflow_dispatch:
     inputs:
@@ -37,17 +38,33 @@ run-name: "🚀 release ${{ inputs.release_type }}${{ inputs.dry_run && ' (dry-r
 # environment is the human gate on top.
 
 jobs:
-  release:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # This checkout makes the local ./publish-actions/* actions available; release-core
+      # re-checks-out with its own token.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: $/publish-actions/release-core
+        with:
+          # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
+          cli_version: "1.7.5"
+          release_type: ${{ inputs.release_type }}
+          dry_run: "true"
+
+  cut:
+    needs: [plan]
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      contents: write
-    outputs:
-      version: ${{ steps.core.outputs.version }}
-      tag: ${{ steps.core.outputs.tag }}
+      contents: read
     steps:
       # This checkout makes the local ./publish-actions/* actions available; release-core
-      # re-checks-out with the bot token to push.
+      # re-checks-out with its own token.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -57,13 +74,11 @@ jobs:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.7.5"
           release_type: ${{ inputs.release_type }}
-          dry_run: ${{ inputs.dry_run }}
-          client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
-          app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
-      # Everything on master has now shipped, so clear this repo's awaiting-release items off the
-      # board. Skipped on a dry run, where nothing was released.
-      - if: ${{ !inputs.dry_run }}
-        uses: $/generic-actions/archive-board-items
+          client_id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          app_private_key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      # Everything on the default branch just shipped — clear this repo's
+      # awaiting-release items off the board.
+      - uses: $/generic-actions/archive-board-items
         with:
           client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
@@ -72,8 +87,7 @@ jobs:
       # Surface the cut version in the run summary, since the run name carries only the bump type.
       # Both values arrive through env rather than ${{ }}: an expression is substituted into the
       # script before bash sees it, so its contents would be code; as variables they are data.
-      - if: ${{ !inputs.dry_run }}
-        env:
+      - env:
           TAG: ${{ steps.core.outputs.tag }}
           RELEASE_TYPE: ${{ inputs.release_type }}
         run: echo "## 🚀 Released \`${TAG}\` (${RELEASE_TYPE})" >> "$GITHUB_STEP_SUMMARY"
