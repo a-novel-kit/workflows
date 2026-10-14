@@ -1,9 +1,9 @@
 name: clean images
 description: >
-  Delete a container package's images that no deployment names once they are older than the
-  retention: untagged builds, closed pull request tags, and branch or merge-queue tags. Release tags,
-  the default branch tag, open pull request tags and every build of the default branch stay, with the
-  manifests and attestations they reference. Run it for one package at a time.
+  Delete a container package's images once the branch or pull request that built them is gone: untagged
+  builds and tags of closed pull requests, merge-queue builds, and old branch tags. Release tags, the
+  default branch's tag and builds, and open pull requests' tags and builds stay, with the manifests and
+  attestations they reference. Run it for one package at a time.
 
 inputs:
   package:
@@ -12,12 +12,13 @@ inputs:
   github_token:
     required: true
     description: >
-      Token with packages write and pull requests read. The package must grant the calling repository
-      the Admin role, which GitHub gives the repository whose workflow first published it.
-  retention_days:
+      Token with packages write, pull requests read and attestations read. The package must grant the
+      calling repository the Admin role, which GitHub gives the repository whose workflow first
+      published it.
+  min_age_days:
     required: false
-    default: "7"
-    description: Age in days an image must reach before it can be deleted, so running jobs keep theirs.
+    default: "1"
+    description: Age in days an image must reach before it can be deleted, so running jobs and merge-queue groups keep theirs.
   dry_run:
     required: false
     default: "false"
@@ -30,25 +31,25 @@ runs:
       with:
         node-version: "24"
         package-manager-cache: false
-    # A build's labels never change, so its classification is cached across runs by digest.
+    # A build's origin never changes, so its classification is cached across runs by digest.
     - uses: actions/cache/restore@v6
       with:
         path: ${{ runner.temp }}/clean-images.json
-        key: clean-images-${{ inputs.package }}-${{ github.run_id }}
-        restore-keys: clean-images-${{ inputs.package }}-
+        key: clean-images-v2-${{ inputs.package }}-${{ github.run_id }}
+        restore-keys: clean-images-v2-${{ inputs.package }}-
     - name: Find the images to keep
       id: keep
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         PACKAGE: ${{ inputs.package }}
-        RETENTION_DAYS: ${{ inputs.retention_days }}
+        MIN_AGE_DAYS: ${{ inputs.min_age_days }}
         CACHE_FILE: ${{ runner.temp }}/clean-images.json
       run: node "$GITHUB_ACTION_PATH/keep.mjs"
     - uses: actions/cache/save@v6
       with:
         path: ${{ runner.temp }}/clean-images.json
-        key: clean-images-${{ inputs.package }}-${{ github.run_id }}
+        key: clean-images-v2-${{ inputs.package }}-${{ github.run_id }}
     - uses: dataaxiom/ghcr-cleanup-action@v1.2.2
       with:
         token: ${{ inputs.github_token }}
@@ -62,6 +63,6 @@ runs:
         delete-orphaned-images: true
         # Release tags stay even if the computed part is empty, which then matches, and keeps, everything.
         exclude-tags: ^(v[0-9].*|latest|nightly)$|${{ steps.keep.outputs.pattern }}
-        older-than: ${{ inputs.retention_days }} days
+        older-than: ${{ inputs.min_age_days }} days
         validate: true
         dry-run: ${{ inputs.dry_run }}
