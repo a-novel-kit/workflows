@@ -50,6 +50,10 @@ on:
 jobs:
   sweep:
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     steps:
       # Metadata-only token: only organization_personal_access_tokens:read, scoped to this org.

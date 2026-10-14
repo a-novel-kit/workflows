@@ -55,6 +55,10 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     # Reads the caller's runs; the pull requests go through the App.
     permissions:
       actions: read
@@ -141,6 +145,9 @@ jobs:
     needs: scan
     if: needs.scan.outputs.events != '[]'
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     strategy:
       # One post at a time keeps the channel under Discord's rate limit.

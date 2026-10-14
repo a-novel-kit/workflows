@@ -38,6 +38,10 @@ on:
 jobs:
   auto-approve:
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     if: >-
       github.event_name == 'status' ||
       github.event.pull_request.user.login == inputs.dependency_bot_login ||
