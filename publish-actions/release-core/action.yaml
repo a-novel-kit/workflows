@@ -2,8 +2,9 @@ name: release core
 description: >
   Cut a release in CI: bump the version (package.json, workspace-aware), stamp
   in-repo version refs, commit, push the tags (a root vX.Y.Z plus any sub-module
-  tags — see plan.mjs), and create the GitHub Release. The release-type selector
-  and the protected `release` environment live in the caller.
+  tags — see plan.mjs), and create the GitHub Release. The caller's cut job runs
+  in the protected `release` environment, which holds the release App's key. A
+  dry run, the rehearsal, needs no credential and runs outside it.
 
 inputs:
   cli_version:
@@ -20,21 +21,25 @@ inputs:
     required: true
     description: Semver bump to apply — patch, minor, or major.
   client_id:
-    required: true
+    required: false
+    default: ""
     description: >
-      [Agent] App client ID. Needs contents:write plus a branch/tag-protection bypass,
-      since the bump commit lands on the protected default branch and the tag is
-      protected (v*).
+      Release App client ID, the RELEASE_BOT_CLIENT_ID variable. The App needs contents and
+      workflows write plus the release rulesets' bypass, since the bump commit lands on the
+      protected default branch and the tags are protected. Required unless dry_run.
   app_private_key:
-    required: true
-    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+    required: false
+    default: ""
+    description: >
+      Release App private key (PEM), the RELEASE_BOT_PRIVATE_KEY secret of the `release`
+      environment. Required unless dry_run.
   dry_run:
     required: false
     default: "false"
     description: >
       When "true", bump and report the version/tag but do NOT commit, tag, push,
-      or release — the working tree is reverted. Lets a release be rehearsed
-      safely before the bot has push rights.
+      or release — the working tree is reverted. A dry run mints no token, so a
+      rehearsal runs without the release environment.
 
 outputs:
   version:
@@ -53,14 +58,21 @@ runs:
     # Releases run from the default branch only, so a dispatch or workflow_call
     # from any other ref is rejected before a token is minted or anything is
     # mutated: a bump tag pushed from a feature branch names the wrong commit.
-    - name: Guard — default branch only
+    # A cut whose job is outside the `release` environment reads an empty key.
+    - name: Guard — default branch and credentials
       shell: bash
       env:
         REF_NAME: ${{ github.ref_name }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        HAS_KEY: ${{ inputs.app_private_key != '' && inputs.client_id != '' }}
       run: |
         if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
           echo "::error::releases run from the default branch ($DEFAULT_BRANCH) only — got '$REF_NAME'"
+          exit 1
+        fi
+        if [ "$DRY_RUN" != "true" ] && [ "$HAS_KEY" != "true" ]; then
+          echo "::error::a cut needs the release App's client ID and key; run its job in the \`release\` environment"
           exit 1
         fi
 
@@ -70,6 +82,7 @@ runs:
     # it, answering GH013 "without workflows permission".
     - name: Mint push token
       id: token
+      if: ${{ inputs.dry_run != 'true' }}
       uses: actions/create-github-app-token@v3
       with:
         client-id: ${{ inputs.client_id }}
@@ -80,11 +93,12 @@ runs:
         permission-workflows: write
 
     # Bot-authenticated checkout so the later push carries the bot's rights, with
-    # full history and tags so the tag and release notes resolve.
+    # full history and tags so the tag and release notes resolve. A dry run reads
+    # with the job's own token.
     - name: Checkout
       uses: actions/checkout@v7
       with:
-        token: ${{ steps.token.outputs.token }}
+        token: ${{ steps.token.outputs.token || github.token }}
         ref: ${{ github.ref_name }}
         fetch-depth: 0
         fetch-tags: true
@@ -187,6 +201,8 @@ runs:
           git tag "$t"
           tag_refs+=("refs/tags/$t")
         done <<< "$tags"
+        # GitHub creates no push event for more than three tags in one push, so a release with more
+        # sub-module tags would not start its tag-triggered publishing run.
         git push --atomic origin "HEAD:$BRANCH" "${tag_refs[@]}"
         gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes

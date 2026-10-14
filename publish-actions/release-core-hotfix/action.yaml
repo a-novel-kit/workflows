@@ -32,19 +32,24 @@ inputs:
       release tag. bump.mjs derives the version from the line's package.json, so it must descend
       from a real release tag — hard-asserted below (the baseline vX.Y.Z tag must exist).
   client_id:
-    required: true
+    required: false
+    default: ""
     description: >
-      [Agent] App client ID. Needs contents:write plus a tag-protection bypass, since the vX.Y.(Z+1)
-      tag is protected (v*), and a bypass of the release line's branch protection.
+      Release App client ID, the RELEASE_BOT_CLIENT_ID variable. The App needs contents write plus
+      the bypass of the tags and release-lines rulesets, since the vX.Y.(Z+1) tag and the line are
+      protected. Required unless dry_run.
   app_private_key:
-    required: true
-    description: The [Agent] App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+    required: false
+    default: ""
+    description: >
+      Release App private key (PEM), the RELEASE_BOT_PRIVATE_KEY secret of the `release`
+      environment. Required unless dry_run.
   dry_run:
     required: false
     default: "false"
     description: >
       When "true", bump and report the version/tags but do NOT commit, tag, push, or release — the
-      working tree is reverted. Lets a hotfix be rehearsed before the bot has push rights.
+      working tree is reverted. A dry run mints no token, so it needs no credential.
 
 outputs:
   version:
@@ -67,6 +72,7 @@ runs:
     # Token that can push the tag + create the release. Scoped to this repo and contents only.
     - name: Mint push token
       id: token
+      if: ${{ inputs.dry_run != 'true' }}
       uses: actions/create-github-app-token@v3
       with:
         client-id: ${{ inputs.client_id }}
@@ -85,7 +91,7 @@ runs:
     - name: Checkout
       uses: actions/checkout@v7
       with:
-        token: ${{ steps.token.outputs.token }}
+        token: ${{ steps.token.outputs.token || github.token }}
         ref: ${{ inputs.ref }}
         path: __hotfix
         fetch-depth: 0

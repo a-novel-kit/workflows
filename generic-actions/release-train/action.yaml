@@ -15,8 +15,9 @@ description: >
   rehearsal that runs to success but cuts no tag), reporting the per-repo bump it WOULD apply, and
   never touches the Epic body.
 
-  The single human gate is this dispatch itself (admin-gated + the protected `release` environment on
-  each repo). Cross-EPIC release ordering is manage-versions' concern, not this action's.
+  Two human gates guard a live train: this admin-gated dispatch, and each repo's protected `release`
+  environment, whose approval every cut waits for. A rehearsal runs outside that environment and never
+  waits. Cross-EPIC release ordering is manage-versions' concern, not this action's.
 
 inputs:
   client_id:
@@ -335,20 +336,31 @@ runs:
           printf '%s' "$run_id"
         }
 
-        # Poll a run to completion. Prints its conclusion, or "blocked" when it parks at the protected
-        # `release` environment approval gate in `waiting`: a fully-autonomous train needs the bot
-        # allowed as an approver, so the state is surfaced to the operator. A blocked run is pending
-        # and may still complete on approval, so it is not a hard failure.
-        poll_run() { # $1=owner/repo $2=run_id
-          local repo="$1" run_id="$2" i st cc
-          for i in $(seq 1 180); do   # ~30 min cap at 10s (release-core can go install + build on a cold runner)
+        # Poll a run to completion and print its conclusion. A cut waits up to an hour at the protected
+        # `release` environment for a person's approval. A rehearsal never meets that environment, so a
+        # waiting rehearsal prints "blocked" at once, as does a cut nobody approves within the hour. A
+        # blocked run may still complete on approval, so it is not a hard failure.
+        poll_run() { # $1=owner/repo $2=run_id $3=approval(true|false)
+          local repo="$1" run_id="$2" approval="$3" polls=0 waits=0 st cc
+          while [ "$polls" -lt 180 ]; do   # ~30 min of running at 10s (release-core can go install + build on a cold runner)
             read -r st cc < <(GH_TOKEN="$DISPATCH_TOKEN" gh api "repos/$repo/actions/runs/$run_id" \
               --jq '"\(.status) \(.conclusion // "")"' 2>/dev/null || echo "unknown ")
             case "$st" in
               completed) printf '%s' "$cc"; return 0 ;;
               waiting)
-                echo "::error::${repo} run ${run_id} is parked (waiting) — the protected \`release\` environment needs an approval the [Agent] can't give. Allow the bot as a reviewer or relax the env, then re-dispatch." >&2
-                printf 'blocked'; return 0 ;;
+                if [ "$approval" != "true" ]; then
+                  echo "::error::${repo} run ${run_id} is waiting at the \`release\` environment: its release.yaml runs the rehearsal in the environment instead of in a credential-free plan job." >&2
+                  printf 'blocked'; return 0
+                fi
+                if [ "$waits" -ge 360 ]; then
+                  echo "::error::${repo} run ${run_id} was not approved within an hour." >&2
+                  printf 'blocked'; return 0
+                fi
+                if [ "$waits" -eq 0 ]; then
+                  echo "- ⏳ **${repo}** — cut awaiting approval: ${GITHUB_SERVER_URL}/${repo}/actions/runs/${run_id}" | tee -a "$GITHUB_STEP_SUMMARY" >&2
+                fi
+                waits=$((waits + 1)) ;;
+              *) polls=$((polls + 1)) ;;
             esac
             sleep 10
           done
@@ -489,11 +501,11 @@ runs:
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:dispatch"}]')
             echo "- ❌ **${repo}** — could not dispatch the rehearsal." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
-          concl=$(poll_run "$repo" "$rid")
+          concl=$(poll_run "$repo" "$rid" false)
           if [ "$concl" = "blocked" ]; then
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
             had_failure=true
-            echo "- ⏸️  **${repo}** — rehearsal parked at the release-env approval gate." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            echo "- ⏸️  **${repo}** — rehearsal parked at the release environment; its release.yaml predates the plan/cut split." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ "$concl" != "success" ]; then
             had_failure=true
@@ -515,13 +527,13 @@ runs:
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:dispatch"}]')
             echo "- ❌ **${repo}** — could not dispatch the live release." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
-          concl=$(poll_run "$repo" "$rid")
+          concl=$(poll_run "$repo" "$rid" true)
           if [ "$concl" = "blocked" ]; then
             # Recorded as pending: the run may still cut the tag on approval, so a resume waits for
             # it to clear. A fresh dispatch double-releases once the parked run is approved.
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
             had_failure=true
-            echo "- ⏸️  **${repo}** — live release parked at the release-env approval gate (pending). Approve the run, then re-dispatch to record the receipt." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            echo "- ⏸️  **${repo}** — live release not approved within the hour (pending). Approve the run, then re-dispatch to record the receipt." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           # Recover the cut tag from the tag-set diff, retrying the after-snapshot for ref-index lag.
           newtag=""

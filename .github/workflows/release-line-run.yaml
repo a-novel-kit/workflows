@@ -2,10 +2,10 @@ name: release line (reusable)
 
 # The reusable release-line cut (workflow_call). Every governed repo's thin `hotfix.yaml` caller runs
 # it when a backport pull request merges into `release/**`. It cuts the line's next patch from the
-# branch head behind the protected `release` environment, the human "who may publish" gate, and
-# pushes the bump commit to the line together with its tags, so the line's head is always its latest
-# patch. Nested actions are remote-pinned: a `./` path in a reusable workflow resolves against the
-# caller.
+# branch head behind the protected `release` environment, the human "who may publish" gate, as the
+# release App whose key only that environment holds, and pushes the bump commit to the line together
+# with its tags, so the line's head is always its latest patch. Nested actions are remote-pinned: a
+# `./` path in a reusable workflow resolves against the caller.
 #
 # The caller triggers on pull_request_target, which GitHub runs from the default branch's workflow
 # file and checks against the `release` environment as the default branch. A push trigger would run
@@ -32,9 +32,14 @@ on:
         type: boolean
         default: false
       client_id:
-        description: The [Agent] bot App client id.
+        description: The [Agent] bot App client id, for the failure ticket.
         required: true
         type: string
+      release_client_id:
+        description: The release App client id, the RELEASE_BOT_CLIENT_ID variable.
+        required: false
+        type: string
+        default: ""
       project_id:
         description: Node id of the org "Tasks" board (PVT_…) — escalate drives the failure ticket's Status here.
         required: true
@@ -53,6 +58,11 @@ on:
       app_private_key:
         description: The [Agent] bot App private key (PEM).
         required: true
+      release_private_key:
+        description: >
+          The release App private key (PEM). Pass secrets.RELEASE_BOT_PRIVATE_KEY by name: it exists
+          only in the `release` environment, which the cut job names.
+        required: false
       push_webhook:
         description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
         required: false
@@ -138,14 +148,17 @@ jobs:
             sleep 30
           done
 
+      # The credentials follow the release key. A caller that predates the release App, or a repo whose
+      # `release` environment holds no key, cuts as the agent, which the release rulesets stop admitting
+      # once they list the release App alone (a-novel-kit/stack#609).
       - name: Cut the patch
         uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.56.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.7.5"
           ref: ${{ inputs.branch }}
-          client_id: ${{ inputs.client_id }}
-          app_private_key: ${{ secrets.app_private_key }}
+          client_id: ${{ secrets.release_private_key != '' && inputs.release_client_id || inputs.client_id }}
+          app_private_key: ${{ secrets.release_private_key || secrets.app_private_key }}
           dry_run: ${{ inputs.dry_run }}
 
       - name: Escalate on failure
