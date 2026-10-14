@@ -201,6 +201,8 @@ runs:
           git tag "$t"
           tag_refs+=("refs/tags/$t")
         done <<< "$tags"
+        # GitHub creates no push event for more than three tags in one push, so a release with more
+        # sub-module tags would not start its tag-triggered publishing run.
         git push --atomic origin "HEAD:$BRANCH" "${tag_refs[@]}"
         gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes
