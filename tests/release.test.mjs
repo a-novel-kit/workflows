@@ -12,13 +12,23 @@ function repository(t) {
 }
 const releaseScript = (name) => join(root, "publish-actions/release-core", `${name}.mjs`);
 
-test("release branch guard treats branch names as data", (t) => {
+test("release guard treats branch names as data and refuses a cut without the release key", (t) => {
   const w = workspace(t);
-  const guard = step("publish-actions/release-core/action.yaml", "Guard — default branch only");
+  const guard = step("publish-actions/release-core/action.yaml", "Guard — default branch and credentials");
   for (const ref of ["master", "feature", "$(touch injected)"]) {
-    assert.equal(w.bash(guard, { REF_NAME: ref, DEFAULT_BRANCH: "master" }).status, ref === "master" ? 0 : 1);
+    const env = { REF_NAME: ref, DEFAULT_BRANCH: "master", DRY_RUN: "false", HAS_KEY: "true" };
+    assert.equal(w.bash(guard, env).status, ref === "master" ? 0 : 1);
     assert.equal(existsSync(join(w.cwd, "injected")), false);
   }
+  // A rehearsal needs no key; a cut whose job sits outside the release environment reads none.
+  for (const [dryRun, hasKey, status] of [
+    ["true", "false", 0],
+    ["false", "false", 1],
+  ])
+    assert.equal(
+      w.bash(guard, { REF_NAME: "master", DEFAULT_BRANCH: "master", DRY_RUN: dryRun, HAS_KEY: hasKey }).status,
+      status
+    );
 });
 
 test("release bump updates all package formats and quoted filenames, leaving versionless packages alone", (t) => {
@@ -185,6 +195,41 @@ test("release train distinguishes read failure, empty history and release types"
       ),
       expected
     );
+});
+
+test("release train waits for a cut's approval and never for a rehearsal", (t) => {
+  const w = workspace(t);
+  const script = functions(
+    step("generic-actions/release-train/action.yaml", "Reconstruct the Epic, derive bumps, drive each release.yaml"),
+    ["poll_run"]
+  );
+  w.stub("sleep", "");
+  // Each call answers the next status from STATUSES, repeating the last one.
+  w.stub(
+    "gh",
+    `
+    const fs = require('node:fs');
+    const statuses = process.env.STATUSES.split(',');
+    const n = fs.existsSync('calls') ? Number(fs.readFileSync('calls', 'utf8')) : 0;
+    fs.writeFileSync('calls', String(n + 1));
+    const status = statuses[Math.min(n, statuses.length - 1)];
+    console.log(status === 'completed' ? 'completed success' : status + ' ');
+  `
+  );
+  for (const [statuses, approval, expected, announced] of [
+    ["in_progress,waiting,waiting,in_progress,completed", "true", "success", true],
+    ["in_progress,waiting,completed", "false", "blocked", false],
+  ]) {
+    w.write("calls", "0");
+    w.write("summary", "");
+    const result = w.bash(`${script}\npoll_run "$@"`, { STATUSES: statuses, GITHUB_SERVER_URL: "https://github.com" }, [
+      "owner/repo",
+      "42",
+      approval,
+    ]);
+    assert.equal(succeeds(result), expected);
+    assert.equal(w.read("summary").includes("https://github.com/owner/repo/actions/runs/42"), announced);
+  }
 });
 
 test("release receipt replacement preserves prose and literal backslashes", (t) => {
