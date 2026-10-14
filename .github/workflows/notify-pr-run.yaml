@@ -57,6 +57,8 @@ jobs:
       github.event.workflow_run.name == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.head_branch != github.event.repository.default_branch ||
+      github.event_name == 'workflow_run' && github.event.workflow_run.name == 'pr-relay' &&
+      github.event.workflow_run.event == 'pull_request_review' ||
       github.event_name != 'workflow_run' &&
       (!github.event.pull_request.draft || github.event.action == 'converted_to_draft') &&
       (github.event.pull_request.user.type != 'Bot' || github.event.action == 'closed')
@@ -65,7 +67,7 @@ jobs:
       actions: read
     # One pull request's events post in the order they happened.
     concurrency:
-      group: notify-pr-${{ github.repository }}-${{ github.event.pull_request.number || github.event.workflow_run.head_branch }}
+      group: notify-pr-${{ github.repository }}-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch }}
       queue: max
     steps:
       - name: Mint read token
@@ -89,8 +91,33 @@ jobs:
           event="$(cat "$GITHUB_EVENT_PATH")"
           owner="${GITHUB_REPOSITORY%/*}"
 
+          # A review reaches this job through pr-relay, which a pull request's own workflow can
+          # rewrite, so its run names nothing trusted: the pull request and its latest review are
+          # read back, and the review stands in for the event GitHub would have sent.
+          if [ "$GITHUB_EVENT_NAME" = workflow_run ] && [ "$(jq -r .workflow_run.name <<<"$event")" = pr-relay ]; then
+            [ "$(jq -r .workflow_run.event <<<"$event")" = pull_request_review ] || exit 0
+            number="$(jq -r '.workflow_run.pull_requests[0].number // empty' <<<"$event")"
+            if [ -z "$number" ]; then
+              number="$(gh api "repos/$GITHUB_REPOSITORY/commits/$(jq -r .workflow_run.head_sha <<<"$event")/pulls" \
+                --jq '[.[] | select(.state == "open")][0].number // empty')"
+            fi
+            [ -n "$number" ] || exit 0
+            pull="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number")"
+            # The job skips drafts and bots' pull requests for a review GitHub delivers directly.
+            if [ "$(jq -r .draft <<<"$pull")" = true ] || [ "$(jq -r .user.type <<<"$pull")" = Bot ]; then
+              exit 0
+            fi
+            review="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$number/reviews" --jq '.[]' | jq -sc 'max_by(.submitted_at) // empty')"
+            [ -n "$review" ] || exit 0
+            kind=review_submitted
+            [ "$(jq -r .state <<<"$review")" = DISMISSED ] && kind=review_dismissed
+            event="$(jq -n --argjson pull "$pull" --argjson review "$review" '{
+              review: ($review | .state |= ascii_downcase),
+              pull_request: {number: $pull.number, draft: $pull.draft, user: $pull.user},
+              sender: {id: $review.user.id, login: $review.user.login}
+            }')"
           # A failed run names its pull request by branch; the merge queue's branch carries the number.
-          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
+          elif [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
             kind=failed
             branch="$(jq -r .workflow_run.head_branch <<<"$event")"
             if [[ $branch =~ ^gh-readonly-queue/.+/pr-([0-9]+)-[0-9a-f]+$ ]]; then
@@ -283,7 +310,7 @@ jobs:
                 review_users: ($review.users // [] | join(" ")),
                 review_role: ($review.role // false)
               }
-            | to_entries[] | "\(.key)<<\($d)\n\(.value)\n\($d)"' "$GITHUB_EVENT_PATH" >>"$GITHUB_OUTPUT"
+            | to_entries[] | "\(.key)<<\($d)\n\(.value)\n\($d)"' <<<"$event" >>"$GITHUB_OUTPUT"
           echo "Pull request #$number, $kind." >>"$GITHUB_STEP_SUMMARY"
 
       - name: Resolve the owners

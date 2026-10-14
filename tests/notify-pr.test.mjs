@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { step, succeeds, workspace } from "./helpers.mjs";
+import { step, succeeds, workspace, manifest } from "./helpers.mjs";
 
 const decide = step(".github/workflows/notify-pr-run.yaml", "state");
 const kushuh = { databaseId: 1, login: "kushuh" };
@@ -75,9 +75,16 @@ const run = (
 });
 
 /** Runs the decision against a stubbed gh and returns its outputs and the gh calls it made. */
-function notify(t, eventName, event, pr, { runs = [], jobs = [], pulls = "7", at = settled } = {}) {
+function notify(
+  t,
+  eventName,
+  event,
+  pr,
+  { runs = [], jobs = [], pulls = "7", at = settled, pull = {}, reviews = [] } = {}
+) {
   const w = workspace(t);
   w.write("output", "");
+  w.write("gh.log", "");
   w.write("event.json", JSON.stringify(event));
   w.stub("sleep", "");
   w.stub(
@@ -85,6 +92,8 @@ function notify(t, eventName, event, pr, { runs = [], jobs = [], pulls = "7", at
     `const args = process.argv.slice(2);
     require("fs").appendFileSync(process.env.GH_LOG, JSON.stringify(args) + "\\n");
     if (args.includes("graphql")) console.log(process.env.PR);
+    else if (args.some((arg) => arg.endsWith("/reviews"))) console.log(process.env.REVIEWS);
+    else if (args.some((arg) => arg.split("/").length === 5 && arg.split("/")[3] === "pulls")) console.log(process.env.PULL);
     else if (args.some((arg) => arg.endsWith("/pulls"))) console.log(process.env.PULLS);
     else if (args.some((arg) => arg.includes("/runs?"))) console.log(process.env.RUNS);
     else if (args.some((arg) => arg.endsWith("/jobs"))) console.log(process.env.JOBS);
@@ -103,6 +112,8 @@ function notify(t, eventName, event, pr, { runs = [], jobs = [], pulls = "7", at
       RUNS: runs.map((entry) => JSON.stringify(entry)).join("\n"),
       JOBS: JSON.stringify(jobs),
       PULLS: pulls,
+      PULL: JSON.stringify(pull),
+      REVIEWS: reviews.map((entry) => JSON.stringify(entry)).join("\n"),
     })
   );
   const outputs = Object.fromEntries(
@@ -112,6 +123,7 @@ function notify(t, eventName, event, pr, { runs = [], jobs = [], pulls = "7", at
     .read("gh.log")
     .trim()
     .split("\n")
+    .filter(Boolean)
     .map((line) => JSON.parse(line));
   return { outputs, calls };
 }
@@ -445,4 +457,69 @@ test("notify-pr skips a failed run whose branch no longer has an open pull reque
   const { outputs, calls } = notify(t, "workflow_run", runEvent("renovate/gone"), bot(), { pulls: "" });
   assert.deepEqual(outputs, {});
   assert.ok(calls.every((args) => !args.includes("graphql")));
+});
+
+test("notify-pr reads a relayed review back from the pull request instead of trusting the run", (t) => {
+  const relayed = (fields = {}) =>
+    runEvent("feature", { name: "pr-relay", event: "pull_request_review", pull_requests: [{ number: 7 }], ...fields });
+  const person = { number: 7, draft: false, user: { login: "kushuh", type: "User" } };
+  const reviewed = (state, at) => ({
+    state,
+    body: "",
+    submitted_at: at,
+    user: { id: 2, login: "EmperorDada" },
+    html_url: "https://github.com/a-novel/service-authentication/pull/7#r9",
+  });
+  const older = reviewed("COMMENTED", "2026-10-12T10:00:00Z");
+  const link = " · [read the review](https://github.com/a-novel/service-authentication/pull/7#r9)";
+  for (const [name, event, pull, reviews, expected] of [
+    [
+      "approval",
+      relayed(),
+      person,
+      [older, reviewed("APPROVED", "2026-10-12T11:00:00Z")],
+      ["succeeded", `**Approved** by EmperorDada${link}`, "1"],
+    ],
+    [
+      "dismissal",
+      relayed(),
+      person,
+      [older, reviewed("DISMISSED", "2026-10-12T11:00:00Z")],
+      ["in-progress", "**Review dismissed** · EmperorDada", "1"],
+    ],
+    // A run that names no pull request: the commit's open pull request stands in.
+    [
+      "unnamed pull request",
+      relayed({ pull_requests: [] }),
+      person,
+      [reviewed("APPROVED", "2026-10-12T11:00:00Z")],
+      ["succeeded", `**Approved** by EmperorDada${link}`, "1"],
+    ],
+    [
+      "bot's pull request",
+      relayed(),
+      { ...person, user: { login: "renovate[bot]", type: "Bot" } },
+      [reviewed("APPROVED", "2026-10-12T11:00:00Z")],
+      [undefined],
+    ],
+    ["draft", relayed(), { ...person, draft: true }, [reviewed("APPROVED", "2026-10-12T11:00:00Z")], [undefined]],
+    [
+      "relayed merge group",
+      relayed({ event: "merge_group" }),
+      person,
+      [reviewed("APPROVED", "2026-10-12T11:00:00Z")],
+      [undefined],
+    ],
+  ]) {
+    const { outputs } = notify(t, "workflow_run", event, pullRequest(), { pull, reviews });
+    const [color, title, users] = expected;
+    assert.equal(outputs.review_color, color, name);
+    if (!color) continue;
+    assert.equal(headline(outputs.review_description), title, name);
+    assert.equal(outputs.review_users, users, name);
+  }
+  // The job admits a relayed review; the step reads everything else back.
+  const condition = manifest(".github/workflows/notify-pr-run.yaml").jobs.notify.if;
+  assert.match(condition, /github\.event_name == 'workflow_run' && github\.event\.workflow_run\.name == 'pr-relay'/);
+  assert.match(condition, /workflow_run\.event == 'pull_request_review'/);
 });
