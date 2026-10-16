@@ -265,4 +265,4 @@ Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/wo
 
 ## Contributing
 
-Setup and day-to-day commands are in the [developer onboarding guide](https://github.com/a-novel-kit/.github/blob/master/README.md); workflows-specific notes are in [CONTRIBUTING.md](./CONTRIBUTING.md).
+Setup and day-to-day commands are in the [developer guide](https://a-novel-kit.github.io/stack/); workflows-specific notes are in [CONTRIBUTING.md](./CONTRIBUTING.md).
