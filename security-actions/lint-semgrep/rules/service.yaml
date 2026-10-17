@@ -11,7 +11,7 @@
 rules:
   # An unspanned method folds its latency into the caller and surfaces errors
   # with no operation name.
-  - id: agora-must-open-span
+  - id: a-novel-must-open-span
     languages: [go]
     severity: ERROR
     message: >-
@@ -82,7 +82,7 @@ rules:
   # Scoped to the layers that carry request flow. internal/lib is exempt by
   # design: a context helper (TransferMasterKeyContext, any WithX wrapper) must
   # return the derived context — that is the whole pattern.
-  - id: agora-no-context-return
+  - id: a-novel-no-context-return
     languages: [go]
     severity: ERROR
     message: >-
@@ -117,7 +117,7 @@ rules:
   # The compliant case is excluded with pattern-not rather than a negated regex:
   # semgrep's regex engine has no lookahead. Return arity is enumerated because
   # Go patterns have no wildcard for it.
-  - id: agora-dep-interface-method-must-be-exec
+  - id: a-novel-dep-interface-method-must-be-exec
     languages: [go]
     severity: ERROR
     message: >-
@@ -164,7 +164,7 @@ rules:
   # `(ctx context.Context, request *XxxRequest)` so the request can gain a field
   # without breaking callers. This catches the non-pointer case; a pointer to a
   # badly-named struct needs the lookahead semgrep does not have.
-  - id: agora-exec-takes-request-pointer
+  - id: a-novel-exec-takes-request-pointer
     languages: [go]
     severity: ERROR
     message: >-
@@ -198,7 +198,7 @@ rules:
   # write-go, Secrets: "Never log, trace, or put in span attributes: passwords,
   # tokens, API keys, private keys ... Record identifiers only." A span attribute
   # is the easiest of these to add by reflex and the hardest to notice later.
-  - id: agora-no-secret-in-span-attribute
+  - id: a-novel-no-secret-in-span-attribute
     languages: [go]
     severity: ERROR
     message: >-
@@ -223,7 +223,7 @@ rules:
   # targets exactly the mutation this forbids.
   # NOTE: exempts a field written under a mutex — the rule's premise is that
   # these types carry no synchronisation, which a sync.Mutex field disproves.
-  - id: agora-no-receiver-mutation
+  - id: a-novel-no-receiver-mutation
     languages: [go]
     severity: ERROR
     message: >-
@@ -285,7 +285,7 @@ rules:
   # handler answering the request chooses one. WithTag also extends a tagged
   # error in place, which is safe only because a handler never shares the
   # error it tags.
-  - id: agora-error-tag-in-handler
+  - id: a-novel-error-tag-in-handler
     languages: [go]
     severity: ERROR
     message: >-

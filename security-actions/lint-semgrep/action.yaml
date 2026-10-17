@@ -1,6 +1,6 @@
 name: lint semgrep
 description: >
-  Enforce the Agora structural conventions golangci-lint cannot express: a call that must be
+  Enforce the A-Novel structural conventions golangci-lint cannot express: a call that must be
   present, a pairing that must hold. The ruleset ships with the action, so a consuming repo carries
   no semgrep config. Rules are read from disk — no network call, so nothing off-repo can stall it.
 

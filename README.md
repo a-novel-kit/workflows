@@ -210,11 +210,11 @@ changes. See the [adoption guide](./docs/migrations/v1.40.0.md).
 Each ships its own config, so a consuming repo carries none. All three run offline: nothing
 off-repo can stall them, which is the property a required check needs.
 
-| Action           | Purpose                                                                |
-| ---------------- | ---------------------------------------------------------------------- |
-| `lint-semgrep`   | Enforce the Agora structural conventions golangci-lint cannot express. |
-| `scan-secrets`   | Scan the working tree for committed credentials (gitleaks).            |
-| `lint-workflows` | Audit GitHub Actions workflows for security defects (zizmor).          |
+| Action           | Purpose                                                                  |
+| ---------------- | ------------------------------------------------------------------------ |
+| `lint-semgrep`   | Enforce the A-Novel structural conventions golangci-lint cannot express. |
+| `scan-secrets`   | Scan the working tree for committed credentials (gitleaks).              |
+| `lint-workflows` | Audit GitHub Actions workflows for security defects (zizmor).            |
 
 Each takes `advisory: "true"` to report without failing, for a repo adopting the check over an
 existing backlog.
