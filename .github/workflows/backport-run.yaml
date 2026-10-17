@@ -147,6 +147,9 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+          # The line starts at an old tag whose workflow files differ from the default branch's, and
+          # GitHub refuses that ref to an App token without the workflows permission.
+          permission-workflows: write
       - name: Create the release line
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
