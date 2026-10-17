@@ -8,8 +8,10 @@ name: backport (reusable)
 # fix lands on the default branch first, through its normal pull request. This workflow then carries
 # each fix commit onto the release line `release/vX.Y`, created from the line's latest tag on first
 # use, as its own backport pull request: CI and review run against the released code, and merging
-# the backport cuts the patch (release-line-run.yaml). A fix that does not apply cleanly opens
-# nothing; the run fails with the commands to write the release line's form of the fix by hand.
+# the backport cuts the patch (release-line-run.yaml). A backport whose patch is the reviewed fix's
+# own carries that review: the Dependencies App opens it and the agent approves it. One that git had
+# to fit to different context opens as the agent and waits for a person. A fix that does not apply
+# opens nothing; the run fails with the commands to write the release line's form of the fix by hand.
 #
 # A hotfix is not gated on the org kill switch. The switch pauses normal automation, while the
 # emergency patch path stays open, gated by the admin check here and the `release` environment on
@@ -43,6 +45,13 @@ on:
         description: The [Agent] bot App client id.
         required: true
         type: string
+      dependency_client_id:
+        description: >
+          The Dependencies App client id. When set, that App opens each clean backport, so the agent can
+          approve it; without it every backport waits for a person.
+        required: false
+        type: string
+        default: ""
       project_id:
         description: Node id of the org "Tasks" board (PVT_…) — escalate drives the failure ticket's Status here.
         required: true
@@ -61,6 +70,9 @@ on:
       app_private_key:
         description: The [Agent] bot App private key (PEM).
         required: true
+      dependency_private_key:
+        description: The Dependencies App private key (PEM), with dependency_client_id.
+        required: false
       push_webhook:
         description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
         required: false
@@ -88,6 +100,19 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
+      # A pull request's approval must come from someone other than its last pusher, so a clean
+      # backport is pushed and opened by the Dependencies App and approved by the agent.
+      - name: Mint backport token
+        id: backport-token
+        if: ${{ inputs.dependency_client_id != '' }}
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.dependency_client_id }}
+          private-key: ${{ secrets.dependency_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@v7
         with:
           token: ${{ steps.token.outputs.token }}
@@ -98,6 +123,7 @@ jobs:
         id: backport
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
+          BACKPORT_TOKEN: ${{ steps.backport-token.outputs.token }}
           LINE: ${{ inputs.line }}
           FIX_REFS: ${{ inputs.fix_refs }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -162,11 +188,30 @@ jobs:
             echo "$sha"
           }
 
+          # Names the faster path: when the line's baseline is the latest release and the default branch
+          # holds nothing unreleased but the fixes, a normal patch release ships them with one review
+          # less. Prints nothing otherwise.
+          fast_path() {
+            local baseline="$1" latest unreleased
+            shift
+            latest=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            [ "$#" -gt 0 ] && [ "$latest" = "$baseline" ] || return 0
+            git merge-base --is-ancestor "$baseline" "origin/$DEFAULT_BRANCH" || return 0
+            unreleased=$(git rev-list "$baseline..origin/$DEFAULT_BRANCH" | grep -vxF -f <(printf '%s\n' "$@") || true)
+            [ -z "$unreleased" ] || return 0
+            echo "\`$DEFAULT_BRANCH\` holds nothing unreleased since \`$baseline\` but these fixes: a normal patch release ships them with one review less than a backport."
+          }
+
+          # Prints a commit's patch-id, which names its diff whatever its message, author or line numbers.
+          patch_of() {
+            git show "$1" | git patch-id --stable | cut -d' ' -f1
+          }
+
           # Cherry-picks one resolved fix onto the release line as its own pull request, titled with
           # the fix's own subject. A conflict leaves nothing behind and appends the commands to write
           # the line's form of the fix by hand to $INSTRUCTIONS, the escalation ticket's body.
           backport_fix() {
-            local sha="$1" line="$2" base="release/v$2" subject branch signed
+            local sha="$1" line="$2" base="release/v$2" subject branch signed url writer="${GH_TOKEN:-}" clean=false
             # The title reuses the fix's subject, which reached the default branch Conventional.
             subject=$(git log -1 --format=%s "$sha")
             # `git cherry` prints `-` for a commit whose patch is already on the line.
@@ -201,17 +246,29 @@ jobs:
               echo "[dry-run] would open \`$subject [v$line]\` from \`$branch\` into \`$base\`." >> "$GITHUB_STEP_SUMMARY"
               return 0
             fi
+            # A clean backport is the reviewed fix unchanged, so the Dependencies App writes it and the
+            # agent can approve it. One that git fitted to different context stays the agent's.
+            if [ -n "${BACKPORT_TOKEN:-}" ] && [ "$(patch_of "$sha")" = "$(patch_of HEAD)" ]; then
+              writer="$BACKPORT_TOKEN" clean=true
+            fi
             git push --quiet origin "HEAD:refs/heads/$branch"
             # The release line requires signed commits, and GitHub signs only the commits the App makes
             # through its API. The push put the cherry-pick's tree on GitHub, so the App recreates the
             # commit from it and moves the backport branch, which no ruleset requires signed, onto it.
-            signed=$(gh api "repos/$GITHUB_REPOSITORY/git/commits" -f message="$(git log -1 --format=%B)" \
+            signed=$(GH_TOKEN="$writer" gh api "repos/$GITHUB_REPOSITORY/git/commits" -f message="$(git log -1 --format=%B)" \
               -f tree="$(git rev-parse 'HEAD^{tree}')" -f "parents[]=$(git rev-parse HEAD^)" --jq .sha) || return 1
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" -f sha="$signed" -F force=true \
-              --silent || return 1
-            gh pr create --base "$base" --head "$branch" --title "$subject [v$line]" \
-              --body "Backports ${sha} from \`$DEFAULT_BRANCH\` to \`$base\`. Merging it cuts the next v${line} patch." \
-              >> "$GITHUB_STEP_SUMMARY"
+            GH_TOKEN="$writer" gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" -f sha="$signed" \
+              -F force=true --silent || return 1
+            url=$(GH_TOKEN="$writer" gh pr create --base "$base" --head "$branch" --title "$subject [v$line]" \
+              --body "Backports ${sha} from \`$DEFAULT_BRANCH\` to \`$base\`. Merging it cuts the next v${line} patch.") || return 1
+            echo "$url" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$clean" = true ]; then
+              gh pr review "$url" --approve --body "Carries ${sha} unchanged, as reviewed on \`$DEFAULT_BRANCH\`." || return 1
+              gh pr merge "$url" --auto --squash || return 1
+              echo "Approved it: it carries the reviewed fix unchanged, so it merges once its checks pass." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "It waits for a person's review." >> "$GITHUB_STEP_SUMMARY"
+            fi
           }
 
           git config user.name "${APP_SLUG}[bot]"
@@ -227,6 +284,7 @@ jobs:
             exit 1
           fi
           ensure_release_line "$LINE" "$baseline"
+          fast_path "$baseline" "${fixes[@]}" >> "$GITHUB_STEP_SUMMARY"
 
           INSTRUCTIONS="$RUNNER_TEMP/backport-instructions.md"
           failed=0

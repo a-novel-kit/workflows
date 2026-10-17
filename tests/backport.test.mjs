@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { functions, step, succeeds, workspace } from "./helpers.mjs";
 
 const dispatch = step(".github/workflows/backport-run.yaml", "Open backport pull requests");
-const backport = functions(dispatch, ["release_baseline", "ensure_release_line"]);
+const backport = functions(dispatch, ["release_baseline", "ensure_release_line", "fast_path"]);
 const pending = functions(step(".github/workflows/release-line-run.yaml", "pending"), ["line_pending"]);
 
 /** A repository released at v1.4.0 whose default branch is pushed to a bare origin. */
@@ -128,6 +128,68 @@ test("a clean backport opens one pull request carrying the fix alone, never the 
   assert.equal(pulls().length, 1);
 });
 
+test("a clean backport is opened by the Dependencies App and approved; one fitted to other context waits for a person", (t) => {
+  const { w, git, commit, backports } = repository(t);
+  // Each call records the token it ran with; a created pull request answers with its URL.
+  w.stub(
+    "gh",
+    `
+    const args = process.argv.slice(2), field = (name) => args.find((arg) => arg.startsWith(name + '='))?.slice(name.length + 1);
+    require('node:fs').appendFileSync('tokens', JSON.stringify([process.env.GH_TOKEN, ...args]) + '\\n');
+    const origin = (...command) => require('node:child_process').execFileSync('git', ['--git-dir=remote.git', ...command], {
+      encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'dependencies[bot]', GIT_AUTHOR_EMAIL: 'dependencies[bot]@users.noreply.github.com', GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: 'noreply@github.com' },
+    }).trim();
+    if (args[1]?.endsWith('/git/commits')) console.log(origin('commit-tree', field('tree'), '-p', field('parents[]'), '-m', field('message')));
+    else if (args[2] === 'PATCH') origin('update-ref', 'refs/heads/' + args[3].split('/git/refs/heads/')[1], field('sha'));
+    else if (args[0] === 'pr' && args[1] === 'create') console.log('https://github.com/pulls/' + args[args.indexOf('--head') + 1]);
+  `
+  );
+  w.write("routes.js", "a\nb\nc\nd\ne\nf\ng\n");
+  git("add", "routes.js");
+  git("commit", "-qm", "feat: routes");
+  git("tag", "v1.4.1");
+  git("push", "-q", "origin", "master", "v1.4.1");
+  // The clean fix's context is unchanged since v1.4.1. The other's context holds an unreleased change
+  // two lines away: git fits it onto the released code, but its patch is no longer the reviewed one.
+  const clean = commit("limits.js", "const max = 5;\n", "fix: lower the request limit");
+  commit("routes.js", "a\nb\nC\nd\ne\nf\ng\n", "feat: unreleased route");
+  const fitted = commit("routes.js", "a\nb\nC\nd\nE\nf\ng\n", "fix: route e");
+  git("push", "-q", "origin", "master");
+
+  succeeds(backports(`${clean} ${fitted}`, { GH_TOKEN: "agent", BACKPORT_TOKEN: "dependencies" }));
+  const tokens = w.read("tokens").trim().split("\n").map(JSON.parse);
+  const by = (sha) => tokens.filter((call) => call.join(" ").includes(`backport/v1.4-${sha.slice(0, 12)}`));
+  const cleanURL = `https://github.com/pulls/backport/v1.4-${clean.slice(0, 12)}`;
+  assert.deepEqual(
+    by(clean).map(([token, ...args]) => [token, args[0], args[1]]),
+    [
+      ["dependencies", "api", "-X"],
+      ["dependencies", "pr", "create"],
+      ["agent", "pr", "review"],
+      ["agent", "pr", "merge"],
+    ]
+  );
+  assert.deepEqual(by(clean).at(-1).slice(1), ["pr", "merge", cleanURL, "--auto", "--squash"]);
+  assert.deepEqual(
+    by(fitted).map(([token, ...args]) => [token, args[0], args[1]]),
+    [
+      ["agent", "api", "-X"],
+      ["agent", "pr", "create"],
+    ]
+  );
+  // Without the Dependencies App's credentials, every backport waits for a person, as before.
+  w.write("tokens", "");
+  git(
+    "push",
+    "-q",
+    "origin",
+    `:refs/heads/backport/v1.4-${clean.slice(0, 12)}`,
+    `:refs/heads/backport/v1.4-${fitted.slice(0, 12)}`
+  );
+  succeeds(backports(clean, { GH_TOKEN: "agent" }));
+  assert.equal(w.read("tokens").includes('"review"'), false);
+});
+
 test("a fix written against unreleased work opens nothing and hands over the release line's form", (t) => {
   const { w, git, commit, backports, remote, pulls } = repository(t);
   // The default branch renames user to currentUser after v1.4.0, then fixes the renamed line. That
@@ -169,6 +231,22 @@ test("a backport refuses refs that are not default-branch commits before creatin
   }
   assert.equal(remote("refs/heads/release/v1.4"), "");
   assert.deepEqual(pulls(), []);
+});
+
+test("the dispatch names a normal release only when the fixes are all the default branch holds unreleased", (t) => {
+  const { git, commit, sh } = repository(t);
+  const fix = commit("auth.js", "if (user.id === owner && owner) allow();\n", "fix: owner check");
+  git("push", "-q", "origin", "master");
+  // The line's baseline is the latest release, and the default branch holds only the fix.
+  assert.match(succeeds(sh(`fast_path v1.4.0 ${fix}`)), /a normal patch release ships them/);
+  // No fix to ship, a newer release than the line, or other unreleased work: the backport is the path.
+  assert.equal(succeeds(sh("fast_path v1.4.0")), "");
+  git("tag", "v1.5.0");
+  assert.equal(succeeds(sh(`fast_path v1.4.0 ${fix}`)), "");
+  git("tag", "-d", "v1.5.0");
+  commit("limits.js", "const max = 20;\n", "feat: higher limit");
+  git("push", "-q", "origin", "master");
+  assert.equal(succeeds(sh(`fast_path v1.4.0 ${fix}`)), "");
 });
 
 test("a release line is pending until its head carries one of its own tags", (t) => {
