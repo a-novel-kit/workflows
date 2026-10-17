@@ -51,6 +51,10 @@ on:
 jobs:
   rollback:
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     # The default token serves only the admin check, which needs Metadata:read; the rollback action
     # mints its own least-privilege [Agent] tokens for every read and write.
     permissions:

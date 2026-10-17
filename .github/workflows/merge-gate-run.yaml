@@ -79,6 +79,10 @@ on:
 jobs:
   evaluate:
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     # The gate mints its own [Agent] token with checks:write and never uses the
     # default token, so this job needs no repository permissions.
     permissions: {}
@@ -104,6 +108,9 @@ jobs:
     # Only where there is a PR to enable (pull request events), and never on a draft.
     if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     # The member check reads the event payload with no API call, and enable-auto-merge
     # mints its own [Agent] token, so no default-token permissions are needed.
     permissions: {}

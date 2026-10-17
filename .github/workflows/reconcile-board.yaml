@@ -89,6 +89,10 @@ jobs:
     needs: rederive
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     steps:
       - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.59.0
@@ -110,6 +114,9 @@ jobs:
   # ships. It is independent of the rollup pass and goes live on its own schedule.
   archive:
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     steps:
       - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.59.0
@@ -136,6 +143,9 @@ jobs:
   # Enumerate every open PR in the org, paginated, into matrices for the two per-PR passes.
   enumerate:
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     outputs:
       tasks: ${{ steps.list.outputs.tasks }}
@@ -198,6 +208,9 @@ jobs:
     needs: enumerate
     if: ${{ needs.enumerate.outputs.tasks != '[]' }}
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     strategy:
       fail-fast: false
@@ -234,6 +247,9 @@ jobs:
     needs: enumerate
     if: ${{ needs.enumerate.outputs.epic_prs != '[]' }}
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     strategy:
       fail-fast: false
@@ -261,6 +277,9 @@ jobs:
   # roll-forward, so nothing is scoped here. dry_run threads from the caller.
   detect:
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     steps:
       - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.59.0
@@ -281,6 +300,9 @@ jobs:
   # independent of the other passes.
   render:
     runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
     permissions: {}
     steps:
       - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.59.0

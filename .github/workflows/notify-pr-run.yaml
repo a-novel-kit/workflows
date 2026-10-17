@@ -49,6 +49,10 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     # A bot's pull request reaches the job only through a failed CI run or its close. Repos run `main`
     # on pull_request, merge_group or a push to every branch, so the branch is what tells a pull
     # request's run from the default branch's.
