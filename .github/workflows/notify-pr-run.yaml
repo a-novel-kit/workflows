@@ -2,11 +2,12 @@ name: notify-pr (reusable)
 
 # Tells people in Discord where each pull request stands, without the dependency bots' noise. Every
 # governed repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on pull request,
-# review and failed CI events. A person's pull request posts its lifecycle to the pull-requests
-# channel, pinging its owner: the assignees, else the assignees of the issues it closes, else the
-# repository's role. Its reviews post to the reviews channel. A bot's pull request posts only when
-# a commit of it fails CI, pinging the repository's role the first time, and when it merges or
-# closes after a failure. Drafts post nothing, and a post never pings the person who caused it.
+# review and failed CI events. A person's pull request posts to the reviews channel when it waits on
+# a review, gets one, merges or drops out of the merge queue. A review request pings its reviewers;
+# a review or a drop pings the owner: the assignees, else the assignees of the issues it closes,
+# else the repository's role. A bot's pull request posts only when a commit of it fails CI, pinging
+# the repository's role the first time, and when it merges or closes after a failure. Drafts post
+# nothing, and a post never pings the person who caused it.
 on:
   workflow_call:
     inputs:
@@ -33,9 +34,6 @@ on:
       private_key:
         required: true
         description: The [Agent] bot App private key (PEM).
-      pull_requests_webhook:
-        required: false
-        description: Discord webhook of the org's pull-requests channel (PULL_REQUESTS_WEBHOOK). Empty skips those posts.
       reviews_webhook:
         required: false
         description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK). Empty skips those posts.
@@ -63,8 +61,7 @@ jobs:
       github.event.workflow_run.head_branch != github.event.repository.default_branch ||
       github.event_name == 'workflow_run' && github.event.workflow_run.name == 'pr-relay' &&
       github.event.workflow_run.event == 'pull_request_review' ||
-      github.event_name != 'workflow_run' &&
-      (!github.event.pull_request.draft || github.event.action == 'converted_to_draft') &&
+      github.event_name != 'workflow_run' && !github.event.pull_request.draft &&
       (github.event.pull_request.user.type != 'Bot' || github.event.action == 'closed')
     # Lists the CI runs of a bot's pull request; the pull request itself goes through the App.
     permissions:
@@ -137,14 +134,14 @@ jobs:
             number="$(jq -r .pull_request.number <<<"$event")"
           fi
 
-          # A ready pull request is read a minute later, so the assignees and reviewers automation adds
-          # meanwhile join its post; a change from that minute posts nothing, dated by its run's
-          # creation. A dequeue's reason reaches the timeline just after the event.
+          # A ready pull request is read a minute later, so the reviewers automation requests meanwhile
+          # join its post; a request from that minute posts nothing, dated by its run's creation. A
+          # dequeue's reason reaches the timeline just after the event.
           at=""
           case "$kind" in
             opened | ready_for_review) sleep 60 ;;
             dequeued) sleep 10 ;;
-            assigned | unassigned | review_requested | review_request_removed)
+            review_requested | review_request_removed)
               at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
               ;;
           esac
@@ -220,38 +217,17 @@ jobs:
                + if ($run.run_attempt // 1) > 1 then [$run] else [] end) as $failed_before
             | any($failed_before[]; .head_sha == $run.head_sha and .id != $run.id) as $reported
             | [$pr.dropped.nodes[].reason | ascii_downcase] as $drops
-            | (if $pr.assignees.nodes == [] then "nobody assigned" else "assigned to \($pr.assignees.nodes | logins)" end) as $assigned
 
-            # Posts by event: a color, a headline, and who to ping.
+            # At most one post by event: a color, a headline, and who to ping.
             | (if $bot then
                 if $kind == "failed" and $open and ($reported | not) then
-                  {channel: "dependencies", color: "failed"}
+                  {color: "failed"}
                   + if $failed_before == [] then {headline: "**CI failed**", role: true}
                     else {headline: "**CI failed again**"} end
                 elif $kind == "closed" and $failed_before != [] then
-                  {channel: "dependencies"}
-                  + if $pr.state == "MERGED" then {color: "succeeded", headline: "**Merged** after failing CI"}
-                    else {color: "cancelled", headline: "**Closed** after failing CI"} end
+                  if $pr.state == "MERGED" then {color: "succeeded", headline: "**Merged** after failing CI"}
+                  else {color: "cancelled", headline: "**Closed** after failing CI"} end
                 else null end
-              elif $kind == "opened" or $kind == "ready_for_review" then
-                {channel: "pull_requests", color: "started", headline: "**Ready for review** · \($assigned)"} + $to_owners
-              elif $kind == "converted_to_draft" then
-                {channel: "pull_requests", color: "cancelled", headline: "**Back to draft**"}
-              elif ($kind == "assigned" or $kind == "unassigned") and $open and ($settling | not) then
-                {channel: "pull_requests", color: "upcoming", headline: "**Assignees changed** · \($assigned)"} + $to_owners
-              elif $kind == "closed" then
-                {channel: "pull_requests"}
-                + if $pr.state == "MERGED" then {color: "succeeded", headline: "**Merged**"}
-                  else {color: "cancelled", headline: "**Closed** without merging"} end
-              elif $kind == "reopened" then
-                {channel: "pull_requests", color: "started", headline: "**Reopened** · \($assigned)"} + $to_owners
-              # recover-prs re-queues a pull request whose checks timed out, up to three times.
-              elif $kind == "dequeued" and $open and ($drops[-1] // "merged") != "merged"
-                and ($drops[-1] != "checks_timed_out" or ($drops | map(select(. == "checks_timed_out")) | length) > 3) then
-                {channel: "pull_requests", color: "failed",
-                 headline: "**Dropped from the merge queue** · \($drops[-1] | gsub("_"; " "))"} + $to_owners
-              else null end) as $lifecycle
-            | (if $bot then null
               elif $kind == "opened" or $kind == "ready_for_review" or
                 ($kind == "review_request_removed" and ($settling | not)) then
                 if $unreviewed then {color: "upcoming", headline: "**Needs a reviewer**", role: true}
@@ -276,7 +252,14 @@ jobs:
               elif $kind == "review_dismissed" then
                 {color: "in-progress", headline: "**Review dismissed** · \($event.review.user.login)"}
                 + if $pr.reviewDecision == "APPROVED" then {} else $to_owners end
-              else null end) as $review
+              elif $kind == "closed" and $pr.state == "MERGED" then
+                {color: "succeeded", headline: "**Merged**"}
+              # recover-prs re-queues a pull request whose checks timed out, up to three times.
+              elif $kind == "dequeued" and $open and ($drops[-1] // "merged") != "merged"
+                and ($drops[-1] != "checks_timed_out" or ($drops | map(select(. == "checks_timed_out")) | length) > 3) then
+                {color: "failed", headline: "**Dropped from the merge queue** · \($drops[-1] | gsub("_"; " "))"}
+                + $to_owners
+              else null end) as $post
 
             # What every post says beyond its headline.
             | (([$pr.closingIssuesReferences.nodes[].projectItems.nodes[].target.date // empty] | first
@@ -304,62 +287,36 @@ jobs:
             | {
                 title: "\($repo)#\($pr.number) · \($pr.title)",
                 url: $pr.url,
-                lifecycle_channel: ($lifecycle.channel // ""),
-                lifecycle_color: ($lifecycle.color // ""),
-                lifecycle_description: (if $lifecycle then [$lifecycle.headline] + $details | join("\n") else "" end),
-                lifecycle_users: ($lifecycle.users // [] | join(" ")),
-                lifecycle_role: ($lifecycle.role // false),
-                review_color: ($review.color // ""),
-                review_description: (if $review then [$review.headline] + $details | join("\n") else "" end),
-                review_users: ($review.users // [] | join(" ")),
-                review_role: ($review.role // false)
+                channel: (if $bot then "dependencies" else "reviews" end),
+                color: ($post.color // ""),
+                description: (if $post then [$post.headline] + $details | join("\n") else "" end),
+                users: ($post.users // [] | join(" ")),
+                role: ($post.role // false)
               }
             | to_entries[] | "\(.key)<<\($d)\n\(.value)\n\($d)"' <<<"$event" >>"$GITHUB_OUTPUT"
           echo "Pull request #$number, $kind." >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Resolve the owners
-        id: owners
-        if: steps.state.outputs.lifecycle_users != ''
+      - name: Resolve the pings
+        id: users
+        if: steps.state.outputs.users != ''
         uses: a-novel-kit/workflows/generic-actions/discord-users@v1.59.1
         with:
-          github_user_ids: ${{ steps.state.outputs.lifecycle_users }}
+          github_user_ids: ${{ steps.state.outputs.users }}
           bws_access_token: ${{ secrets.bws_access_token }}
           bws_server_url: ${{ inputs.bws_server_url }}
 
-      - name: Resolve the review pings
-        id: reviewers
-        if: steps.state.outputs.review_users != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.59.1
-        with:
-          github_user_ids: ${{ steps.state.outputs.review_users }}
-          bws_access_token: ${{ secrets.bws_access_token }}
-          bws_server_url: ${{ inputs.bws_server_url }}
-
-      - name: Post the lifecycle
-        if: steps.state.outputs.lifecycle_color != ''
+      - name: Post
+        if: steps.state.outputs.color != ''
         uses: a-novel-kit/workflows/generic-actions/discord-post@v1.59.1
         with:
-          # A bot's post never falls back to the pull-requests channel.
+          # A post never falls back to the other channel.
           webhook: >-
-            ${{ steps.state.outputs.lifecycle_channel == 'dependencies' && secrets.dependencies_webhook ||
-            steps.state.outputs.lifecycle_channel == 'pull_requests' && secrets.pull_requests_webhook || '' }}
-          color: ${{ steps.state.outputs.lifecycle_color }}
+            ${{ steps.state.outputs.channel == 'reviews' && secrets.reviews_webhook ||
+            steps.state.outputs.channel == 'dependencies' && secrets.dependencies_webhook || '' }}
+          color: ${{ steps.state.outputs.color }}
           title: ${{ steps.state.outputs.title }}
           url: ${{ steps.state.outputs.url }}
-          description: ${{ steps.state.outputs.lifecycle_description }}
-          mention_users: ${{ steps.owners.outputs.discord_ids }}
-          mention_roles: ${{ steps.state.outputs.lifecycle_role == 'true' && fromJSON(inputs.roles || '{}')[github.repository] || '' }}
-          dry_run: ${{ inputs.dry_run }}
-
-      - name: Post the review
-        if: steps.state.outputs.review_color != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.59.1
-        with:
-          webhook: ${{ secrets.reviews_webhook }}
-          color: ${{ steps.state.outputs.review_color }}
-          title: ${{ steps.state.outputs.title }}
-          url: ${{ steps.state.outputs.url }}
-          description: ${{ steps.state.outputs.review_description }}
-          mention_users: ${{ steps.reviewers.outputs.discord_ids }}
-          mention_roles: ${{ steps.state.outputs.review_role == 'true' && fromJSON(inputs.roles || '{}')[github.repository] || '' }}
+          description: ${{ steps.state.outputs.description }}
+          mention_users: ${{ steps.users.outputs.discord_ids }}
+          mention_roles: ${{ steps.state.outputs.role == 'true' && fromJSON(inputs.roles || '{}')[github.repository] || '' }}
           dry_run: ${{ inputs.dry_run }}

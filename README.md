@@ -260,7 +260,7 @@ Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/wo
 | `notify-ci-run`      | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
 | `notify-release-run` | Announce a published release in Discord with its notes, linking pull requests the way GitHub does.                |
 | `notify-issues-run`  | Post board issues entering Ready, or changing assignees outside Backlog, to Discord, pinging the assignees.       |
-| `notify-pr-run`      | Post people's pull requests and reviews to Discord, pinging owners and reviewers, and bots' failing ones.         |
+| `notify-pr-run`      | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
 | `notify-stuck-run`   | Post bots' pull requests that stay green but out of the merge queue to Discord, pinging the repo role.            |
 
 ## Contributing
