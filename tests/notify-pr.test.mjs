@@ -130,7 +130,7 @@ function notify(
 
 const headline = (description) => description.split("\n")[0];
 
-test("notify-pr posts a person's pull request lifecycle and pings its owner, never the sender", (t) => {
+test("notify-pr posts a person's merge and merge-queue drop, pinging its owner, never the sender", (t) => {
   const issue = (assignees) => ({
     number: 3,
     url: "https://github.com/a-novel/.github/issues/3",
@@ -138,36 +138,21 @@ test("notify-pr posts a person's pull request lifecycle and pings its owner, nev
     assignees: { nodes: assignees },
     projectItems: { nodes: [] },
   });
+  const conflict = { dropped: { nodes: [{ reason: "MERGE_CONFLICT" }] } };
+  const dropped = "**Dropped from the merge queue** · merge conflict";
   for (const [name, action, event, pr, expected] of [
-    ["ready", "opened", {}, {}, ["started", "**Ready for review** · assigned to kushuh", "1", "false"]],
-    ["ready by its owner", "ready_for_review", { sender: { id: 1 } }, {}, ["started", undefined, "", "false"]],
+    ["merged", "closed", {}, { state: "MERGED" }, ["succeeded", "**Merged**", "", "false"]],
+    ["closed", "closed", {}, { state: "CLOSED" }, [""]],
+    ["dropped from the queue", "dequeued", {}, conflict, ["failed", dropped, "1", "false"]],
+    ["dropped by its owner", "dequeued", { sender: { id: 1 } }, conflict, ["failed", dropped, "", "false"]],
     [
       "owned through its issue",
-      "opened",
-      { sender: { id: 1 } },
-      { assignees: { nodes: [] }, closingIssuesReferences: { nodes: [issue([dada])] } },
-      ["started", "**Ready for review** · nobody assigned", "2", "false"],
-    ],
-    [
-      "owned by nobody",
-      "opened",
-      {},
-      { assignees: { nodes: [] } },
-      ["started", "**Ready for review** · nobody assigned", "", "true"],
-    ],
-    ["assigned", "assigned", {}, {}, ["upcoming", "**Assignees changed** · assigned to kushuh", "1", "false"]],
-    ["assigned once closed", "assigned", {}, { state: "CLOSED" }, [""]],
-    ["back to draft", "converted_to_draft", {}, { isDraft: true }, ["cancelled", "**Back to draft**", "", "false"]],
-    ["merged", "closed", {}, { state: "MERGED" }, ["succeeded", "**Merged**", "", "false"]],
-    ["closed", "closed", {}, { state: "CLOSED" }, ["cancelled", "**Closed** without merging", "", "false"]],
-    ["reopened", "reopened", {}, {}, ["started", "**Reopened** · assigned to kushuh", "1", "false"]],
-    [
-      "dropped from the queue",
       "dequeued",
-      {},
-      { dropped: { nodes: [{ reason: "MERGE_CONFLICT" }] } },
-      ["failed", "**Dropped from the merge queue** · merge conflict", "1", "false"],
+      { sender: { id: 1 } },
+      { ...conflict, assignees: { nodes: [] }, closingIssuesReferences: { nodes: [issue([dada])] } },
+      ["failed", dropped, "2", "false"],
     ],
+    ["owned by nobody", "dequeued", {}, { ...conflict, assignees: { nodes: [] } }, ["failed", dropped, "", "true"]],
     ["timed out, re-queued", "dequeued", {}, { dropped: { nodes: [{ reason: "CHECKS_TIMED_OUT" }] } }, [""]],
     [
       "timed out past the re-queues",
@@ -177,15 +162,18 @@ test("notify-pr posts a person's pull request lifecycle and pings its owner, nev
       ["failed", "**Dropped from the merge queue** · checks timed out", "1", "false"],
     ],
     ["dropped as it merged", "dequeued", {}, { state: "MERGED", dropped: { nodes: [{ reason: "MERGED" }] } }, [""]],
+    ["assigned", "assigned", {}, {}, [""]],
+    ["back to draft", "converted_to_draft", {}, { isDraft: true }, [""]],
+    ["reopened", "reopened", {}, {}, [""]],
   ]) {
     const { outputs } = notify(t, "pull_request_target", prEvent(action, event), pullRequest(pr));
     const [color, title, users, role] = expected;
-    assert.equal(outputs.lifecycle_color, color, name);
+    assert.equal(outputs.channel, "reviews", name);
+    assert.equal(outputs.color, color, name);
     if (!color) continue;
-    assert.equal(outputs.lifecycle_channel, "pull_requests", name);
-    if (title) assert.equal(headline(outputs.lifecycle_description), title, name);
-    assert.equal(outputs.lifecycle_users, users, name);
-    assert.equal(outputs.lifecycle_role, role, name);
+    assert.equal(headline(outputs.description), title, name);
+    assert.equal(outputs.users, users, name);
+    assert.equal(outputs.role, role, name);
   }
 });
 
@@ -283,28 +271,30 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
   ]) {
     const { outputs } = notify(t, eventName, prEvent(action, event), pullRequest(pr));
     const [color, title, users, role] = expected;
-    assert.equal(outputs.review_color, color, name);
+    assert.equal(outputs.channel, "reviews", name);
+    assert.equal(outputs.color, color, name);
     if (!color) continue;
-    assert.equal(headline(outputs.review_description), title, name);
-    assert.equal(outputs.review_users, users, name);
-    assert.equal(outputs.review_role, role, name);
+    assert.equal(headline(outputs.description), title, name);
+    assert.equal(outputs.users, users, name);
+    assert.equal(outputs.role, role, name);
   }
 });
 
 test("notify-pr folds the changes of a pull request's first ready minute into its ready post", (t) => {
   const reviewer = { requested_reviewer: { id: 2, login: "EmperorDada" } };
   // GitHub does not document whether these events bump updated_at, so the run's creation dates them.
-  const stale = { pull_request: { number: 7, updated_at: settling, user: { login: "kushuh", type: "User" } } };
+  const stale = {
+    ...reviewer,
+    pull_request: { number: 7, updated_at: settling, user: { login: "kushuh", type: "User" } },
+  };
   for (const [name, action, event, at, posts] of [
-    ["assigned within the minute", "assigned", {}, settling, false],
-    ["assigned after it", "assigned", {}, settled, true],
-    ["assigned after it, stale updated_at", "assigned", stale, settled, true],
     ["reviewer requested within the minute", "review_requested", reviewer, settling, false],
+    ["reviewer requested after it, stale updated_at", "review_requested", stale, settled, true],
     ["reviewer requested after it", "review_requested", reviewer, settled, true],
     ["reviewer removed within the minute", "review_request_removed", reviewer, settling, false],
   ]) {
     const { outputs } = notify(t, "pull_request_target", prEvent(action, event), pullRequest(), { at });
-    assert.equal(Boolean(outputs.lifecycle_color || outputs.review_color), posts, name);
+    assert.equal(Boolean(outputs.color), posts, name);
   }
 });
 
@@ -326,23 +316,23 @@ test("notify-pr describes status, reviews, links and dates beyond the headline",
       ],
     },
   });
-  const { outputs } = notify(t, "pull_request_target", prEvent("reopened"), pr);
+  const { outputs } = notify(t, "pull_request_target", prEvent("opened"), pr);
   assert.equal(outputs.title, "a-novel/service-authentication#7 · feat(session): rotate refresh tokens");
   assert.equal(outputs.url, "https://github.com/a-novel/service-authentication/pull/7");
   // The Target date wins over the milestone's, read at noon UTC so every time zone shows its day.
-  assert.deepEqual(outputs.lifecycle_description.split("\n").slice(1), [
+  assert.deepEqual(outputs.description.split("\n").slice(1), [
     "Status: in the merge queue · Review: approved by EmperorDada · waiting on core",
     "Closes [a-novel/.github#3](https://github.com/a-novel/.github/issues/3) · Milestone [Sessions](https://github.com/a-novel/m/1)",
     "Due <t:1792843200:D> (<t:1792843200:R>) · Opened <t:1791799200:R> by kushuh",
   ]);
   const merged = notify(t, "pull_request_target", prEvent("closed"), { ...pr, state: "MERGED", mergeQueueEntry: null });
   assert.equal(
-    merged.outputs.lifecycle_description.split("\n")[1],
+    merged.outputs.description.split("\n")[1],
     "Status: merged · Review: approved by EmperorDada",
     "a merged pull request waits on nobody"
   );
-  const plain = notify(t, "pull_request_target", prEvent("reopened"), pullRequest()).outputs;
-  assert.deepEqual(plain.lifecycle_description.split("\n").slice(1), [
+  const plain = notify(t, "pull_request_target", prEvent("opened"), pullRequest()).outputs;
+  assert.deepEqual(plain.description.split("\n").slice(1), [
     "Status: open · Review: no reviewer",
     "Opened <t:1791799200:R> by kushuh",
   ]);
@@ -434,18 +424,17 @@ test("notify-pr flags a bot's failing pull request once, then its refails, merge
   ]) {
     const { outputs, calls } = notify(t, eventName, event, pr, { runs, jobs: ["test-go", "lint-go"] });
     const [color, title, role] = expected;
-    assert.equal(outputs.lifecycle_color, color, name);
-    assert.equal(outputs.review_color, "", name);
+    assert.equal(outputs.color, color, name);
     const graphql = calls.find((args) => args.includes("graphql"));
     assert.ok(graphql.includes("number=7"), name);
     if (!color) continue;
-    assert.equal(outputs.lifecycle_channel, "dependencies", name);
-    assert.equal(headline(outputs.lifecycle_description), title, name);
-    assert.equal(outputs.lifecycle_users, "", name);
-    assert.equal(outputs.lifecycle_role, role, name);
+    assert.equal(outputs.channel, "dependencies", name);
+    assert.equal(headline(outputs.description), title, name);
+    assert.equal(outputs.users, "", name);
+    assert.equal(outputs.role, role, name);
     if (eventName === "workflow_run") {
       assert.equal(
-        outputs.lifecycle_description.split("\n").at(-1),
+        outputs.description.split("\n").at(-1),
         "[main #41](https://github.com/a-novel/service-authentication/actions/runs/900) failed: test-go, lint-go",
         name
       );
@@ -513,10 +502,10 @@ test("notify-pr reads a relayed review back from the pull request instead of tru
   ]) {
     const { outputs } = notify(t, "workflow_run", event, pullRequest(), { pull, reviews });
     const [color, title, users] = expected;
-    assert.equal(outputs.review_color, color, name);
+    assert.equal(outputs.color, color, name);
     if (!color) continue;
-    assert.equal(headline(outputs.review_description), title, name);
-    assert.equal(outputs.review_users, users, name);
+    assert.equal(headline(outputs.description), title, name);
+    assert.equal(outputs.users, users, name);
   }
   // The job admits a relayed review; the step reads everything else back.
   const condition = manifest(".github/workflows/notify-pr-run.yaml").jobs.notify.if;
