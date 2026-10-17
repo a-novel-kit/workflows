@@ -45,6 +45,14 @@ on:
         description: The [Agent] bot App client id.
         required: true
         type: string
+      release_client_id:
+        description: >
+          The release App client id. A missing release line is created by that App, which alone may
+          create one, in its own job that waits at the `release` environment; without it the agent
+          creates the line.
+        required: false
+        type: string
+        default: ""
       dependency_client_id:
         description: >
           The Dependencies App client id. When set, that App opens each clean backport, so the agent can
@@ -70,6 +78,11 @@ on:
       app_private_key:
         description: The [Agent] bot App private key (PEM).
         required: true
+      release_private_key:
+        description: >
+          The release App private key (PEM). Pass secrets.RELEASE_BOT_PRIVATE_KEY by name: it exists
+          only in the `release` environment.
+        required: false
       dependency_private_key:
         description: The Dependencies App private key (PEM), with dependency_client_id.
         required: false
@@ -78,7 +91,75 @@ on:
         required: false
 
 jobs:
+  # Whether the release line exists, read without the `release` environment, so a backport onto an
+  # existing line never waits for an approval, and the tag a missing line starts from: the line's
+  # highest stable vLINE.PATCH tag, the baseline the backport job picks too.
+  line:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      missing: ${{ steps.line.outputs.missing }}
+      baseline: ${{ steps.line.outputs.baseline }}
+    steps:
+      - name: Read the release line
+        id: line
+        env:
+          LINE: ${{ inputs.line }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$LINE" | grep -qE '^[0-9]+\.[0-9]+$'; then
+            echo "::error::line must be MAJOR.MINOR (e.g. 1.4), got \"$LINE\"." >&2
+            exit 1
+          fi
+          if gh api "repos/$REPO/git/ref/heads/release/v$LINE" --silent 2>/dev/null; then
+            echo "missing=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          baseline=$(gh api "repos/$REPO/git/matching-refs/tags/v$LINE." \
+            --jq '.[] | select(.object.type == "commit") | "\(.ref | ltrimstr("refs/tags/")) \(.object.sha)"' |
+            { grep -E "^v${LINE//./\\.}\.[0-9]+ " || true; } | sort -V | tail -n1 | cut -d' ' -f2)
+          echo "missing=true" >>"$GITHUB_OUTPUT"
+          echo "baseline=$baseline" >>"$GITHUB_OUTPUT"
+
+  # Only the release App may create a release line, and its key opens only in the `release`
+  # environment, so this job alone waits there, once per line. The backport job opens the pull
+  # requests without it.
+  create-line:
+    needs: line
+    if: needs.line.outputs.missing == 'true' && needs.line.outputs.baseline != '' && !inputs.dry_run && inputs.release_client_id != ''
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.59.0
+        with:
+          roles: admin
+      - name: Mint line token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.release_client_id }}
+          private-key: ${{ secrets.release_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Create the release line
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          LINE: ${{ inputs.line }}
+          BASELINE: ${{ needs.line.outputs.baseline }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/release/v$LINE" -f sha="$BASELINE" --silent
+          echo "Created \`release/v$LINE\` as the release App." >>"$GITHUB_STEP_SUMMARY"
+
   backport:
+    needs: [line, create-line]
+    if: ${{ !cancelled() && needs.line.result == 'success' && needs.create-line.result != 'failure' }}
     runs-on: ubuntu-latest
     # The default token serves only the admin check; branch and pull request writes use the [Agent]
     # token minted below.
@@ -163,6 +244,7 @@ jobs:
               git update-ref "refs/remotes/origin/$branch" "$baseline"
               return 0
             fi
+            # Reached only by callers without the release App, whose create-line job made it already.
             git push --quiet origin "$baseline^{commit}:refs/heads/$branch"
             git fetch --quiet origin "$branch"
             echo "Created \`$branch\` from \`$baseline\`." >> "$GITHUB_STEP_SUMMARY"

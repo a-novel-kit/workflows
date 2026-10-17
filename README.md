@@ -153,7 +153,7 @@ check-migration-snapshots:
 
 | Action              | Purpose                                                                                                     |
 | ------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `audit`             | Run `pnpm audit --fix` and commit the fixes.                                                                |
+| `audit`             | Run `pnpm audit --fix` and open a pull request with the fixes.                                              |
 | `build-node`        | Run the package's build script (default `build`).                                                           |
 | `lint-node`         | Run the package's lint script (default `lint`).                                                             |
 | `lint-translations` | Check catalog structure, and the translation gaps and drift a branch introduces, with label approvals.      |

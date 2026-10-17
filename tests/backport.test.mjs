@@ -93,6 +93,34 @@ test("a release line is created from its baseline once, and a line missing that 
   assert.match(sh("ensure_release_line 1.4 v1.4.1").stderr, /does not contain v1\.4\.1/);
 });
 
+test("the line job finds a missing line's baseline among the tags, and leaves an existing line alone", (t) => {
+  const w = workspace(t);
+  const read = step(".github/workflows/backport-run.yaml", "Read the release line");
+  // The API answers the line's ref as missing unless LINE_EXISTS, and lists the tags under v1.4.
+  w.stub(
+    "gh",
+    `
+    const args = process.argv.slice(2);
+    if (args[1].includes('/git/ref/heads/')) process.exit(process.env.LINE_EXISTS === 'true' ? 0 : 1);
+    console.log(['v1.4.2 aaa', 'v1.4.10 bbb', 'v1.4.11-rc.1 ccc', 'v1.40.0 ddd'].join('\\n'));
+  `
+  );
+  const outputs = () =>
+    Object.fromEntries(
+      w
+        .read("output")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("="))
+    );
+  succeeds(w.bash(read, { LINE: "1.4", REPO: "a-novel-kit/example" }));
+  assert.deepEqual(outputs(), { missing: "true", baseline: "bbb" });
+  w.write("output", "");
+  succeeds(w.bash(read, { LINE: "1.4", REPO: "a-novel-kit/example", LINE_EXISTS: "true" }));
+  assert.deepEqual(outputs(), { missing: "false" });
+  assert.notEqual(w.bash(read, { LINE: "1.4; touch injected", REPO: "a-novel-kit/example" }).status, 0);
+});
+
 test("a clean backport opens one pull request carrying the fix alone, never the default branch's unreleased work", (t) => {
   const { git, commit, backports, remote, calls, pulls } = repository(t);
   commit("dashboard.js", "render();\n", "feat: unreleased dashboard");
