@@ -177,12 +177,18 @@ jobs:
 
           # A bot's history decides its posts: every CI run since it opened, on its branch or in the
           # queue, ordered by completion. A rerun counts as a failure, since a green run is rarely rerun.
+          # A repository without a main workflow answers 404 and has no history.
           runs='[]'
           jobs='[]'
           if [ "$(jq -r .author.__typename <<<"$pr")" = Bot ] && { [ "$kind" = failed ] || [ "$kind" = closed ]; }; then
-            runs="$(gh api --paginate \
+            if out="$(gh api --paginate \
               "repos/$GITHUB_REPOSITORY/actions/workflows/main.yaml/runs?created=>=$(jq -r .createdAt <<<"$pr")&per_page=100" \
-              --jq '.workflow_runs[] | {id, head_branch, head_sha, conclusion, run_attempt, updated_at}' | jq -sc .)"
+              --jq '.workflow_runs[] | {id, head_branch, head_sha, conclusion, run_attempt, updated_at}' 2>&1)"; then
+              runs="$(jq -sc . <<<"$out")"
+            elif [[ $out != *"HTTP 404"* ]]; then
+              printf '::error::%s\n' "$out"
+              exit 1
+            fi
             if [ "$kind" = failed ]; then
               jobs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$(jq -r .workflow_run.id <<<"$event")/jobs" \
                 --jq '[.jobs[] | select(.conclusion == "failure") | .name]')"
