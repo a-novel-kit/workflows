@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 
 const tfvars = /(^|\/)terraform\.tfvars$/;
 const releasePin = /"ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}"/;
+const releaseRef = /ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}/g;
+// A Dockerfile that builds on a release image takes the very digest its terraform.tfvars pins.
+const dockerfile = /(^|\/)[^/]*Dockerfile$/;
+const releaseBase = /^FROM (ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64})(\s+AS\s+\S+)?\s*$/i;
 // Checksums the toolchain verifies on its own, so their churn cannot change what runs.
 const integrity = /(^|\/)([^/]+\.sum|\.terraform\.lock\.hcl)$/;
 const modfile = /(^|\/)[^/]+\.mod$/;
@@ -104,14 +108,25 @@ export async function classify({ files, bot, autoMergeEnabledBy, autoMergeArmed,
   if (files.length === 0) return review("it changes no file");
   if (files.length >= 300) return review("its comparison may stop at 300 files");
 
+  // A Dockerfile's release base counts as a pin only when the same pull request pins its digest in
+  // terraform.tfvars, which deploy verifies against the release tag's attestation.
+  const pinned = new Set(
+    files
+      .filter((file) => tfvars.test(file.filename) && file.patch !== undefined)
+      .flatMap((file) =>
+        changes(file.patch).flatMap(({ added }) => added.flatMap(({ text }) => text.match(releaseRef) ?? []))
+      )
+  );
+  const pinLine = (filename, text) => (tfvars.test(filename) ? releasePin.test(text) : releaseBase.test(text));
   const pinOnly = files.every(
     (file) =>
-      tfvars.test(file.filename) &&
+      (tfvars.test(file.filename) || dockerfile.test(file.filename)) &&
       file.status === "modified" &&
       file.patch !== undefined &&
       changes(file.patch).every(
         (change) =>
-          [...change.removed, ...change.added].every(({ text }) => releasePin.test(text)) &&
+          [...change.removed, ...change.added].every(({ text }) => pinLine(file.filename, text)) &&
+          (tfvars.test(file.filename) || change.added.every(({ text }) => pinned.has(text.match(releaseBase)[1]))) &&
           pairsUp(file.filename, change)
       )
   );
