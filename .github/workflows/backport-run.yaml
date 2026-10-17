@@ -48,8 +48,8 @@ on:
       release_client_id:
         description: >
           The release App client id. A missing release line is created by that App, which alone may
-          create one, in a job that waits at the `release` environment; without it the agent creates
-          the line.
+          create one, in its own job that waits at the `release` environment; without it the agent
+          creates the line.
         required: false
         type: string
         default: ""
@@ -92,15 +92,17 @@ on:
 
 jobs:
   # Whether the release line exists, read without the `release` environment, so a backport onto an
-  # existing line never waits for an approval.
+  # existing line never waits for an approval, and the tag a missing line starts from: the line's
+  # highest stable vLINE.PATCH tag, the baseline the backport job picks too.
   line:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       missing: ${{ steps.line.outputs.missing }}
+      baseline: ${{ steps.line.outputs.baseline }}
     steps:
-      - name: Check the release line
+      - name: Read the release line
         id: line
         env:
           LINE: ${{ inputs.line }}
@@ -114,16 +116,51 @@ jobs:
           fi
           if gh api "repos/$REPO/git/ref/heads/release/v$LINE" --silent 2>/dev/null; then
             echo "missing=false" >>"$GITHUB_OUTPUT"
-          else
-            echo "missing=true" >>"$GITHUB_OUTPUT"
+            exit 0
           fi
+          baseline=$(gh api "repos/$REPO/git/matching-refs/tags/v$LINE." \
+            --jq '.[] | select(.object.type == "commit") | "\(.ref | ltrimstr("refs/tags/")) \(.object.sha)"' |
+            { grep -E "^v${LINE//./\\.}\.[0-9]+ " || true; } | sort -V | tail -n1 | cut -d' ' -f2)
+          echo "missing=true" >>"$GITHUB_OUTPUT"
+          echo "baseline=$baseline" >>"$GITHUB_OUTPUT"
+
+  # Only the release App may create a release line, and its key opens only in the `release`
+  # environment, so this job alone waits there, once per line. The backport job opens the pull
+  # requests without it.
+  create-line:
+    needs: line
+    if: needs.line.outputs.missing == 'true' && needs.line.outputs.baseline != '' && !inputs.dry_run && inputs.release_client_id != ''
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.59.0
+        with:
+          roles: admin
+      - name: Mint line token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.release_client_id }}
+          private-key: ${{ secrets.release_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Create the release line
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          LINE: ${{ inputs.line }}
+          BASELINE: ${{ needs.line.outputs.baseline }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/release/v$LINE" -f sha="$BASELINE" --silent
+          echo "Created \`release/v$LINE\` as the release App." >>"$GITHUB_STEP_SUMMARY"
 
   backport:
-    needs: line
+    needs: [line, create-line]
+    if: ${{ !cancelled() && needs.line.result == 'success' && needs.create-line.result != 'failure' }}
     runs-on: ubuntu-latest
-    # Creating a release line is the release App's write, so only a run that creates one waits at the
-    # `release` environment, whose key that App's credential is.
-    environment: ${{ needs.line.outputs.missing == 'true' && !inputs.dry_run && inputs.release_client_id != '' && 'release' || '' }}
     # The default token serves only the admin check; branch and pull request writes use the [Agent]
     # token minted below.
     permissions:
@@ -157,16 +194,6 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
-      - name: Mint line token
-        id: line-token
-        if: ${{ needs.line.outputs.missing == 'true' && !inputs.dry_run && inputs.release_client_id != '' }}
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ inputs.release_client_id }}
-          private-key: ${{ secrets.release_private_key }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-contents: write
       - uses: actions/checkout@v7
         with:
           token: ${{ steps.token.outputs.token }}
@@ -178,7 +205,6 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           BACKPORT_TOKEN: ${{ steps.backport-token.outputs.token }}
-          LINE_TOKEN: ${{ steps.line-token.outputs.token }}
           LINE: ${{ inputs.line }}
           FIX_REFS: ${{ inputs.fix_refs }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -218,14 +244,8 @@ jobs:
               git update-ref "refs/remotes/origin/$branch" "$baseline"
               return 0
             fi
-            # The release App creates the line when the caller passes it; only it bypasses the
-            # release-lines ruleset.
-            if [ -n "${LINE_TOKEN:-}" ]; then
-              GH_TOKEN="$LINE_TOKEN" gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$branch" \
-                -f sha="$(git rev-parse "$baseline^{commit}")" --silent
-            else
-              git push --quiet origin "$baseline^{commit}:refs/heads/$branch"
-            fi
+            # Reached only by callers without the release App, whose create-line job made it already.
+            git push --quiet origin "$baseline^{commit}:refs/heads/$branch"
             git fetch --quiet origin "$branch"
             echo "Created \`$branch\` from \`$baseline\`." >> "$GITHUB_STEP_SUMMARY"
           }

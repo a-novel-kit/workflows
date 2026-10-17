@@ -93,24 +93,32 @@ test("a release line is created from its baseline once, and a line missing that 
   assert.match(sh("ensure_release_line 1.4 v1.4.1").stderr, /does not contain v1\.4\.1/);
 });
 
-test("the release App creates a missing release line when the caller passes it", (t) => {
-  const { w, git, sh, remote } = repository(t);
-  // Ref creation through the API lands on the bare origin, recorded with the token it ran with.
+test("the line job finds a missing line's baseline among the tags, and leaves an existing line alone", (t) => {
+  const w = workspace(t);
+  const read = step(".github/workflows/backport-run.yaml", "Read the release line");
+  // The API answers the line's ref as missing unless LINE_EXISTS, and lists the tags under v1.4.
   w.stub(
     "gh",
     `
-    const args = process.argv.slice(2), field = (name) => args.find((arg) => arg.startsWith(name + '='))?.slice(name.length + 1);
-    require('node:fs').appendFileSync('tokens', JSON.stringify([process.env.GH_TOKEN, ...args]) + '\\n');
-    if (args[1]?.endsWith('/git/refs')) require('node:child_process').execFileSync('git', ['--git-dir=remote.git', 'update-ref', field('ref'), field('sha')]);
+    const args = process.argv.slice(2);
+    if (args[1].includes('/git/ref/heads/')) process.exit(process.env.LINE_EXISTS === 'true' ? 0 : 1);
+    console.log(['v1.4.2 aaa', 'v1.4.10 bbb', 'v1.4.11-rc.1 ccc', 'v1.40.0 ddd'].join('\\n'));
   `
   );
-  succeeds(sh("ensure_release_line 1.4 v1.4.0", { GITHUB_REPOSITORY: "a-novel-kit/example", LINE_TOKEN: "release" }));
-  assert.equal(remote("refs/heads/release/v1.4"), git("rev-parse", "v1.4.0"));
-  const calls = w.read("tokens").trim().split("\n").map(JSON.parse);
-  assert.deepEqual(
-    calls.map(([token, ...args]) => [token, args[1]]),
-    [["release", "repos/a-novel-kit/example/git/refs"]]
-  );
+  const outputs = () =>
+    Object.fromEntries(
+      w
+        .read("output")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("="))
+    );
+  succeeds(w.bash(read, { LINE: "1.4", REPO: "a-novel-kit/example" }));
+  assert.deepEqual(outputs(), { missing: "true", baseline: "bbb" });
+  w.write("output", "");
+  succeeds(w.bash(read, { LINE: "1.4", REPO: "a-novel-kit/example", LINE_EXISTS: "true" }));
+  assert.deepEqual(outputs(), { missing: "false" });
+  assert.notEqual(w.bash(read, { LINE: "1.4; touch injected", REPO: "a-novel-kit/example" }).status, 0);
 });
 
 test("a clean backport opens one pull request carrying the fix alone, never the default branch's unreleased work", (t) => {
