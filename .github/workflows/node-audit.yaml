@@ -13,7 +13,7 @@ jobs:
       name: governance
       deployment: false
     permissions:
-      contents: write
+      contents: read
       packages: read
     steps:
       - uses: actions/checkout@v7
@@ -22,5 +22,5 @@ jobs:
       - uses: $/node-actions/audit
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          app_private_key: ${{ secrets.PUBLISH_BOT_PRIVATE_KEY }}
-          client_id: ${{ vars.PUBLISH_BOT_CLIENT_ID }}
+          app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
+          client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
