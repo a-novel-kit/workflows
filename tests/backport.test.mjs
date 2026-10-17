@@ -93,6 +93,26 @@ test("a release line is created from its baseline once, and a line missing that 
   assert.match(sh("ensure_release_line 1.4 v1.4.1").stderr, /does not contain v1\.4\.1/);
 });
 
+test("the release App creates a missing release line when the caller passes it", (t) => {
+  const { w, git, sh, remote } = repository(t);
+  // Ref creation through the API lands on the bare origin, recorded with the token it ran with.
+  w.stub(
+    "gh",
+    `
+    const args = process.argv.slice(2), field = (name) => args.find((arg) => arg.startsWith(name + '='))?.slice(name.length + 1);
+    require('node:fs').appendFileSync('tokens', JSON.stringify([process.env.GH_TOKEN, ...args]) + '\\n');
+    if (args[1]?.endsWith('/git/refs')) require('node:child_process').execFileSync('git', ['--git-dir=remote.git', 'update-ref', field('ref'), field('sha')]);
+  `
+  );
+  succeeds(sh("ensure_release_line 1.4 v1.4.0", { GITHUB_REPOSITORY: "a-novel-kit/example", LINE_TOKEN: "release" }));
+  assert.equal(remote("refs/heads/release/v1.4"), git("rev-parse", "v1.4.0"));
+  const calls = w.read("tokens").trim().split("\n").map(JSON.parse);
+  assert.deepEqual(
+    calls.map(([token, ...args]) => [token, args[1]]),
+    [["release", "repos/a-novel-kit/example/git/refs"]]
+  );
+});
+
 test("a clean backport opens one pull request carrying the fix alone, never the default branch's unreleased work", (t) => {
   const { git, commit, backports, remote, calls, pulls } = repository(t);
   commit("dashboard.js", "render();\n", "feat: unreleased dashboard");

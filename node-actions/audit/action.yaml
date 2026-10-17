@@ -1,5 +1,8 @@
 name: audit
-description: Run pnpm audit --fix and commit any resulting dependency fixes as the bot.
+description: >
+  Run pnpm audit --fix and open or update one pull request with the resulting dependency fixes, as
+  the bot. Pass the Dependencies App, whose pull requests the auto-approver approves like a Renovate
+  update; no bot pushes the default branch.
 
 inputs:
   github_token:
@@ -7,10 +10,14 @@ inputs:
     description: The GitHub token to use for the action.
   app_private_key:
     required: true
-    description: The GitHub App private key.
+    description: Private key of the GitHub App that pushes the branch and opens the pull request.
   client_id:
+    required: true
+    description: Client ID of that App.
+  branch:
     required: false
-    description: GitHub App client id (recommended).
+    default: chore/deps/audit
+    description: Branch that carries the fixes. Each run replaces its content.
 
 runs:
   using: "composite"
@@ -18,21 +25,17 @@ runs:
     - uses: a-novel-kit/workflows/node-actions/setup-node@v1.59.0
       with:
         github_token: ${{ inputs.github_token }}
-    # The fixes are committed as the bot, so its token can only write contents.
+    # The bot writes its branch and opens the pull request, nothing else.
     - name: Mint bot token
       id: bot
       uses: actions/create-github-app-token@v3
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
         permission-contents: write
-    - name: get github app user id
-      id: app_user_id
-      shell: bash
-      run: echo "user_id=$(gh api "/users/${APP_LOGIN}" --jq .id)" >> "$GITHUB_OUTPUT"
-      env:
-        GH_TOKEN: ${{ steps.bot.outputs.token }}
-        APP_LOGIN: ${{ steps.bot.outputs.app-slug }}[bot]
+        permission-pull-requests: write
     - name: run audit
       shell: bash
       # --fix takes a mode since pnpm 11; "override" pins vulnerable transitive
@@ -69,18 +72,28 @@ runs:
         else
           echo "diff=1" >> "$GITHUB_OUTPUT"
         fi
-    - name: publish audit update
+    - name: Open or update the pull request
       if: steps.check_diff.outputs.diff == '1'
       shell: bash
-      run: |
-        git config url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf https://github.com/
-        git config user.name "$APP_LOGIN"
-        git config user.email "${APP_USER_ID}+${APP_LOGIN}@users.noreply.github.com"
-
-        git add pnpm-workspace.yaml pnpm-lock.yaml
-        git commit -m "chore(security): audit fix"
-        git push
       env:
         GH_TOKEN: ${{ steps.bot.outputs.token }}
-        APP_LOGIN: ${{ steps.bot.outputs.app-slug }}[bot]
-        APP_USER_ID: ${{ steps.app_user_id.outputs.user_id }}
+        BRANCH: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+        # The default branch requires signed commits. GitHub signs a commit the App creates through
+        # the API, never one it pushes.
+        tree="$(for path in pnpm-workspace.yaml pnpm-lock.yaml; do
+          jq -n --arg path "$path" --rawfile content "$path" '{path: $path, mode: "100644", type: "blob", content: $content}'
+        done | jq -s --arg base "$(git rev-parse 'HEAD^{tree}')" '{base_tree: $base, tree: .}' |
+          gh api "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)"
+        commit="$(gh api "repos/$GITHUB_REPOSITORY/git/commits" -f message="chore(security): audit fix" \
+          -f tree="$tree" -f "parents[]=$(git rev-parse HEAD)" --jq .sha)"
+        if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --silent 2>/dev/null; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" -f sha="$commit" -F force=true --silent
+        else
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" --silent
+        fi
+        if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+          gh pr create --head "$BRANCH" --title "chore(security): audit fix" \
+            --body "Pins the vulnerable transitive dependencies \`pnpm audit --fix=override\` reported to their patched versions."
+        fi
