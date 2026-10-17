@@ -101,6 +101,15 @@ test("Docker provenance uses the published digest and security tools require cal
   assert(index > steps.findIndex((s) => s.id === "build"));
   assert.equal(steps[index].with["subject-digest"], "${{ steps.build.outputs.digest }}");
   assert.equal(steps[index].with["push-to-registry"], "${{ steps.meta.outputs.tags != '' }}");
+  // Each retry repeats the first attempt and runs only when the one before it failed; the last fails the job.
+  const attempts = steps.filter((s) => s.uses?.startsWith("actions/attest@"));
+  assert.equal(attempts.length, 3);
+  attempts.forEach((attempt, i) => {
+    assert.equal(attempt.uses, steps[index].uses);
+    assert.deepEqual(attempt.with, steps[index].with);
+    assert.equal(attempt["continue-on-error"], i < attempts.length - 1 ? true : undefined);
+    if (i > 0) assert.equal(attempt.if, `\${{ steps.${attempts[i - 1].id}.outcome == 'failure' }}`);
+  });
   // docker-job publishes through docker, so it inherits the same attestation.
   const job = manifest("build-actions/docker-job/action.yaml");
   assert.deepEqual(
