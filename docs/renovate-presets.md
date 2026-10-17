@@ -53,6 +53,12 @@ For npm lockfiles, the package manager performs the refresh. Enforce transitive-
 release cooldowns in the package manager (for example, pnpm's `minimumReleaseAge`);
 Renovate's `minimumReleaseAge` alone does not cover lockfile maintenance.
 
+pnpm's release age is the shorter one, so lockfile maintenance can move a range past the version a
+group PR still offers. Give the members of a group that must match exactly, such as
+`vitest monorepo` and `playwright runtime`, one specifier form in each repository: all exact, or
+all the same range. A `vitest: ^5.0.0` catalog entry beside an exact `@vitest/browser-playwright`
+pin resolved to a release the provider did not have yet, and the browser tests stopped running.
+
 | Class       | Additional configuration                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `service`   | Podman Compose and isolated Go tool modules; standard service regeneration; database dependency detection.                          |

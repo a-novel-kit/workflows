@@ -174,7 +174,7 @@
       "enabled": false
     },
     {
-      "description": "Keep the Vitest core and scoped packages on one runnable version.",
+      "description": "Keep the Vitest core and scoped packages on one runnable version. A repository gives every member the same specifier form, all exact or all the same range: lockfile maintenance follows only pnpm's shorter release age, so a ranged member overtakes exact siblings this group still holds back, and Vitest then fails against a provider from another release. A `rangeStrategy: pin` rule cannot enforce the form, because its pin update and this group's own update collide in one branch and the pin wins.",
       "matchPackageNames": ["vitest", "/^@vitest\\//"],
       "groupName": "vitest monorepo"
     },
