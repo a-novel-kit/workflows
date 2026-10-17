@@ -161,6 +161,10 @@ jobs:
     needs: [line, create-line]
     if: ${{ !cancelled() && needs.line.result == 'success' && needs.create-line.result != 'failure' }}
     runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     # The default token serves only the admin check; branch and pull request writes use the [Agent]
     # token minted below.
     permissions:
