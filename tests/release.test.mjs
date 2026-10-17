@@ -49,6 +49,22 @@ test("release bump updates all package formats and quoted filenames, leaving ver
   }
 });
 
+test("a patch moves past the patches its minor already tagged, as a release line's hotfix", (t) => {
+  for (const [tags, next] of [
+    [["v1.2.3", "v1.2.4", "v1.2.10", "child/v1.2.12", "v1.3.0", "v1.2.11-rc.1"], "1.2.11"],
+    [["v1.2.3", "v1.20.4"], "1.2.4"],
+  ]) {
+    const w = repository(t);
+    succeeds(w.run("git", ["add", "package.json"]));
+    succeeds(
+      w.run("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "baseline"])
+    );
+    for (const tag of tags) succeeds(w.run("git", ["tag", tag]));
+    assert.equal(succeeds(w.run(process.execPath, [releaseScript("bump")], { RELEASE_TYPE: "patch" })), next);
+    assert.equal(JSON.parse(w.read("package.json")).version, next);
+  }
+});
+
 test("invalid release baselines and broken workspace manifests fail before any file changes", (t) => {
   for (const version of ["1.2.3-beta.1", "1.2", "01.2.3", null]) {
     const w = repository(t);
