@@ -152,7 +152,7 @@ jobs:
       # `release` environment holds no key, cuts as the agent, which the release rulesets stop admitting
       # once they list the release App alone (a-novel-kit/stack#609).
       - name: Cut the patch
-        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.58.0
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.58.1
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.7.5"
@@ -163,7 +163,7 @@ jobs:
 
       - name: Escalate on failure
         if: ${{ failure() }}
-        uses: a-novel-kit/workflows/generic-actions/escalate@v1.58.0
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.58.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
