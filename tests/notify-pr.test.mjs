@@ -80,7 +80,7 @@ function notify(
   eventName,
   event,
   pr,
-  { runs = [], jobs = [], pulls = "7", at = settled, pull = {}, reviews = [] } = {}
+  { runs = [], jobs = [], pulls = "7", at = settled, pull = {}, reviews = [], main = true } = {}
 ) {
   const w = workspace(t);
   w.write("output", "");
@@ -95,7 +95,15 @@ function notify(
     else if (args.some((arg) => arg.endsWith("/reviews"))) console.log(process.env.REVIEWS);
     else if (args.some((arg) => arg.split("/").length === 5 && arg.split("/")[3] === "pulls")) console.log(process.env.PULL);
     else if (args.some((arg) => arg.endsWith("/pulls"))) console.log(process.env.PULLS);
-    else if (args.some((arg) => arg.includes("/runs?"))) console.log(process.env.RUNS);
+    else if (args.some((arg) => arg.includes("/runs?"))) {
+      // gh skips --jq on an error and prints the body before failing.
+      if (!process.env.MAIN) {
+        console.log('{"message":"Not Found","status":"404"}');
+        console.error("gh: Not Found (HTTP 404)");
+        process.exit(1);
+      }
+      console.log(process.env.RUNS);
+    }
     else if (args.some((arg) => arg.endsWith("/jobs"))) console.log(process.env.JOBS);
     else if (args.some((arg) => arg.includes("/actions/runs/"))) console.log(process.env.AT);`
   );
@@ -110,6 +118,7 @@ function notify(
       APP_TOKEN: "token",
       PR: JSON.stringify(pr),
       RUNS: runs.map((entry) => JSON.stringify(entry)).join("\n"),
+      MAIN: main ? "true" : "",
       JOBS: JSON.stringify(jobs),
       PULLS: pulls,
       PULL: JSON.stringify(pull),
@@ -440,6 +449,14 @@ test("notify-pr flags a bot's failing pull request once, then its refails, merge
       );
     }
   }
+});
+
+test("notify-pr posts nothing when a bot merges in a repository without a main workflow", (t) => {
+  const { outputs, calls } = notify(t, "pull_request_target", prEvent("closed"), bot({ state: "MERGED" }), {
+    main: false,
+  });
+  assert.equal(outputs.color, "");
+  assert.ok(calls.some((args) => args.some((arg) => arg.includes("/workflows/main.yaml/runs?"))));
 });
 
 test("notify-pr skips a failed run whose branch no longer has an open pull request", (t) => {
