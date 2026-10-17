@@ -205,7 +205,12 @@ runs:
         secret-envs: ${{ inputs.secret-envs }}
         secret-files: ${{ inputs.secret-files }}
         secrets: ${{ inputs.secrets }}
+    # Rekor can stay slow for minutes, past the minute actions/attest spends on its own retries, so
+    # a failed attempt runs again after a pause. All three attempts take the same inputs, and only
+    # the last one fails the job.
     - name: Attest the pushed image
+      id: attest
+      continue-on-error: true
       uses: actions/attest@v4.2.2
       with:
         subject-name: ghcr.io/${{ inputs.image_name }}
@@ -215,4 +220,30 @@ runs:
         push-to-registry: ${{ steps.meta.outputs.tags != '' }}
         # Linked-artifact records need a broader permission and add no value to
         # digest/source verification, so publish only the signed attestation.
+        create-storage-record: false
+    - name: Wait before retrying the attestation
+      if: ${{ steps.attest.outcome == 'failure' }}
+      shell: bash
+      run: sleep 30
+    - name: Attest the pushed image, second attempt
+      id: attest-retry
+      if: ${{ steps.attest.outcome == 'failure' }}
+      continue-on-error: true
+      uses: actions/attest@v4.2.2
+      with:
+        subject-name: ghcr.io/${{ inputs.image_name }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        push-to-registry: ${{ steps.meta.outputs.tags != '' }}
+        create-storage-record: false
+    - name: Wait before the last attestation attempt
+      if: ${{ steps.attest-retry.outcome == 'failure' }}
+      shell: bash
+      run: sleep 60
+    - name: Attest the pushed image, last attempt
+      if: ${{ steps.attest-retry.outcome == 'failure' }}
+      uses: actions/attest@v4.2.2
+      with:
+        subject-name: ghcr.io/${{ inputs.image_name }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        push-to-registry: ${{ steps.meta.outputs.tags != '' }}
         create-storage-record: false
