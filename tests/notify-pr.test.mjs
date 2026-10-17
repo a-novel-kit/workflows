@@ -150,7 +150,7 @@ test("notify-pr posts a person's merge and merge-queue drop, pinging its owner, 
   const conflict = { dropped: { nodes: [{ reason: "MERGE_CONFLICT" }] } };
   const dropped = "**Dropped from the merge queue** · merge conflict";
   for (const [name, action, event, pr, expected] of [
-    ["merged", "closed", {}, { state: "MERGED" }, ["succeeded", "**Merged**", "", "false"]],
+    ["merged", "closed", {}, { state: "MERGED" }, ["released", "**Merged**", "", "false"]],
     ["closed", "closed", {}, { state: "CLOSED" }, [""]],
     ["dropped from the queue", "dequeued", {}, conflict, ["failed", dropped, "1", "false"]],
     ["dropped by its owner", "dequeued", { sender: { id: 1 } }, conflict, ["failed", dropped, "", "false"]],
