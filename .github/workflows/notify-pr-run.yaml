@@ -258,8 +258,9 @@ jobs:
               elif $kind == "review_dismissed" then
                 {color: "in-progress", headline: "**Review dismissed** · \($event.review.user.login)"}
                 + if $pr.reviewDecision == "APPROVED" then {} else $to_owners end
+              # Purple, as GitHub shows a merge, so it never reads as the green of an approval.
               elif $kind == "closed" and $pr.state == "MERGED" then
-                {color: "succeeded", headline: "**Merged**"}
+                {color: "released", headline: "**Merged**"}
               # recover-prs re-queues a pull request whose checks timed out, up to three times.
               elif $kind == "dequeued" and $open and ($drops[-1] // "merged") != "merged"
                 and ($drops[-1] != "checks_timed_out" or ($drops | map(select(. == "checks_timed_out")) | length) > 3) then
