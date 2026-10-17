@@ -305,7 +305,7 @@ jobs:
       - name: Resolve the pings
         id: users
         if: steps.state.outputs.users != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.60.0
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.60.1
         with:
           github_user_ids: ${{ steps.state.outputs.users }}
           bws_access_token: ${{ secrets.bws_access_token }}
@@ -313,7 +313,7 @@ jobs:
 
       - name: Post
         if: steps.state.outputs.color != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.60.0
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.60.1
         with:
           # A post never falls back to the other channel.
           webhook: >-
