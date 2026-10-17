@@ -78,7 +78,7 @@ jobs:
 
       - name: Post to Discord
         if: steps.state.outputs.post != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.60.3
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.60.4
         with:
           webhook: ${{ secrets.webhook }}
           color: ${{ steps.state.outputs.post }}
