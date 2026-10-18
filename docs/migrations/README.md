@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.63.0](./v1.63.0.md) | The database preset tracks apko as a checksum-verified release download; replace `go install` in database images.         |
 | [v1.60.0](./v1.60.0.md) | No bot write bypasses the release rulesets: audit opens a pull request; `notify-pr-run` drops `pull_requests_webhook`.    |
 | [v1.59.0](./v1.59.0.md) | Renames the `lint-semgrep` rule IDs from `agora-` to `a-novel-`; update `nosemgrep:` comments.                            |
 | [v1.57.0](./v1.57.0.md) | Releases split into `plan`, `cut` and a publishing tag; the release App cuts behind one approval.                         |
