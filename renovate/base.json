@@ -13,7 +13,6 @@
     "description": "Open a security PR even for a dependency other rules disable. Renovate's gomod manager disables `// indirect` requires, so without `enabled` a vulnerable transitive module (x/net under CVE-2026-78669) never gets a fix.",
     "enabled": true
   },
-  "labels": ["dependencies", "renovate"],
   "customManagers": [
     {
       "customType": "regex",
