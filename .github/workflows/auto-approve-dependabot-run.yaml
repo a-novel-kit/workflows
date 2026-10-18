@@ -128,7 +128,7 @@ jobs:
       - name: Classify the change
         id: classify
         if: ${{ inputs.strict && steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
-        uses: a-novel-kit/workflows/generic-actions/classify-bot-change@v1.62.0
+        uses: a-novel-kit/workflows/generic-actions/classify-bot-change@v1.62.1
         with:
           github_token: ${{ steps.token.outputs.token }}
           pull_request: ${{ steps.pr.outputs.url }}
@@ -140,7 +140,7 @@ jobs:
           ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' &&
           (!inputs.strict || steps.classify.outputs.decision == 'pin' ||
           steps.classify.outputs.decision == 'renovate') }}
-        uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.62.0
+        uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.62.1
         with:
           pull_request: ${{ steps.pr.outputs.url }}
           github_token: ${{ steps.token.outputs.token }}
