@@ -227,7 +227,7 @@ jobs:
             # The admin @mention lives in `content`, fail-soft: with no admin configured the embed
             # posts unpinged, matching the notify action's own payload. users:[id] allows that one
             # admin alone, and parse:[] blocks @everyone, @here and roles.
-            did="${DEFAULT_MENTION:-}"; target=admin
+            did="${DEFAULT_MENTION:-}"; target="admin"
             if [ -n "$did" ]; then
               echo "::add-mask::$did"   # defensive: keep the admin id out of logs
               payload=$(jq -n --arg c "<@${did}>" --arg d "$desc" --argjson col "$color" --arg uid "$did" \

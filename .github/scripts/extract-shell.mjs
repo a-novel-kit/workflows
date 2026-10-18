@@ -27,7 +27,9 @@ for (const file of globSync(["*-actions/*/action.yaml", ".github/workflows/*.{ya
       "# shellcheck disable=SC2016",
       ...[...environment].map((name) => `export ${name}=1`),
     ];
-    writeFileSync(join(destination, `${file.replaceAll("/", "_")}-${index}.sh`), `${header.join("\n")}\n${source}\n`);
+    // Drop the leading dot of .github: lint-shell's `*.sh` glob skips dotfiles.
+    const name = `${file.replace(/^\./, "").replaceAll("/", "_")}-${index}.sh`;
+    writeFileSync(join(destination, name), `${header.join("\n")}\n${source}\n`);
     count++;
   }
 }
