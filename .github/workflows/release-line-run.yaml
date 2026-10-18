@@ -149,21 +149,28 @@ jobs:
             sleep 30
           done
 
-      # The credentials follow the release key. A caller that predates the release App, or a repo whose
-      # `release` environment holds no key, cuts as the agent, which the release rulesets stop admitting
-      # once they list the release App alone (a-novel-kit/stack#609).
       - name: Cut the patch
         uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.61.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.7.5"
           ref: ${{ inputs.branch }}
-          client_id: ${{ secrets.release_private_key != '' && inputs.release_client_id || inputs.client_id }}
-          app_private_key: ${{ secrets.release_private_key || secrets.app_private_key }}
+          client_id: ${{ inputs.release_client_id }}
+          app_private_key: ${{ secrets.release_private_key }}
           dry_run: ${{ inputs.dry_run }}
 
-      - name: Escalate on failure
-        if: ${{ failure() }}
+  # The release environment holds only the release key, so the Agent escalates from the caller's
+  # governance environment.
+  escalate:
+    needs: cut
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    environment:
+      name: governance
+      deployment: false
+    permissions: {}
+    steps:
+      - name: Escalate the failed cut
         uses: a-novel-kit/workflows/generic-actions/escalate@v1.61.0
         with:
           client_id: ${{ inputs.client_id }}
