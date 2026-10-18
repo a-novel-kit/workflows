@@ -58,7 +58,11 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
       [{ currentValue: "2.59.1", currentDigest: "a".repeat(64) }],
     ],
     ["custom.pgbackrest", "ARG PGBACKREST_VERSION=2.59.1\nARG PGBACKREST_SHA256=invalid\n", []],
-    ["github-tags", "go install chainguard.dev/apko@v1.4.5", [{ currentValue: "v1.4.5" }]],
+    [
+      "custom.apko",
+      `ARG APKO_VERSION=1.4.11\nARG APKO_CHECKSUMS_SHA256=${"b".repeat(64)}\n`,
+      [{ currentValue: "1.4.11", currentDigest: "b".repeat(64) }],
+    ],
     [
       "apk",
       "- postgresql-18=18.6-r3\n- pg_cron-18=1.6.8-r0\n- ca-certificates\n",

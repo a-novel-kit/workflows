@@ -113,9 +113,10 @@ rules applied after presets. Remove the rules and managers transferred to the cl
 retaining them would apply the same configuration twice.
 
 The service and library classes share `go-tools`, which isolates each Go tool module in its own branch. The service class includes `database`, which updates apko and pinned APK packages and
-groups PostgreSQL runtime packages. Its pgBackRest manager updates source version and
-SHA-256 together, accepting only stable releases with a matching asset and valid digest.
-The custom datasource uses Renovate's experimental custom datasource support.
+groups PostgreSQL runtime packages. Its pgBackRest and apko managers update a version and its
+SHA-256 together: pgBackRest's source archive, and apko's `checksums.txt`, which covers the
+release binary of every architecture. Both accept only stable releases with a matching asset and
+valid digest. The custom datasources use Renovate's experimental custom datasource support.
 
 The database preset defaults APK lookups in `builds/database.apko.yaml` to
 `https://packages.wolfi.dev/os?arch=x86_64`. Standard Wolfi services need only the class

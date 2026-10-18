@@ -13,8 +13,10 @@
     {
       "customType": "regex",
       "managerFilePatterns": ["/^builds\\/database\\.Dockerfile$/"],
-      "matchStrings": ["chainguard\\.dev/apko@(?<currentValue>v[0-9.]+)"],
-      "datasourceTemplate": "github-tags",
+      "matchStrings": [
+        "ARG APKO_VERSION=(?<currentValue>[0-9.]+)\\s+ARG APKO_CHECKSUMS_SHA256=(?<currentDigest>[a-f0-9]{64})\\s"
+      ],
+      "datasourceTemplate": "custom.apko",
       "depNameTemplate": "chainguard-dev/apko"
     },
     {
@@ -38,6 +40,13 @@
       "transformTemplates": [
         "$[draft = false and prerelease = false and $substring(tag_name, 0, 8) = 'release/'].($version := $substringAfter(tag_name, 'release/'); $published := published_at; assets[name = 'pgbackrest-' & $version & '.tar.gz' and $match($string(digest), /^sha256:[a-f0-9]{64}$/)].{'version': $version, 'digest': $substring(digest, 7), 'releaseTimestamp': $published})",
         "{'releases': [$[$match(version, /^[0-9]+\\.[0-9]+(\\.[0-9]+)?$/)]], 'sourceUrl': 'https://github.com/pgbackrest/pgbackrest'}"
+      ]
+    },
+    "apko": {
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/chainguard-dev/apko/releases?per_page=100",
+      "transformTemplates": [
+        "$[draft = false and prerelease = false and $substring(tag_name, 0, 1) = 'v'].($version := $substringAfter(tag_name, 'v'); $published := published_at; assets[name = 'checksums.txt' and $match($string(digest), /^sha256:[a-f0-9]{64}$/)].{'version': $version, 'digest': $substring(digest, 7), 'releaseTimestamp': $published})",
+        "{'releases': [$[$match(version, /^[0-9]+\\.[0-9]+\\.[0-9]+$/)]], 'sourceUrl': 'https://github.com/chainguard-dev/apko'}"
       ]
     }
   },
