@@ -39,11 +39,31 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
+      # A hotfix shows gold, since release-core-hotfix targets the release line it cuts. Every other
+      # release takes its bump from the tag: blue for a patch, green for a minor, purple for a major.
+      - name: Pick the color
+        id: color
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          TARGET: ${{ github.event.release.target_commitish }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == release/* ]]; then
+            color=upcoming
+          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[1-9] ]]; then
+            color=started
+          elif [[ "$TAG" =~ ^v[0-9]+\.[1-9] ]]; then
+            color=succeeded
+          else
+            color=released
+          fi
+          echo "color=$color" >> "$GITHUB_OUTPUT"
+
       - name: Post to Discord
         uses: a-novel-kit/workflows/generic-actions/discord-post@v1.60.5
         with:
           webhook: ${{ secrets.webhook }}
-          color: released
+          color: ${{ steps.color.outputs.color }}
           title: ${{ github.event.release.name || format('{0} {1}', github.event.repository.name, github.event.release.tag_name) }}
           url: ${{ github.event.release.html_url }}
           description: ${{ steps.notes.outputs.description }}

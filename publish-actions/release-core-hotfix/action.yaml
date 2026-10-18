@@ -230,7 +230,8 @@ runs:
         git push --atomic origin "HEAD:refs/heads/$BRANCH" "${tag_refs[@]}"
 
         # --latest=false keeps a patch to an old line from becoming the repo's "Latest" release over
-        # a newer version.
-        gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
+        # a newer version. The tag already exists, so --target only records the line on the release,
+        # which is how notify-release tells a hotfix apart.
+        gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" --target "$BRANCH" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes --latest=false
         echo "- ✓ hotfix released $(printf '%s\n' "$tags" | grep -c .) tag(s), root \`$root_tag\` (not latest)" | tee -a "$GITHUB_STEP_SUMMARY"
