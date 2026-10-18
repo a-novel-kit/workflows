@@ -37,6 +37,10 @@ on:
 jobs:
   release-train:
     runs-on: ubuntu-latest
+    # The Agent key is a secret of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
     # The default token serves only the admin check, which needs Metadata:read; the release-train
     # action mints its own least-privilege [Agent] tokens for the dispatch and the reads.
     permissions:
