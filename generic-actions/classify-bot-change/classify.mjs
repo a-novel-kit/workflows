@@ -16,6 +16,7 @@ const integrity = /(^|\/)([^/]+\.sum|\.terraform\.lock\.hcl)$/;
 const modfile = /(^|\/)[^/]+\.mod$/;
 const indirectRequirement = /^\s*(require\s+)?[^\s()]+\s+v\S+\s*\/\/\s*indirect\s*$/;
 const renovateAnnotation = /#\s*renovate:\s*datasource=/;
+const workflow = /(^|\/)(\.github\/(workflows|actions)\/.+|action)\.ya?ml$/;
 const actionPin = /uses:\s*([\w.-]+\/[\w.-]+)(?:\/[^@\s]*)?@([0-9a-f]{40})\s*#\s*(v?\d[\w.+-]*)\s*$/;
 
 const semver = String.raw`v?\d+(?:\.\d+)+(?:[-+][\w.-]+)?`;
@@ -33,6 +34,10 @@ const moduleVersions = [
   /(?<=^toolchain go)\d[\w.]*/g,
 ];
 const annotatedVersion = new RegExp(semver, "g");
+const inputVersion = new RegExp(
+  String.raw`(?<=^\s*[\w-]+-version:\s*["']?)(?!\d+(?:\.\d+){3}\b)${semver}(?=["']?\s*$)`,
+  "g"
+);
 
 /**
  * The removed and added lines of each change, a run of them between context lines, each with the
@@ -76,6 +81,8 @@ function patternsFor(filename, { context }) {
   if (modfile.test(filename)) return [...versions, ...moduleVersions];
   // Renovate's custom managers write a version on the line after their annotation.
   if (renovateAnnotation.test(context)) return [...versions, annotatedVersion];
+  // Its github-actions manager rewrites a step's tool version input, such as node-version.
+  if (workflow.test(filename)) return [...versions, inputVersion];
   return versions;
 }
 
