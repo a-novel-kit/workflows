@@ -6,7 +6,9 @@ import { step, succeeds, workspace } from "./helpers.mjs";
 
 const post = step("generic-actions/discord-post/action.yaml", "post");
 
-/** A workspace whose curl answers each call with the next status in CODES and logs the payload. */
+const webhook = "https://discord.invalid/api/webhooks/1/token";
+
+/** A workspace whose curl answers each call with the next status in CODES and logs the payload and URL. */
 function discord(t) {
   const w = workspace(t);
   w.stub(
@@ -15,6 +17,7 @@ function discord(t) {
     const fs = require('node:fs');
     const args = process.argv.slice(2);
     fs.appendFileSync('posts', args[args.indexOf('--data') + 1] + '\\n');
+    fs.appendFileSync('urls', args.at(-1) + '\\n');
     const calls = fs.readFileSync('posts', 'utf8').trimEnd().split('\\n').length;
     process.stdout.write(process.env.CODES.split(',')[calls - 1]);
   `
@@ -22,7 +25,9 @@ function discord(t) {
   w.stub("sleep", "");
   const run = (env) =>
     w.bash(post, {
-      WEBHOOK: "https://discord.invalid/api/webhooks/1/token",
+      WEBHOOK: webhook,
+      WEBHOOKS: "",
+      REPOSITORY: "a-novel/infra",
       TITLE: "master CI failed in a-novel/infra",
       URL: "https://github.com/a-novel/infra/actions/runs/1",
       DESCRIPTION: "",
@@ -40,7 +45,8 @@ function discord(t) {
       .read("output")
       .match(/^delivered=(.*)$/gm)
       .at(-1);
-  return { w, run, posts, delivered };
+  const urls = () => (existsSync(join(w.cwd, "urls")) ? w.read("urls").trimEnd().split("\n") : []);
+  return { w, run, posts, urls, delivered };
 }
 
 test("discord-post pings exactly the ids it is given and repeats the title for push notifications", (t) => {
@@ -106,4 +112,27 @@ test("discord-post skips without a webhook or on a dry run, and rejects caller m
     assert.equal(run(env).status, 1, JSON.stringify(env));
   }
   assert.deepEqual(posts(), []);
+});
+
+test("discord-post posts to its repository's entry in the webhook map, masked, and falls back to webhook", (t) => {
+  const mapped = "https://discord.invalid/api/webhooks/2/infra";
+  const webhooks = JSON.stringify({
+    "a-novel/infra": mapped,
+    "a-novel/.github": "https://discord.invalid/api/webhooks/3/meta",
+  });
+  const route = (env) => {
+    const { run, urls } = discord(t);
+    return { stdout: succeeds(run(env)), urls: urls() };
+  };
+
+  const picked = route({ WEBHOOKS: webhooks });
+  assert.deepEqual(picked.urls, [mapped]);
+  assert(picked.stdout.split("\n").includes(`::add-mask::${mapped}`));
+  assert.deepEqual(route({ WEBHOOKS: webhooks, REPOSITORY: "a-novel/service-genai" }).urls, [webhook]);
+  const invalid = route({ WEBHOOKS: "not json" });
+  assert.deepEqual(invalid.urls, [webhook]);
+  assert.match(invalid.stdout, /::warning::webhooks is not a JSON object/);
+  const quiet = route({ WEBHOOKS: webhooks, WEBHOOK: "", REPOSITORY: "a-novel/service-genai" });
+  assert.deepEqual(quiet.urls, []);
+  assert.match(quiet.stdout, /::notice::No Discord webhook configured/);
 });

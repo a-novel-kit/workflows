@@ -3,7 +3,8 @@ description: >
   Post one embed to a Discord channel webhook: a colored side bar naming the event's state, a title
   linking to GitHub, and a Markdown body. Pings are limited to the role and user ids passed in, so
   text copied from a PR title or release notes can never ping anyone. A notification never fails the
-  job it reports on: delivery errors end as a warning, and an empty webhook skips the post.
+  job it reports on: delivery errors end as a warning, and an empty webhook skips the post. A map of
+  webhooks routes the post to its repository's own channel.
 
 inputs:
   webhook:
@@ -12,6 +13,16 @@ inputs:
     description: >
       Discord channel webhook URL, passed from a secret. Empty skips the post, so a repository
       without the secret stays quiet.
+  webhooks:
+    required: false
+    default: ""
+    description: >
+      JSON map from "<org>/<repo>" to a channel webhook URL, passed from a secret. The entry for
+      repository wins over webhook, so a repository missing from the map posts to webhook.
+  repository:
+    required: false
+    default: ${{ github.repository }}
+    description: The "<org>/<repo>" whose entry in webhooks receives the post.
   title:
     required: true
     description: Embed title, cut to Discord's 256 characters.
@@ -58,6 +69,8 @@ runs:
       shell: bash
       env:
         WEBHOOK: ${{ inputs.webhook }}
+        WEBHOOKS: ${{ inputs.webhooks }}
+        REPOSITORY: ${{ inputs.repository }}
         TITLE: ${{ inputs.title }}
         URL: ${{ inputs.url }}
         DESCRIPTION: ${{ inputs.description }}
@@ -116,6 +129,15 @@ runs:
         if [ "$DRY_RUN" = "true" ]; then
           printf '[dry-run] would post to Discord:\n```json\n%s\n```\n' "$payload" >> "$GITHUB_STEP_SUMMARY"
           exit 0
+        fi
+        # GitHub masks a secret only as a whole, so the URL picked out of the map gets its own mask.
+        if [ -n "$WEBHOOKS" ]; then
+          picked=$(jq -r --arg repo "$REPOSITORY" '.[$repo] // empty' <<<"$WEBHOOKS" 2>/dev/null) ||
+            { picked=""; echo "::warning::webhooks is not a JSON object; posting to webhook instead."; }
+          if [ -n "$picked" ]; then
+            echo "::add-mask::$picked"
+            WEBHOOK=$picked
+          fi
         fi
         if [ -z "$WEBHOOK" ]; then
           echo "::notice::No Discord webhook configured; skipped the post."

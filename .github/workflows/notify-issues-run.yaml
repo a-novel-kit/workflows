@@ -4,8 +4,8 @@ name: notify-issues (reusable)
 # a schedule: GitHub raises no event when a board Status changes, so the board is polled. It posts
 # each open board issue that entered Ready, and each one whose assignees changed outside Backlog,
 # since the caller's previous successful run, so a late or failed run is caught up by the next. A
-# post pings the assignees through the GitHub-to-Discord map, or the repository's role when nobody
-# is assigned.
+# post goes to its repository's issues channel, or the org's when the repository has none, and pings
+# the assignees through the GitHub-to-Discord map, or the repository's role when nobody is assigned.
 on:
   workflow_call:
     inputs:
@@ -38,7 +38,10 @@ on:
         description: The [Agent] bot App private key (PEM).
       webhook:
         required: false
-        description: Discord webhook of the org's issues channel (ISSUES_WEBHOOK). Empty skips the posts.
+        description: Discord webhook of the org's issues channel (ISSUES_WEBHOOK), for repositories missing from webhooks. Empty skips their posts.
+      webhooks:
+        required: false
+        description: JSON map from "<org>/<repo>" to the webhook of that repository's issues channel (ISSUES_WEBHOOKS).
       bws_access_token:
         required: false
         description: Read-only token for the GitHub-to-Discord map (BWS_READ_TOKEN). Empty posts without user pings.
@@ -143,6 +146,8 @@ jobs:
         uses: a-novel-kit/workflows/generic-actions/discord-post@v1.61.1
         with:
           webhook: ${{ secrets.webhook }}
+          webhooks: ${{ secrets.webhooks }}
+          repository: ${{ matrix.event.repo }}
           color: started
           title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
           url: ${{ matrix.event.url }}

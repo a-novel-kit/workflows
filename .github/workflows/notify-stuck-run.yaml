@@ -9,8 +9,9 @@ name: notify-stuck (reusable)
 # run posts every pull request stuck at that moment.
 #
 # The post goes to the dependencies channel and pings the repository's role. A pull request waiting
-# on a person's review also posts to the reviews channel, pinging its requested reviewers or else the
-# role, and its dependencies post stays quiet.
+# on a person's review also posts to its repository's reviews channel, or the org's when the
+# repository has none, pinging its requested reviewers or else the role, and its dependencies post
+# stays quiet.
 on:
   workflow_call:
     inputs:
@@ -47,7 +48,10 @@ on:
         description: Discord webhook of the org's dependencies channel (DEPENDENCIES_WEBHOOK). Empty skips those posts.
       reviews_webhook:
         required: false
-        description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK). Empty skips those posts.
+        description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK), for repositories missing from reviews_webhooks. Empty skips their posts.
+      reviews_webhooks:
+        required: false
+        description: JSON map from "<org>/<repo>" to the webhook of that repository's reviews channel (REVIEWS_WEBHOOKS).
       bws_access_token:
         required: false
         description: Read-only token for the GitHub-to-Discord map (BWS_READ_TOKEN). Empty posts without user pings.
@@ -181,6 +185,8 @@ jobs:
         uses: a-novel-kit/workflows/generic-actions/discord-post@v1.61.1
         with:
           webhook: ${{ secrets.reviews_webhook }}
+          webhooks: ${{ secrets.reviews_webhooks }}
+          repository: ${{ matrix.event.repo }}
           color: in-progress
           title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
           url: ${{ matrix.event.url }}

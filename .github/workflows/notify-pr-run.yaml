@@ -3,11 +3,12 @@ name: notify-pr (reusable)
 # Tells people in Discord where each pull request stands, without the dependency bots' noise. Every
 # governed repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on pull request,
 # review and failed CI events. A person's pull request posts to the reviews channel when it waits on
-# a review, gets one, merges or drops out of the merge queue. A review request pings its reviewers;
-# a review or a drop pings the owner: the assignees, else the assignees of the issues it closes,
-# else the repository's role. A bot's pull request posts only when a commit of it fails CI, pinging
-# the repository's role the first time, and when it merges or closes after a failure. Drafts post
-# nothing, and a post never pings the person who caused it.
+# a review, gets one, merges or drops out of the merge queue: the repository's own channel, or the
+# org's when it has none. A review request pings its reviewers; a review or a drop pings the owner:
+# the assignees, else the assignees of the issues it closes, else the repository's role. A bot's
+# pull request posts only when a commit of it fails CI, pinging the repository's role the first
+# time, and when it merges or closes after a failure. Drafts post nothing, and a post never pings
+# the person who caused it.
 on:
   workflow_call:
     inputs:
@@ -36,7 +37,10 @@ on:
         description: The [Agent] bot App private key (PEM).
       reviews_webhook:
         required: false
-        description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK). Empty skips those posts.
+        description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK), for repositories missing from reviews_webhooks. Empty skips their posts.
+      reviews_webhooks:
+        required: false
+        description: JSON map from "<org>/<repo>" to the webhook of that repository's reviews channel (REVIEWS_WEBHOOKS).
       dependencies_webhook:
         required: false
         description: Discord webhook of the org's dependencies channel (DEPENDENCIES_WEBHOOK). Empty skips those posts.
@@ -320,6 +324,7 @@ jobs:
           webhook: >-
             ${{ steps.state.outputs.channel == 'reviews' && secrets.reviews_webhook ||
             steps.state.outputs.channel == 'dependencies' && secrets.dependencies_webhook || '' }}
+          webhooks: ${{ steps.state.outputs.channel == 'reviews' && secrets.reviews_webhooks || '' }}
           color: ${{ steps.state.outputs.color }}
           title: ${{ steps.state.outputs.title }}
           url: ${{ steps.state.outputs.url }}

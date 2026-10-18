@@ -94,7 +94,7 @@ SemVer release.
 | `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.      |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
 | `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
-| `discord-post`           | Post one Discord embed with a state-colored bar; pings only the ids passed in, never fails the job.               |
+| `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given, never fails the job.  |
 | `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked, fail-soft.                              |
 | `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.               |
 | `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.            |
