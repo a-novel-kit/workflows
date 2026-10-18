@@ -166,7 +166,9 @@ test("release pushes are atomic, hotfixes push their release line, and dry runs 
       assert.equal(existsSync(join(w.cwd, "released")), outcome === "success");
       if (outcome === "success") {
         for (const tag of ["v1.2.4", "child/v1.2.4"]) assert.equal(remote("rev-parse", tag), git("rev-parse", "HEAD"));
-        assert.equal(JSON.parse(w.read("released")).includes("--latest=false"), action.endsWith("hotfix"));
+        const released = JSON.parse(w.read("released"));
+        assert.equal(released.includes("--latest=false"), action.endsWith("hotfix"));
+        if (action.endsWith("hotfix")) assert.equal(released[released.indexOf("--target") + 1], pushed);
       } else assert.equal(remote("tag", "--list", "*v1.2.4"), "");
       if (outcome === "dry-run") assert.equal(JSON.parse(w.read("package.json")).version, "1.2.3");
     }
