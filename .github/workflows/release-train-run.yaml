@@ -43,7 +43,7 @@ jobs:
       contents: read
     steps:
       # workflow_dispatch is open to any write user, so this gate keeps the release train admin-only.
-      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.60.5
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.61.0
         with:
           roles: admin
 
@@ -60,7 +60,7 @@ jobs:
           fi
           echo "Proceeding with the release train for epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - uses: a-novel-kit/workflows/generic-actions/release-train@v1.60.5
+      - uses: a-novel-kit/workflows/generic-actions/release-train@v1.61.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
