@@ -258,7 +258,7 @@ Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/wo
 | `backport-run`       | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.           |
 | `release-line-run`   | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
 | `notify-ci-run`      | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
-| `notify-release-run` | Announce a published release in Discord with its notes, linking pull requests the way GitHub does.                |
+| `notify-release-run` | Announce a published release in Discord with its notes, colored by its bump, gold for a hotfix.                   |
 | `notify-issues-run`  | Post board issues entering Ready, or changing assignees outside Backlog, to Discord, pinging the assignees.       |
 | `notify-pr-run`      | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
 | `notify-stuck-run`   | Post bots' pull requests that stay green but out of the merge queue to Discord, pinging the repo role.            |

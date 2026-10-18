@@ -51,6 +51,22 @@ test("notify-ci reports a failure, and a success only when it ends one, naming t
   }
 });
 
+test("notify-release colors a hotfix gold and every other release by the bump its tag carries", (t) => {
+  for (const [tag, target, expected] of [
+    ["v1.60.5", "master", "started"],
+    ["v1.0.10", "master", "started"],
+    ["v1.61.0", "master", "succeeded"],
+    ["v0.10.0", "master", "succeeded"],
+    ["v2.0.0", "master", "released"],
+    ["nightly", "master", "released"],
+    ["v2.10.3", "release/v2.10", "upcoming"],
+  ]) {
+    const w = workspace(t);
+    succeeds(w.bash(step(".github/workflows/notify-release-run.yaml", "color"), { TAG: tag, TARGET: target }));
+    assert.equal(w.read("output"), `color=${expected}\n`, `${tag} on ${target}`);
+  }
+});
+
 test("notify-release links bare pull-request and compare URLs the way GitHub renders them", (t) => {
   const w = workspace(t);
   const body = [
