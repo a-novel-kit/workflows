@@ -21,7 +21,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.61.0
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.61.1
       id: app_token
       with:
         github_token: ${{ inputs.github_token }}
