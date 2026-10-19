@@ -1,78 +1,72 @@
 name: release train
 description: >
-  Release an entire Epic from one human decision (a-novel-kit/workflows#236). Given a landed Epic N,
-  reconstruct the set of repos its `epic:<N>` PRs merged into, derive each repo's semver bump from its
-  release history, and drive each repo's OWN `release.yaml` (cross-repo workflow_dispatch) to cut the
-  release — any order, since an atomic Epic means the repos are independent. It records the released tag
-  per repo as a receipt on the Epic issue and is idempotent: a re-dispatch skips every repo that has
-  already shipped this Epic's merge (derived from LIVE tags, never from the receipt), so a partial train
-  resumes cleanly.
+  Release every repository an Epic landed in, from one dispatch. The action finds the repositories
+  of the Epic's merged `epic:<N>` pull requests, derives each one's semver bump from the commits
+  since its last tag, and dispatches that repository's own `release.yaml` to cut the release. That
+  workflow takes `release_type` and `dry_run` inputs, and owns the bump, the tag, the push and the
+  GitHub Release with its own token. The repositories release independently, in any order. Ordering
+  releases across Epics is left to the caller.
 
-  It never cuts the release itself — each repo's `release.yaml` (`release-core`) owns the bump, tag,
-  push, and GitHub Release, minting its own repo-scoped `contents:write`. The orchestrator holds only
-  `actions:write` (dispatch + read runs) plus read scopes for the ledger and tag reads. `dry_run`
-  defaults on: it reconstructs the plan and dispatches each `release.yaml` with `dry_run=true` (a
-  rehearsal that runs to success but cuts no tag), reporting the per-repo bump it WOULD apply, and
-  never touches the Epic body.
+  Each repository is rehearsed first, through a `release.yaml` run with dry_run "true" that cuts no
+  tag and must succeed. A live cut then waits up to an hour for approval at the repository's
+  protected `release` environment. A rehearsal that stops at that environment parks the repository.
 
-  Two human gates guard a live train: this admin-gated dispatch, and each repo's protected `release`
-  environment, whose approval every cut waits for. A rehearsal runs outside that environment and never
-  waits. Cross-EPIC release ordering is manage-versions' concern, not this action's.
+  A live run records each released tag as a receipt in the Epic issue's body. A re-dispatch resumes
+  from live tags, never from the receipt. It skips each repository whose newest tag contains the
+  Epic's merge and has a published Release. A tag without a Release is a botched cut, left for
+  manual repair. The run fails while any repository is unfinished. `dry_run` defaults to "true",
+  which rehearses every repository and leaves the Epic body untouched. The action requires the admin
+  role and refuses to run while the kill switch is engaged or the Epic carries `automation:paused`.
 
 inputs:
   client_id:
     required: true
     description: >
-      [Agent] App client ID. Mints three least-privilege org-wide tokens: a READ token (issues +
-      pull-requests + contents read — the epic:<N> ledger search, the per-repo commit range for the
-      bump, and tag/release reads); a DISPATCH token (actions:write — trigger each repo's release.yaml
-      and poll the run); and an ISSUE token (issues:write, scoped to the planning repo — splice the
-      receipt block into the Epic body). It never mints a contents:write / push token: the release
-      itself is cut by each repo's release-core, which mints its own.
+      Client ID of a GitHub App installed on the org. The action mints three tokens from it: an
+      org-wide read token for issues, pull requests and contents, an org-wide Actions write token
+      that dispatches and polls each `release.yaml`, and an Issues write token scoped to
+      `planning_repo` for the receipt.
   app_private_key:
     required: true
-    description: Private key (PEM) of that App — the AGENT_BOT_PRIVATE_KEY org secret.
+    description: Private key (PEM) of that App.
   epic_number:
     required: true
     description: >
-      The Epic number N to release (numeric). Builds the `label:"epic:<N>"` search qualifier, so it is
-      re-validated numeric here (injection guard) even though the dispatch shell already checked it.
+      Number of the Epic to release. It builds a `label:"epic:<N>"` search qualifier, so anything
+      but an integer fails the run.
   org:
     required: false
     default: ${{ github.repository_owner }}
     description: >
-      Organization login. The `epic:<N>` search is scoped `org:<org>` and every token is installed
-      here. Defaults to the workflow's org.
+      Organization login. The `epic:<N>` search is scoped to it, and every token is minted on its
+      installation. Defaults to the workflow's org.
   planning_repo:
     required: false
     default: .github
     description: >
-      Repository (name only; owner is `org`) where Epic issues live — the Epic issue whose body holds
-      the receipt block, and whose `automation:paused` label gates this run. Defaults to `.github`.
+      Repository, by name in `org`, that holds the Epic issue. The receipt goes into that issue's
+      body, and its `automation:paused` label stops the run. Defaults to `.github`.
   dry_run:
     required: false
     default: "true"
     description: >
-      When "true" (default), reconstruct the plan and dispatch each release.yaml with dry_run=true —
-      a rehearsal that validates the release mechanics (bump computes, docs stamp, tag resolves), cuts
-      NO tag, and does NOT edit the Epic body. Set "false" to actually cut the releases (each repo is
-      rehearsed first, then cut).
+      When "true" (default), rehearse every repository through its `release.yaml` with dry_run
+      "true", which cuts no tag, and leave the Epic body untouched. Set "false" to rehearse each
+      repository and then cut its release.
   kill_switch:
     required: false
     default: ""
     description: >
-      Org-level HALT, threaded from the caller as `kill_switch: vars.AGENT_KILL_SWITCH` (a composite
-      action cannot read the `vars` context itself, so the caller passes the variable's value as this
-      input). FAIL-SAFE: RUNNING only when the value (lowercased, whitespace-stripped) is an explicit
-      off-token — empty/unset, 0, off, false, no, disabled; ANYTHING ELSE engages the halt. When
-      engaged this action aborts LOUD (exit 1) as its FIRST step, before the admin check or any mint.
+      Org-level halt, passed in by the caller because a composite action cannot read the `vars`
+      context. The action runs only when the value, lowercased and stripped of whitespace, is empty,
+      0, off, false, no or disabled. Any other value engages the halt, and the action fails in its
+      first step, before the role check or any token mint.
 
 runs:
   using: composite
   steps:
-    # Org-level halt, read before the admin check or any token mint. Cutting releases is a
-    # deliberate, un-halted decision, so an engaged switch aborts loudly. Fail-safe: running only
-    # for an explicit off-token.
+    # Org-level halt, read before the role check and every token mint. Cutting releases is a
+    # deliberate decision, so an engaged switch fails the run. Only an explicit off-token runs.
     - name: Halt guard (kill-switch)
       shell: bash
       env:
@@ -87,13 +81,14 @@ runs:
             ;;
         esac
 
-    # Re-check the role here as well as in the caller, which a hand-written or drifted copy could drop.
+    # The role is checked here as well as in the caller, since a hand-written or outdated caller can
+    # omit the check.
     - uses: a-novel-kit/workflows/generic-actions/require-role@v1.63.0
       with:
         roles: admin
 
-    # Read token: the ledger search, per-repo commit ranges and tag or release reads span every repo
-    # in the org, and the single-repo GITHUB_TOKEN cannot see siblings.
+    # Read token. The ledger search, the commit ranges and the tag and release reads span every
+    # repository in the org, which the single-repository GITHUB_TOKEN cannot see.
     - name: Mint read token
       id: read
       uses: actions/create-github-app-token@v3
@@ -105,9 +100,8 @@ runs:
         permission-pull-requests: read
         permission-contents: read
 
-    # Dispatch token: actions:write to trigger each repo's release.yaml through the dispatches
-    # endpoint and read the runs. The orchestrator never pushes, so it holds no contents:write;
-    # release-core mints its own.
+    # Dispatch token. actions:write triggers each repository's release.yaml and reads its runs. The
+    # action never pushes, so it holds no contents:write, and release-core mints its own.
     - name: Mint dispatch token
       id: dispatch
       uses: actions/create-github-app-token@v3
@@ -117,8 +111,8 @@ runs:
         owner: ${{ inputs.org }}
         permission-actions: write
 
-    # Issue token: issues:write, scoped to the planning repo alone, to splice the receipt block into
-    # the Epic body. The receipt is a best-effort audit; resume reads live tags.
+    # Issue token, scoped to the planning repo alone, which splices the receipt into the Epic body.
+    # The receipt is a best-effort audit, since a resume reads live tags.
     - name: Mint issue token
       id: issue
       uses: actions/create-github-app-token@v3
@@ -132,9 +126,8 @@ runs:
     - name: Reconstruct the Epic, derive bumps, drive each release.yaml
       shell: bash
       env:
-        # The default GH_TOKEN is the read token, which every bare-`gh` read picks up; the dispatch
-        # and issue tokens are applied inline at their call sites, so a read never holds a write
-        # scope.
+        # Every bare `gh` call reads with the read token. The dispatch and issue tokens apply inline
+        # at their call sites, so a read never holds a write scope.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         DISPATCH_TOKEN: ${{ steps.dispatch.outputs.token }}
         ISSUE_TOKEN: ${{ steps.issue.outputs.token }}
@@ -157,11 +150,11 @@ runs:
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""; exit 1
         fi
-        # dry_run defaults on; only the literal "false" cuts real releases.
+        # Only "false", in any case, cuts real releases.
         dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
 
-        # ---- Per-Epic pause: refuse to release a paused Epic. The label read is best-effort, since
-        # the admin gate already fenced this dispatch, so a read error does not block.
+        # ---- Per-Epic pause. A failed label read does not block, since the role check already
+        # gates the run.
         paused=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.labels[].name' 2>/dev/null || echo "")
         if printf '%s\n' "$paused" | grep -qx 'automation:paused'; then
           echo "::error::epic:#${EPIC} is automation:paused — remove the \`automation:paused\` label from the Epic issue before releasing it."
@@ -170,15 +163,15 @@ runs:
 
         # ================= Shared helpers ==========================================================
 
-        # PR-search node: number, repo and mergedAt, which anchors the ship test on each repo's
-        # newest-merged sibling, so a later sibling not yet in the tag cannot be masked.
+        # Pull request search node. mergedAt picks each repository's newest-merged sibling, which
+        # anchors the ship test, so a later sibling missing from the tag is never masked.
         SEARCH_Q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number mergedAt repository{ nameWithOwner } } } } }'
 
-        # Page an ISSUE search to completion, retrying transient GraphQL errors; prints the aggregated
-        # PR-node array. Returns 1 on failure so the caller fails closed.
+        # Page an ISSUE search to completion, retrying transient GraphQL errors, and print the
+        # aggregated node array. Returns 1 on failure, so the caller fails closed.
         search_prs() { # $1 = search query
           local search="$1" cursor="" agg='[]' data page ok args
           while :; do
@@ -201,7 +194,8 @@ runs:
           printf '%s' "$agg"
         }
 
-        # REST authority for one PR, which the search index lags: prints "<merged> <merge_commit_sha>".
+        # Read one pull request through REST, the authority the search index lags behind. Prints
+        # "<merged> <merge_commit_sha>".
         rest_pr_merge() { # $1=owner/repo $2=number
           local data
           for attempt in 1 2 3; do
@@ -213,12 +207,13 @@ runs:
           printf 'rest_pr_merge failed for %s#%s\n' "$1" "$2" >&2; return 1
         }
 
-        # Newest release tag of a repo, honoring the sub-dir Go-module prefix (<dir>/vX.Y.Z). A
-        # transient read is retried and a hard failure prints "__ERR__", on which the caller aborts
-        # that repo: a swallowed error looks like a first-release repo and double-releases on a live
-        # resume. A genuine no-tags repo prints empty. `sort -V` over mixed namespaces is correct
-        # for the single go.mod release-core enforces; a repo that relocated its module, carrying both
-        # `v*` and `dir/v*`, could pick the wrong namespace.
+        # Newest release tag of a repository, `vX.Y.Z` or a Go submodule's `<dir>/vX.Y.Z`. A
+        # repository with no tag prints nothing, which means a first release. A read that fails after
+        # retries prints "__ERR__" instead, and the caller skips the repository. A read error taken
+        # for a first release releases the repository twice on a resumed train.
+        #
+        # `sort -V` across both forms relies on the single go.mod that release-core enforces. A
+        # repository that moved its module carries both forms and can get the wrong one.
         latest_tag() { # $1=owner/repo
           local refs
           for attempt in 1 2 3; do
@@ -231,9 +226,8 @@ runs:
           printf '__ERR__'
         }
 
-        # Does <tag> contain <merge_sha>? Compare with base=merge_sha and head=tag: `ahead` or
-        # `identical` puts the tag at or after the merge, so the sibling shipped in it. Retries, and
-        # returns 2 on a hard read error.
+        # Does <tag> contain <merge_sha>? The compare runs from the merge to the tag, and `ahead` or
+        # `identical` puts the tag at or after the merge. Returns 2 when the read fails after retries.
         tag_contains() { # $1=owner/repo $2=tag $3=merge_sha
           local st
           for attempt in 1 2 3; do
@@ -245,10 +239,10 @@ runs:
           return 2
         }
 
-        # Does a published GitHub Release exist for <tag>? A tag-only botched cut has none. Every
-        # failure is retried three times, since `--silent` does not cheaply distinguish a definitive
-        # 404 from a transient error, and a persistent failure returns 1, failing closed to "botched".
-        # That is loud and self-heals on a re-dispatch, so a transient blip costs one extra cycle.
+        # Does a published GitHub Release exist for <tag>? A botched cut leaves a tag without one.
+        # `--silent` hides whether a failure is a 404 or a transient error, so every failure is
+        # retried, and a persistent one returns 1. The caller then reports a botched cut, which a
+        # re-dispatch clears once the read succeeds.
         release_exists() { # $1=owner/repo $2=tag
           for attempt in 1 2 3; do
             if gh api "repos/$1/releases/tags/$2" --silent >/dev/null 2>&1; then return 0; fi
@@ -257,12 +251,8 @@ runs:
           return 1
         }
 
-        # Derive the semver bump for a repo from its commit range since the last tag, which is what
-        # the release cuts: everything on the default branch since that tag, wider than the Epic's own
-        # commits. Highest wins — a `!` or BREAKING footer gives major, any feat gives minor, else
-        # patch — and an empty range gives "none", which skips the repo. feat and `!` are read from
-        # subject lines, since a body line starting `feat:` is not a type, while the BREAKING-CHANGE
-        # footer is read from the full body. The compare API supplies both, so there is no checkout.
+        # Print a jq filter's output for an API path, paginated on request, retrying transient
+        # errors. Returns 1 when every attempt fails.
         commit_messages() { # $1=api path  $2=jq filter  $3=paginate(true|false)
           local out attempt
           for attempt in 1 2 3; do
@@ -276,23 +266,28 @@ runs:
           return 1
         }
 
+        # Derive a repository's semver bump from its commits since the last tag. The release cuts the
+        # whole default branch since that tag, which can hold more than the Epic's own commits. The
+        # highest bump wins. A `!` or a BREAKING CHANGE footer gives major, any feat gives minor, and
+        # anything else gives patch. An empty range prints "none" and a failed read "__ERR__".
+        #
+        # feat and `!` are read from subject lines, since a body line starting `feat:` is no type. The
+        # BREAKING CHANGE footer is read from the full body. The compare API supplies both, so the
+        # derivation needs no checkout.
         derive_bump() { # $1=owner/repo $2=last_tag ("" = first release) $3=default_branch
           local repo="$1" last="$2" head="$3" messages subjects bodies path paginate jq_messages
           if [ -z "$last" ]; then
-            # First release: scan the recent default-branch history, defaulting to minor when quiet.
-            # Unpaginated, since "is there anything here" does not need the whole history.
+            # A first release reads one page of recent default-branch commits, and an empty page
+            # gives minor.
             path="repos/$repo/commits"; paginate=false
             jq_messages='.[].commit.message | @json'
           else
-            # Paginated: the compare API pages its commit list, and a feat past the first page would
-            # be invisible, shipping a minor as a patch.
+            # The compare API pages its commit list, so the read paginates to see every feat.
             path="repos/$repo/compare/${last}...${head}"; paginate=true
             jq_messages='.commits[].commit.message | @json'
           fi
-          # Fail closed, as latest_tag and tag_contains do. A failed read is not an empty range:
-          # collapsing the two onto one value makes a transient API error read as "nothing to
-          # release", so the repo is skipped and recorded as nochange while the run stays green, and
-          # with no failure recorded a re-dispatch recomputes the same skip.
+          # A failed read prints "__ERR__", which the caller records as a failure. An empty range
+          # skips the repository as nochange and keeps the run green, so the two stay apart.
           if ! messages=$(commit_messages "$path" "$jq_messages" "$paginate"); then
             printf '__ERR__'; return 0
           fi
@@ -310,10 +305,12 @@ runs:
           fi
         }
 
-        # Dispatch a repo's release.yaml and return the created run id. return_run_details gives that
-        # id directly; on the older 204 answer, correlate by the App-bot actor and a created>= filter
-        # with a 60s skew margin, since the runner clock may lead GitHub's server time. Inputs travel
-        # as strings, which is what the dispatches API takes whatever an input's declared type, and
+        # Dispatch a repository's release.yaml and print the run id, which `return_run_details`
+        # returns directly. When GitHub answers 204 without it, the run is found by the App bot actor
+        # and a created>= filter at the runner's dispatch time. A runner clock ahead of GitHub's can
+        # hide the run from that filter.
+        #
+        # Inputs travel as strings, which the dispatches API takes whatever an input's declared type.
         # release.yaml and release-core compare the string.
         dispatch_release() { # $1=owner/repo $2=default_branch $3=release_type $4=run_dry(true|false) $5=since_ts
           local repo="$1" ref="$2" rt="$3" rdry="$4" ts="$5" body resp run_id enc
@@ -337,9 +334,9 @@ runs:
         }
 
         # Poll a run to completion and print its conclusion. A cut waits up to an hour at the protected
-        # `release` environment for a person's approval. A rehearsal never meets that environment, so a
-        # waiting rehearsal prints "blocked" at once, as does a cut nobody approves within the hour. A
-        # blocked run may still complete on approval, so it is not a hard failure.
+        # `release` environment for a person's approval. A rehearsal runs outside that environment, so
+        # a rehearsal waiting there prints "blocked" at once, as does a cut nobody approves within the
+        # hour. A blocked run can still complete on approval, so the caller records it as parked.
         poll_run() { # $1=owner/repo $2=run_id $3=approval(true|false)
           local repo="$1" run_id="$2" approval="$3" polls=0 waits=0 st cc
           while [ "$polls" -lt 180 ]; do   # ~30 min of running at 10s (release-core can go install + build on a cold runner)
@@ -374,19 +371,16 @@ runs:
             | sed 's|refs/tags/||' | grep -E '(^|/)v[0-9]' | sort -u || true
         }
 
-        # Splice a marker-delimited region into the Epic body. Exactly one balanced START/END pair
-        # replaces the region in place, markers and old content together; anything else strips any
-        # stray marker lines and appends one fresh region, so a hand-edit never drops human prose and
-        # stale content never accumulates. Prints the new body.
+        # Splice the receipt region into the Epic body and print the new body. One START/END pair
+        # in order is replaced in place, markers and old content together. Any other shape loses its
+        # stray marker lines and gets one fresh region appended, so a hand-edit never drops prose.
         splice_body() { # $1=current body   $2=new region (incl. its markers)
           local body="$1" block="$2" s='<!-- release-train:receipts:start -->' e='<!-- release-train:receipts:end -->' ns ne sl el
           ns=$(printf '%s\n' "$body" | grep -cxF "$s" || true)
           ne=$(printf '%s\n' "$body" | grep -cxF "$e" || true)
           sl=$(printf '%s\n' "$body" | grep -nxF "$s" | head -1 | cut -d: -f1)
           el=$(printf '%s\n' "$body" | grep -nxF "$e" | head -1 | cut -d: -f1)
-          # Replace in place only for a well-formed single pair with START before END; an
-          # END-before-START hand-edit falls through to strip-and-append, which leaves prose intact.
-          # BLK arrives through the environment (ENVIRON) so awk does not interpret backslash escapes.
+          # BLK arrives through ENVIRON, so awk does not interpret its backslash escapes.
           if [ "$ns" = "1" ] && [ "$ne" = "1" ] && [ -n "$sl" ] && [ -n "$el" ] && [ "$sl" -lt "$el" ]; then
             printf '%s\n' "$body" | BLK="$block" awk -v s="$s" -v e="$e" '
               $0==s { print ENVIRON["BLK"]; skip=1; next } $0==e { skip=0; next } !skip { print }'
@@ -402,9 +396,8 @@ runs:
         if ! cands=$(search_prs "is:pr is:merged label:\"epic:${EPIC}\" org:${ORG}"); then
           echo "::error::could not reconstruct the Epic (GraphQL search failed after retries)"; exit 1
         fi
-        # One row per repo, anchored on the newest-merged sibling by mergedAt: a tag containing the
-        # newest Epic commit contains them all, since they share a base under the atomic-landing
-        # invariant, so an earlier sibling cannot mask a later one.
+        # One row per repository, for its newest-merged sibling. Siblings share a base under atomic
+        # landing, so a tag that contains the newest merge contains them all.
         newest=$(printf '%s' "$cands" | jq -c '
           group_by(.repository.nameWithOwner)
           | map(max_by(.mergedAt) | {repo: .repository.nameWithOwner, number: .number})')
@@ -454,9 +447,8 @@ runs:
             echo "- ❌ **${repo}** — tag read failed after retries; skipping (fail-closed, never assume first-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ -n "$last" ]; then
-            # Capture via `|| tc=$?`: the `||` list suspends set -e through the call. The function
-            # returns non-zero on ordinary outcomes too — 1 for the not-yet-shipped case, 2 for a read
-            # error — and under `set -e` that aborts the action before tc is read.
+            # tag_contains returns 1 when the merge has not shipped and 2 on a read error. The `||`
+            # list suspends `set -e` through the call, so either code reaches tc.
             tc=0; tag_contains "$repo" "$last" "$merge_sha" || tc=$?
             if [ "$tc" -eq 2 ]; then
               had_failure=true
@@ -469,11 +461,10 @@ runs:
                 receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"skipped"}]')
                 continue
               fi
-              # A botched cut: the tag sits at or after the merge but has no published Release, so
-              # release-core failed between pushing the tag and creating it. The orchestrator holds no
-              # contents:write and cannot create the Release, and a re-cut produces a higher tag that
-              # orphans this one, so fail loudly for manual repair — publish the Release for `$last`,
-              # or delete the tag to let a re-dispatch re-cut it.
+              # A tag at or after the merge without a published Release is a botched cut. release-core
+              # pushed the tag and failed before creating the Release. The action holds no
+              # contents:write to create it, and a re-cut orphans this tag under a higher one. The
+              # repository fails for manual repair, which publishes the Release or deletes the tag.
               had_failure=true
               receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"botched"}]')
               echo "::error::${repo} — tag \`${last}\` exists (contains the Epic merge) but has NO published Release — a botched cut. Publish the Release for \`${last}\`, or delete the tag to let a re-dispatch re-cut it. Not skipping, not re-cutting." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -494,7 +485,7 @@ runs:
             continue
           fi
 
-          # -- Rehearse: dispatch release.yaml dry_run=true; it must run to success ------------------
+          # -- Rehearse: release.yaml with dry_run=true must succeed --------------------------------
           ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" true "$ts"); then
             had_failure=true
@@ -529,8 +520,8 @@ runs:
           fi
           concl=$(poll_run "$repo" "$rid" true)
           if [ "$concl" = "blocked" ]; then
-            # Recorded as pending: the run may still cut the tag on approval, so a resume waits for
-            # it to clear. A fresh dispatch double-releases once the parked run is approved.
+            # Recorded as parked, since the run can still cut the tag on approval. A re-dispatch
+            # before that run clears starts a second cut, and both release once approved.
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
             had_failure=true
             echo "- ⏸️  **${repo}** — live release not approved within the hour (pending). Approve the run, then re-dispatch to record the receipt." | tee -a "$GITHUB_STEP_SUMMARY"; continue
@@ -546,10 +537,9 @@ runs:
             echo "- ✅ **${repo}** — released \`${newtag}\` (${bump})." | tee -a "$GITHUB_STEP_SUMMARY"
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$newtag" '$a + [{repo:$r, tag:$t, status:"shipped"}]')
           elif [ "$concl" = "success" ]; then
-            # Ran clean but the new tag is not visible yet, the ref index lagging. The run succeeded,
-            # so a tag was cut: record success with a null tag and let resume confirm it from live
-            # tags, which self-heals without double-releasing. The gate is the run conclusion alone,
-            # since a first-release repo has no old tag whose Release could be checked.
+            # The run succeeded, so a tag was cut, but the lagging ref index does not show it yet.
+            # Success is recorded with a null tag, and a resume confirms the tag from live tags. The
+            # run conclusion alone decides, since a first release has no earlier tag to compare.
             echo "- ✅ **${repo}** — release ${bump} ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"shipped"}]')
           else
@@ -570,22 +560,15 @@ runs:
             elif .status=="botched" then "⚠️ tag `"+.tag+"` without a Release — repair"
             elif .status=="parked" then "⏸️ parked (release-env approval)"
             else "❌ "+.status end) |")')
-        # Only a live run edits the human-authored Epic body; a dry-run rehearsal is side-effect-free.
         if [ "$dry" = "false" ]; then
           block=$(printf '<!-- release-train:receipts:start -->\n### 🚂 Release train — epic:#%s (%s)\n%s\n<!-- release-train:receipts:end -->' \
             "$EPIC" "$(date -u +%Y-%m-%dT%H:%MZ)" "$table")
-          # Abort the write when the read that feeds it failed. A failed read mapped onto an empty
-          # body makes splice_body return a body holding only the receipt block, and the PATCH then
-          # succeeds, overwriting the Epic's prose and its frozen activation snapshot without ever
-          # reaching the error path. That snapshot is what epic-membership, merge-gate and
-          # detect-partial-landing read, so losing it degrades the whole landing saga back to
-          # live-label membership.
+          # A failed read skips the write, because splicing into an empty body replaces the Epic's
+          # prose and its frozen activation snapshot, which epic-membership, merge-gate and
+          # detect-partial-landing read. A body read successfully as empty still splices, so the
+          # guard tests the read's exit status. The run summary holds the same table either way.
           #
-          # A body that reads successfully as empty is a different thing and still splices normally.
-          # Only the exit status separates the two, which is why the guard reads the status rather
-          # than "$cur". The receipts are a best-effort audit and the same table is already in the run
-          # summary, so declining to write costs nothing.
-          # GitHub stores bodies with CRLF; strip \r so the receipt fences match as whole lines.
+          # GitHub stores bodies with CRLF, so `tr` strips \r and the receipt markers match whole lines.
           if ! cur=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
             echo "::warning::could not read epic:#${EPIC} — leaving its body untouched; the receipt table is in the run summary."
           else
