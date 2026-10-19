@@ -46,6 +46,9 @@ export function workspace(t) {
     GITHUB_ENV: join(cwd, "env"),
     GITHUB_STEP_SUMMARY: join(cwd, "summary"),
     GIT_CEILING_DIRECTORIES: dirname(cwd),
+    // Scratch repositories ignore the developer's Git config, so no commit asks to be signed.
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
     PATH: `${join(cwd, "bin")}:${process.env.PATH}`,
   };
   const write = (path, content) => {
