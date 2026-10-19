@@ -87,7 +87,7 @@ jobs:
           bash -n "$RUNNER_TEMP/validate-renovate.sh"
           chmod +x "$RUNNER_TEMP/validate-renovate.sh"
       - name: Validate Renovate presets and inheritance
-        uses: renovatebot/github-action@v46.3.8
+        uses: renovatebot/github-action@v46.3.9
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           docker-cmd-file: ${{ runner.temp }}/validate-renovate.sh
