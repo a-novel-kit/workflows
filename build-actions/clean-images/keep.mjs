@@ -107,16 +107,16 @@ export async function origin(client, digest) {
  */
 export async function protectedDigests(versions, cutoff, kept, read, cache) {
   const protect = [];
+  async function classify({ name }) {
+    const found = cache[name] ?? (await read(name));
+    if (found !== null) cache[name] = found;
+    if (found === null || kept(found)) protect.push(name);
+  }
+
   const candidates = versions.filter((v) => v.metadata.container.tags.length === 0 && new Date(v.updated_at) < cutoff);
-  for (let next = 0; next < candidates.length;) {
-    // A few concurrent reads keep a first run on thousands of versions within minutes.
-    await Promise.all(
-      candidates.slice(next, (next += 8)).map(async ({ name }) => {
-        const found = cache[name] ?? (await read(name));
-        if (found !== null) cache[name] = found;
-        if (found === null || kept(found)) protect.push(name);
-      })
-    );
+  // A few concurrent reads keep a first run on thousands of versions within minutes.
+  for (let next = 0; next < candidates.length; next += 8) {
+    await Promise.all(candidates.slice(next, next + 8).map(classify));
   }
   return protect.sort();
 }
@@ -158,27 +158,27 @@ async function sweep(env) {
 /** Delete a closed pull request's `pr-<N>` image from each package that has one; a sweep takes the rest. */
 async function close(env) {
   const tag = `pr-${Number(env.PULL_REQUEST)}`;
+  const tagged = (version) => version.metadata.container.tags.includes(tag);
+  const dryRun = env.DRY_RUN === "true";
   for (const pkg of JSON.parse(env.PACKAGES)) {
     const client = new Client(env.GH_TOKEN, env.GITHUB_REPOSITORY, pkg);
     if (!(await client.registry(`manifests/${tag}`, MANIFESTS, true))) continue;
-    const versions = await client.pages(client.versionsPath(), (v) => v.metadata.container.tags.includes(tag));
-    const version = versions.find((v) => v.metadata.container.tags.includes(tag));
+    const version = (await client.pages(client.versionsPath(), tagged)).find(tagged);
     // Another tag on the same image names it for something else, so the image stays.
     if (!version || version.metadata.container.tags.length > 1) {
       console.log(`::notice::Kept ${pkg}:${tag}, which ${version ? "carries other tags" : "no version lists"}.`);
       continue;
     }
-    if (env.DRY_RUN !== "true") await client.api(`${client.versionsPath()}/${version.id}`, { method: "DELETE" });
-    await appendFile(
-      env.GITHUB_STEP_SUMMARY,
-      `${env.DRY_RUN === "true" ? "Would delete" : "Deleted"} \`${pkg}:${tag}\`.\n`
-    );
+    if (!dryRun) await client.api(`${client.versionsPath()}/${version.id}`, { method: "DELETE" });
+    await appendFile(env.GITHUB_STEP_SUMMARY, `${dryRun ? "Would delete" : "Deleted"} \`${pkg}:${tag}\`.\n`);
   }
 }
 
+function fail(error) {
+  console.log(`::error::${error.message}`);
+  process.exitCode = 1;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  (process.argv[2] === "close" ? close : sweep)(process.env).catch((error) => {
-    console.log(`::error::${error.message}`);
-    process.exitCode = 1;
-  });
+  (process.argv[2] === "close" ? close : sweep)(process.env).catch(fail);
 }

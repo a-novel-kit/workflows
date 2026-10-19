@@ -3,13 +3,16 @@ import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
 
+/** Exit codes that mean the scanner ran and reported findings. */
+const FINDINGS = { semgrep: [1], gitleaks: [10], zizmor: [11, 12, 13, 14] };
+
 const [name, command, ...args] = process.argv.slice(2);
 if (!name || !command) throw new Error("Expected a scanner name and command");
-let output = Buffer.alloc(0);
-let code;
-for (let attempt = 1; attempt <= 3; attempt++) {
-  output = Buffer.alloc(0);
-  code = await new Promise((resolve) => {
+
+/** Run the scanner once, streaming its output, and resolve its tail and exit code. */
+function scan() {
+  let output = Buffer.alloc(0);
+  return new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     for (const stream of ["stdout", "stderr"])
       child[stream].on("data", (chunk) => {
@@ -18,10 +21,15 @@ for (let attempt = 1; attempt <= 3; attempt++) {
       });
     child.on("error", (error) => {
       console.error(error.message);
-      resolve(127);
+      resolve({ output, code: 127 });
     });
-    child.on("close", (status) => resolve(status ?? 2));
+    child.on("close", (status) => resolve({ output, code: status ?? 2 }));
   });
+}
+
+let output, code;
+for (let attempt = 1; attempt <= 3; attempt++) {
+  ({ output, code } = await scan());
   // Docker's 125 means no scanner ran. Findings and scanner errors are never retried.
   if (command !== "docker" || code !== 125 || attempt === 3) break;
   console.warn(`::warning::docker could not run ${name} (attempt ${attempt}/3); retrying`);
@@ -31,7 +39,7 @@ for (let attempt = 1; attempt <= 3; attempt++) {
 const summary = (text) => appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`);
 if (code === 0) summary(`${name}: clean`);
 else {
-  const failed = !{ semgrep: [1], gitleaks: [10], zizmor: [11, 12, 13, 14] }[name]?.includes(code);
+  const failed = !FINDINGS[name]?.includes(code);
   const advisory = !failed && process.env.ADVISORY === "true";
   const status = failed ? "did not run" : "findings";
   const note =
