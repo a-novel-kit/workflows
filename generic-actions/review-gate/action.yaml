@@ -1,21 +1,19 @@
 name: review-gate
 description: >
-  Posts the `review-gate` check-run as the [Agent] App. A person's pull request passes once someone
-  holding the maintain or admin role on the repository approved its current head, or the App did
-  through `approve-pr`, and once every privileged label on it was last applied by such a person or by
-  the App. Anyone with write access can approve and label, so these two rules are what tie merging to
-  the maintainer tier. A bot's pull request needs no approval when GitHub signed every commit on it
-  for a bot, but its privileged labels count only on the same terms. A merge-queue group passes,
-  since its pull requests each passed at enqueue. A failed read posts `failure`: re-running the job
-  evaluates again.
+  Post the `review-gate` check-run as a GitHub App. A person's pull request passes once someone
+  holding the maintain or admin role on the repository, or the App, approved its current head. Every
+  privileged label on it must also have been last applied by such a person or by the App. Anyone with
+  write access can approve and label, so these two rules tie merging to the maintainer tier. A bot's
+  pull request needs no approval when GitHub signed every commit on it for a bot, but its privileged
+  labels count only on the same terms. A merge-queue group passes, since its pull requests each
+  passed at enqueue. A failed read posts `failure`, and re-running the job evaluates again.
 
 inputs:
   client_id:
     required: true
     description: >
-      Client ID of the [Agent] App. Needs checks write to post the check, plus pull-requests and
-      issues read for the reviews, commits, labels and label history. Its approvals count as a
-      maintainer's.
+      Client ID of a GitHub App with checks write, plus pull requests and issues read for the
+      reviews, commits, labels and label history. The App's own approvals count as a maintainer's.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -24,19 +22,19 @@ inputs:
     default: ""
     description: >
       Labels, separated by newlines or commas, that count only when a maintainer, an admin or the
-      App applied them last: those that waive a check or spend resources.
+      App applied them last. These are the labels that waive a check or spend resources.
   event:
     required: false
     default: ${{ github.event_name }}
     description: >
-      Event being gated. Defaults to the triggering one; a run relayed through `workflow_run` passes
-      `relay-context`'s, and `merge_group` passes without a review.
+      Event being gated. Defaults to the triggering one. A run relayed through `workflow_run` passes
+      `relay-context`'s event output. A `merge_group` passes without a review.
   pull_request_number:
     required: false
     default: ${{ github.event.pull_request.number }}
     description: >
-      Number of the pull request to gate. Defaults to the triggering one; a `workflow_run` caller,
-      such as the Dependabot job, passes it because its event carries no pull request.
+      Number of the pull request to gate. Defaults to the triggering one. A `workflow_run` caller
+      passes it, because that event carries no pull request.
   head_sha:
     required: false
     default: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
@@ -78,7 +76,7 @@ runs:
           printf 'review-gate=%s @ %s\n\n%s\n' "$1" "${HEAD_SHA:0:12}" "$2" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
-        # The check is required, so passing on an unread list would let the pull request merge.
+        # The check is required, so a failed read posts failure and holds the pull request.
         hold() {
           post_check failure "Couldn't read $1. Re-run this job to evaluate again."
           exit 0
@@ -92,8 +90,8 @@ runs:
         if [ -z "$AUTHOR_TYPE" ]; then
           AUTHOR_TYPE="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.type)" || hold "the pull request"
         fi
-        # Anyone pushing can claim a bot's email, so a commit counts as a bot's only when GitHub signed
-        # it as web-flow, which it does only for commits it writes for the bot itself.
+        # Anyone pushing can claim a bot's email. A commit counts as a bot's only when GitHub signed it
+        # as web-flow, which GitHub does only for a commit it writes for the bot itself.
         bot_written=false
         if [ "$AUTHOR_TYPE" = Bot ]; then
           unsigned="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" |
@@ -102,7 +100,7 @@ runs:
           [ "$unsigned" = 0 ] && bot_written=true
         fi
 
-        # A 404 means no such account; any other failed lookup holds.
+        # A 404 means no such account. Any other failed lookup holds.
         declare -A roles=()
         trusted() { # $1=login  $2=account type
           if [ "$2" = Bot ]; then
@@ -122,7 +120,7 @@ runs:
           [ "${roles[$1]}" = admin ] || [ "${roles[$1]}" = maintain ]
         }
 
-        # Reviews arrive oldest first; each reviewer's last approval, change request or dismissal
+        # Reviews arrive oldest first. Each reviewer's last approval, change request or dismissal
         # stands, and only an approval of the current head counts.
         approver=""
         if [ "$bot_written" = false ]; then

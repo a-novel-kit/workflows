@@ -12,10 +12,8 @@ inputs:
   ref:
     required: false
     description: >
-      Ref to check out and publish from. Leave empty for the legacy tag-push flow
-      (the ref is already the tag). In the dispatched release flow, pass the new
-      release tag (needs.release.outputs.tag) so the published package carries the
-      bumped version, not the pre-bump default branch.
+      Ref to check out and publish from. A dispatched release passes its new tag, so the package
+      carries the bumped version. Empty publishes the triggering ref.
     default: ""
 
 runs:
@@ -28,7 +26,9 @@ runs:
         ref: ${{ inputs.ref }}
     - name: build
       shell: bash
-      run: pnpm run ${{ inputs.build_action }}
+      env:
+        BUILD_ACTION: ${{ inputs.build_action }}
+      run: pnpm run "$BUILD_ACTION"
     - run: pnpm publish -r --access public
       shell: bash
       env:

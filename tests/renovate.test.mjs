@@ -14,29 +14,36 @@ const extract = (manager, fixture) =>
   manager.matchStrings.flatMap((pattern) =>
     [...fixture.matchAll(new RegExp(pattern, "g"))].map(({ groups }) => ({ ...groups }))
   );
+const pin = ({ datasource, depName, currentValue }) => ({ datasource, depName, currentValue });
+
+/** A `groups` case for one first-party service: its module, image and client join the group, the platform stays out. */
+function serviceGroup(service) {
+  return [
+    `service ${service.replace("-", " ")}`,
+    [
+      `github.com/a-novel/service-${service}`,
+      `ghcr.io/a-novel/service-${service}/database`,
+      `@a-novel/service-${service}`,
+    ],
+    ["github.com/a-novel/platform-studio"],
+  ];
+}
 
 test("Renovate extracts hidden workflow, action-image and database tool pins", () => {
   const workflow = base.customManagers.find((m) => m.description.includes("workflow with: blocks"));
   assert(matches(workflow.managerFilePatterns, ".github/workflows/main.yaml"));
-  assert.deepEqual(
-    extract(workflow, '# renovate: datasource=github-releases depName=koalaman/shellcheck\nversion: "0.11.0"').map(
-      ({ datasource, depName, currentValue }) => ({ datasource, depName, currentValue })
-    ),
-    [{ datasource: "github-releases", depName: "koalaman/shellcheck", currentValue: "0.11.0" }]
-  );
-  assert.deepEqual(
-    extract(
-      workflow,
-      "container:\n  # renovate: datasource=npm depName=playwright\n  image: mcr.microsoft.com/playwright:v1.63.0-noble"
-    ).map(({ datasource, depName, currentValue }) => ({ datasource, depName, currentValue })),
-    [{ datasource: "npm", depName: "playwright", currentValue: "1.63.0" }]
-  );
+  const release = '# renovate: datasource=github-releases depName=koalaman/shellcheck\nversion: "0.11.0"';
+  assert.deepEqual(extract(workflow, release).map(pin), [
+    { datasource: "github-releases", depName: "koalaman/shellcheck", currentValue: "0.11.0" },
+  ]);
+  const container =
+    "container:\n  # renovate: datasource=npm depName=playwright\n  image: mcr.microsoft.com/playwright:v1.63.0-noble";
+  assert.deepEqual(extract(workflow, container).map(pin), [
+    { datasource: "npm", depName: "playwright", currentValue: "1.63.0" },
+  ]);
   const images = base.customManagers.find((m) => m.description.includes("composite-action input defaults"));
   assert(matches(images.managerFilePatterns, ".github/actions/start-ci-services/action.yml"));
-  assert.deepEqual(
-    extract(
-      images,
-      `inputs:
+  const defaults = `inputs:
   database_image:
     default: ghcr.io/a-novel/service-json-keys/database:v2.4.1
   grpc_image:
@@ -44,14 +51,15 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
   local_image:
     default: service-under-test:ci
   callback:
-    default: https://example.test:8443/path`
-    ).map(({ depName, currentValue }) => ({ depName, currentValue })),
+    default: https://example.test:8443/path`;
+  assert.deepEqual(
+    extract(images, defaults).map(({ depName, currentValue }) => ({ depName, currentValue })),
     [
       { depName: "ghcr.io/a-novel/service-json-keys/database", currentValue: "v2.4.1" },
       { depName: "ghcr.io/a-novel/service-json-keys/standalone-grpc", currentValue: "v2.4.1" },
     ]
   );
-  for (const [datasource, fixture, expected] of [
+  const databasePins = [
     [
       "custom.pgbackrest",
       `ARG PGBACKREST_VERSION=2.59.1\nARG PGBACKREST_SHA256=${"a".repeat(64)}\n`,
@@ -71,43 +79,34 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
         { depName: "pg_cron-18", currentValue: "1.6.8-r0" },
       ],
     ],
-  ])
-    assert.deepEqual(
-      extract(
-        database.customManagers.find((m) => m.datasourceTemplate === datasource),
-        fixture
-      ),
-      expected
-    );
+  ];
+  for (const [datasource, fixture, expected] of databasePins) {
+    const manager = database.customManagers.find((m) => m.datasourceTemplate === datasource);
+    assert.deepEqual(extract(manager, fixture), expected);
+  }
 });
 
 test("Renovate groups compatible libraries and runtimes after the npm catch-all", () => {
   const rule = (name) => base.packageRules.find((r) => r.groupName === name);
   const catchAll = base.packageRules.indexOf(rule("javascript dependencies"));
-  for (const [group, yes, no] of [
+  const groups = [
     ["a-novel-kit uikit", ["@a-novel-kit/uikit", "@a-novel-kit/uikit-icons"], ["@other/uikit"]],
     ["playwright runtime", ["playwright", "@playwright/test"], ["@vitest/browser-playwright"]],
     ["vitest monorepo", ["vitest", "@vitest/browser-playwright"], ["playwright"]],
     ["svelte vite toolchain", ["vite", "@sveltejs/vite-plugin-svelte"], ["svelte"]],
-    ...["json-keys", "authentication", "narrative-engine", "genai"].map((service) => [
-      `service ${service.replace("-", " ")}`,
-      [
-        `github.com/a-novel/service-${service}`,
-        `ghcr.io/a-novel/service-${service}/database`,
-        `@a-novel/service-${service}`,
-      ],
-      ["github.com/a-novel/platform-studio"],
-    ]),
-  ]) {
+    ...["json-keys", "authentication", "narrative-engine", "genai"].map(serviceGroup),
+  ];
+  for (const [group, yes, no] of groups) {
     assert(base.packageRules.indexOf(rule(group)) > catchAll);
     for (const name of yes) assert(matches(rule(group).matchPackageNames, name), name);
     for (const name of no) assert(!matches(rule(group).matchPackageNames, name), name);
   }
-  // A grouped branch runs every artifact update with the config of its first upgrade by
-  // depName, which is an image here, so the image must carry the Go module's tidy.
-  for (const group of base.packageRules.filter(
+  // A grouped branch runs every artifact update with the config of its first upgrade by depName.
+  // That upgrade is an image here, so every group outside the gomod manager carries the Go module's tidy.
+  const goGroups = base.packageRules.filter(
     (r) => r.groupName?.startsWith("service ") || r.groupName === "go toolchain"
-  ))
+  );
+  for (const group of goGroups)
     if (!group.matchManagers?.includes("gomod"))
       assert(group.postUpdateOptions?.includes("gomodTidy"), group.groupName);
   assert(matches(rule("a-novel-kit workflows").matchPackageNames, "a-novel-kit/workflows"));
@@ -122,31 +121,32 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
   // First-party releases skip the age gates, so the exemption follows every gate and names each form.
   const exempt = base.packageRules.findIndex((r) => r.minimumReleaseAge === null);
   assert(exempt > base.packageRules.findLastIndex((r) => typeof r.minimumReleaseAge === "string"));
-  for (const name of [
+  const firstParty = [
     "a-novel-kit/workflows",
     "@a-novel-kit/nodelib-config",
     "@a-novel/service-authentication-rest",
     "github.com/a-novel-kit/golib",
     "github.com/a-novel/service-json-keys",
     "ghcr.io/a-novel/service-json-keys/standalone",
-  ])
-    assert(matches(base.packageRules[exempt].matchPackageNames, name), name);
-  for (const name of [
+  ];
+  for (const name of firstParty) assert(matches(base.packageRules[exempt].matchPackageNames, name), name);
+  const lookalikes = [
     "a-novel-kitchen/x",
     "@a-novelist/x",
     "github.com/someone/a-novel-kit",
     "evil/a-novel-kit/workflows",
-  ])
-    assert(!matches(base.packageRules[exempt].matchPackageNames, name), name);
+  ];
+  for (const name of lookalikes) assert(!matches(base.packageRules[exempt].matchPackageNames, name), name);
 });
 
 test("Renovate discovers tool modules and compose files while excluding unrelated formats", () => {
-  for (const [manager, files, expected] of [
+  const managerFiles = [
     ["gomod", ["buf.mod", "tools/mockery.mod"], true],
     ["gomod", ["models.mod"], false],
     ["docker-compose", ["builds/podman-compose.go.test.yaml", "compose.yml"], true],
     ["docker-compose", ["builds/database.apko.yaml"], false],
-  ])
+  ];
+  for (const [manager, files, expected] of managerFiles)
     for (const file of files)
       assert.equal(matches((goTools[manager] ?? service[manager]).managerFilePatterns, file), expected, file);
   const go = base.packageRules.find(
@@ -162,11 +162,11 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
   assert.deepEqual([base.osvVulnerabilityAlerts, base.vulnerabilityAlerts.enabled], [true, true]);
   for (const file of ["golangci-lint.mod", "mockery.mod"]) assert(matches(xtools.matchFileNames, file), file);
   const postgres = database.packageRules[0].matchPackageNames;
-  for (const [name, expected] of [
+  const packages = [
     ["postgresql-18", true],
     ["postgresql-19-contrib", true],
     ["postgresql-common", false],
     ["gosu", false],
-  ])
-    assert.equal(matches(postgres, name), expected);
+  ];
+  for (const [name, expected] of packages) assert.equal(matches(postgres, name), expected);
 });

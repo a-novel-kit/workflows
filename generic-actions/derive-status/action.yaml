@@ -1,63 +1,56 @@
 name: derive-status
 description: >
-  Derive a Task's board Status from its pull request's current state and write it as
-  the [Agent] App, so the board follows PR activity with a single writer. The mapping
-  is a pure function of the PR (draft / approved / merged / closed), not of the event
-  that fired — which is exactly why the reconcile sweep can re-run this same derivation
-  to repair drift from dropped or cross-repo events. On first activity it also stamps
-  the Task's Start date, once. The Task is resolved through the PR's closing-issue
-  reference; a PR that closes no issue is a no-op. Writes go through board-write, so
-  the board stays single-writer.
+  Derive the board Status of each issue a pull request closes from the pull request's current
+  state, and write it through board-write as a GitHub App. A draft maps to In progress, an open
+  pull request to In review, an approved one to Done, a merged one to Awaiting release, and one
+  closed unmerged to Ready. The Status depends on that state alone, so a re-run on any pull request
+  repairs drift left by a dropped event. Any Status but Ready also stamps an empty Start date with
+  today's date. A pull request that closes no issue is a no-op.
 
 inputs:
   client_id:
     required: true
-    description: Client id for the org's [Agent] bot (for the board write, via board-write).
+    description: >
+      Client ID of a GitHub App installed on the org that runs the workflow, with organization
+      Projects write. board-write mints its token for the board write.
   app_private_key:
     required: true
-    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+    description: Private key (PEM) of that App.
   project_id:
     required: true
-    description: Node id of the org "Tasks" board (PVT_…). Passed in per-org by the caller.
+    description: Node id of the Projects v2 board (PVT_…).
   pull_request_number:
     required: false
     default: ${{ github.event.pull_request.number }}
     description: >
-      Number of the PR to derive from. Defaults to the PR that triggered the run, which
-      works for both pull_request and pull_request_review events; the reconcile sweep
-      passes each open Task's PR explicitly.
+      Number of the pull request to derive from. Defaults to the pull request of the triggering
+      pull_request or pull_request_review event.
   repo:
     required: false
     default: ${{ github.event.repository.name }}
     description: >
-      Repository of the PR (name only; the owner is the workflow's org). Defaults to the
-      triggering repo; the reconcile sweep passes another repo in the org to re-derive it.
+      Repository of the pull request, by name, in the workflow's org. Defaults to the triggering
+      repository.
   github_token:
     required: false
     default: ${{ github.token }}
     description: >
-      Token for reading the PR + its closing issue. Defaults to the job's token (fine for
-      a same-repo event); the reconcile sweep passes an org-wide [Agent] token so it can
-      read a PR in another repo of the org.
+      Token that reads the pull request and its closing issues. Defaults to the job's token. Pass
+      one that can read `repo` when it names another repository.
   kill_switch:
     required: false
     default: ""
     description: >
-      Org-level HALT, threaded from the caller as `kill_switch: vars.AGENT_KILL_SWITCH`
-      (a composite action cannot read the `vars` context itself). FAIL-SAFE: RUNNING only when the
-      value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset, 0, off, false,
-      no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) engages the halt. When engaged
-      this writer no-ops (no PR read, no board write) and exits 0 — read FIRST. Because a composite
-      action has no early return (an `exit 0` in the guard step does NOT stop the later steps), the
-      guard emits a `halted` output and BOTH board-write steps are `if:`-gated on it. It is also
-      passed through to board-write, so the single board mutator self-guards regardless of caller.
+      Org-level halt, passed in by the caller because a composite action cannot read the `vars`
+      context. The action runs only when the value, lowercased and stripped of whitespace, is empty,
+      0, off, false, no or disabled. Any other value engages the halt. The action then reads no pull
+      request, writes nothing and exits 0. board-write receives the value too and checks it again.
 
 runs:
   using: composite
   steps:
-    # Read the PR and compute the target Status. This step only reads, so it runs on the
-    # caller's default token with contents:read and pull-requests:read; the [Agent] token
-    # is minted for the write, inside board-write.
+    # Read the pull request with `github_token` and compute the target Status. board-write mints
+    # the App token for the writes.
     - name: Compute Status + resolve the Task
       id: derive
       shell: bash
@@ -70,13 +63,11 @@ runs:
       run: |
         set -euo pipefail
 
-        # Org-level halt, read before the derivation. Fail-safe: running only for an explicit
-        # off-token (empty/unset, 0, off, false, no, disabled); any other value engages the halt and
-        # skips the derivation entirely. A composite action has no early return, so an `exit 0` here
-        # does not stop the two board-write steps: this emits a `halted` output and every later
-        # mutating step carries an `if:` on it.
+        # Org-level halt, read before the derivation. Only an explicit off-token runs. A composite
+        # action has no early return, so the `exit 0` here leaves the later steps to run. The guard
+        # sets a `halted` output instead, and both board-write steps check it.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "AGENT_KILL_SWITCH engaged — skipping board-status derivation (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             {
@@ -96,8 +87,7 @@ runs:
           pullRequest(number:$num){
             state isDraft reviewDecision
             closingIssuesReferences(first:5){ nodes{ id number } } } } }'
-        # A missing or inaccessible PR makes the GraphQL call error; catch it here so the failure
-        # surfaces as one clear message.
+        # A missing or unreadable pull request fails the query, reported here as one message.
         if ! pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR"); then
           echo "::error::could not query PR #$PR (not found, or the token lacks access)"
           exit 1
@@ -106,23 +96,20 @@ runs:
         draft=$(echo "$pr" | jq -r '.data.repository.pullRequest.isDraft')
         review=$(echo "$pr" | jq -r '.data.repository.pullRequest.reviewDecision // ""')
 
-        # A PR the query could not resolve comes back null; fail here so the message names
-        # the real problem.
+        # A pull request the query could not resolve comes back null.
         if [ -z "$state" ] || [ "$state" = "null" ]; then
           echo "::error::PR #$PR not found or inaccessible (check the number and token access)"
           exit 1
         fi
 
-        # Every issue the PR closes is derived. The reconcile sweep reaches an issue through its own
-        # pull request, so an issue closed by a sibling's PR is reachable only from here.
+        # Every issue the pull request closes, up to the query's five, takes the derived Status.
+        # board-write takes their ids newline-separated and writes each one.
         refs=$(echo "$pr" | jq '.data.repository.pullRequest.closingIssuesReferences.nodes')
         ref_count=$(echo "$refs" | jq 'length')
-        # Newline-separated for board-write, which takes several ids and writes the same field and
-        # value to each. The fan-out lives there because a composite action cannot loop a `uses:` step.
         issue_ids=$(echo "$refs" | jq -r 'sort_by(.number) | .[].id')
 
-        # A pure function of the PR's current state: the reconcile sweep re-runs it and has
-        # to reach the same answer whatever event fired.
+        # The Status depends on the pull request's current state alone, so every event and every
+        # re-run reach the same answer.
         case "$state" in
           MERGED) status="Awaiting release" ;;
           CLOSED) status="Ready" ;; # closed unmerged → the attempt was abandoned; back to actionable
@@ -147,9 +134,8 @@ runs:
           exit 0
         fi
 
-        # A Task is "activated" once it moves past the pre-PR Backlog/Ready states, which is
-        # when it earns a Start date. A PR closed unmerged falls back to Ready and stamps
-        # nothing.
+        # A Task is activated, and earns a Start date, once it moves past Backlog and Ready. A pull
+        # request closed unmerged returns it to Ready and stamps nothing.
         activated=false
         case "$status" in
           "In progress" | "In review" | "Done" | "Awaiting release") activated=true ;;
@@ -168,12 +154,7 @@ runs:
         echo "PR #$PR ($state, draft=$draft, review=${review:-none}) → \"$status\" on $ref_count issue(s)." \
           | tee -a "$GITHUB_STEP_SUMMARY"
 
-    # Write the derived Status. board-write mints the [Agent] token, resolves the item,
-    # adding it if absent, and compares before writing. The ref is pinned externally, since a `./`
-    # path resolves against the consumer repo's workspace.
     - name: Write Status
-      # A composite action has no early return, so the guard step's exit 0 does not stop this
-      # mutating step; the `halted` gate does.
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.halted != 'true' }}
       uses: a-novel-kit/workflows/generic-actions/board-write@v1.63.0
       with:
@@ -185,10 +166,7 @@ runs:
         value: ${{ steps.derive.outputs.status }}
         kill_switch: ${{ inputs.kill_switch }}
 
-    # Stamp Start date once, on first activity. only_if_empty keeps a re-run or the
-    # sweep from moving an already-set start date.
     - name: Stamp Start date (once)
-      # The `halted` gate again: the guard's exit 0 cannot stop this later step.
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.activated == 'true' && steps.derive.outputs.halted != 'true' }}
       uses: a-novel-kit/workflows/generic-actions/board-write@v1.63.0
       with:

@@ -1,52 +1,54 @@
 name: release-train (reusable)
 
-# The reusable release-train engine (workflow_call). Every governed repo's thin `release-train.yaml`
-# dispatch caller, provisioned by repocfg, calls this with its org creds and admin dispatch inputs. It
-# runs in the caller's context, so nested actions are remote-pinned: a `./` path in a reusable
-# workflow resolves against the caller.
+# Releases every repository a landed Epic touched, from one admin dispatch. Each governed repository
+# calls this engine from the `release-train.yaml` dispatch that repocfg renders.
 on:
   workflow_call:
     inputs:
       epic_number:
-        description: The Epic number N to release (numeric).
+        description: Number of the Epic to release.
         required: true
         type: string
       dry_run:
-        description: "true (default) = rehearse every repo, cut nothing; false = actually cut the releases."
+        description: >
+          When "true", rehearses every repository and cuts nothing. "false" rehearses each repository,
+          then cuts its release.
         required: false
         default: "true"
-        # workflow_call has no choice type, so the thin caller keeps the choice-typed UI and API
-        # guard and passes a validated string through here.
+        # workflow_call has no choice type, so the caller's dispatch input holds the choice and passes
+        # a validated string.
         type: string
       client_id:
-        description: The [Agent] bot App client id.
+        description: >-
+          Client id of the GitHub App that reads the Epic's pull requests across the org, dispatches
+          each repository's `release.yaml` and records the released tags on the Epic.
         required: true
         type: string
       kill_switch:
         description: >-
-          Org-level HALT token (threaded from vars.AGENT_KILL_SWITCH). FAIL-SAFE: RUNNING only for an
-          explicit off-token (empty/unset, 0, off, false, no, disabled); ANYTHING else engages the halt.
+          Org-wide halt value. Any value but an explicit off value (empty, 0, off, false, no,
+          disabled) fails the run before it mints a token.
         required: false
         type: string
         default: ""
     secrets:
       app_private_key:
-        description: The [Agent] bot App private key (PEM).
+        description: Private key (PEM) of the App that client_id names.
         required: true
 
 jobs:
   release-train:
     runs-on: ubuntu-latest
-    # The Agent key is a secret of the caller's governance environment, which no feature branch opens.
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
     environment:
       name: governance
       deployment: false
-    # The default token serves only the admin check, which needs Metadata:read; the release-train
-    # action mints its own least-privilege [Agent] tokens for the dispatch and the reads.
+    # The default token serves only the admin check. The release-train action mints its own narrow
+    # App tokens for the dispatches and the reads.
     permissions:
       contents: read
     steps:
-      # workflow_dispatch is open to any write user, so this gate keeps the release train admin-only.
+      # Any user with write access can dispatch, so this gate keeps the release train admin-only.
       - uses: a-novel-kit/workflows/generic-actions/require-role@v1.63.0
         with:
           roles: admin
@@ -57,7 +59,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          # Numeric validation before the number ever reaches the `label:"epic:<N>"` search grammar.
+          # The number reaches the `label:"epic:<N>"` search query, so it must be numeric.
           if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
             echo "::error::epic_number must be an integer, got \"${EPIC:-}\"."
             exit 1
@@ -70,8 +72,4 @@ jobs:
           app_private_key: ${{ secrets.app_private_key }}
           epic_number: ${{ inputs.epic_number }}
           dry_run: ${{ inputs.dry_run }}
-          # Org-level halt. Fail-safe: running only for an explicit off-token (empty/unset, 0, off,
-          # false, no, disabled); any other value engages it and the action aborts loudly as its first
-          # step, before any mint. Threaded from the org variable, which a composite action cannot
-          # read itself.
           kill_switch: ${{ inputs.kill_switch }}

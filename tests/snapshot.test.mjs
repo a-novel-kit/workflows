@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { manifest, step, succeeds, workspace } from "./helpers.mjs";
 
 const script = step("generic-actions/merge-gate/action.yaml", "Capture activation snapshot");
+const evaluate = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
 const start = script.match(/^START='(.*)'$/m)[1];
 const end = script.match(/^END='(.*)'$/m)[1];
 const now = "2026-07-22T10:00:00Z";
@@ -66,7 +67,7 @@ function fixture(t, options = {}) {
 }
 
 test("snapshot transitions preserve the wave boundary and human prose", (t) => {
-  for (const [before, expected, values] of [
+  const transitions = [
     [null, "pending", {}],
     [marker("pending"), "frozen", {}],
     [marker("pending", { at: now }), "pending", {}],
@@ -75,7 +76,8 @@ test("snapshot transitions preserve the wave boundary and human prose", (t) => {
     [marker("retired", { since: boundary }), "pending", {}],
     [marker("pending", { since: boundary }), "frozen", {}],
     [marker("frozen"), "retired", { members: members.map((m) => ({ ...m, state: "MERGED" })) }],
-  ]) {
+  ];
+  for (const [before, expected, values] of transitions) {
     const output = fixture(t, { before, ...values });
     succeeds(output.result);
     assert.equal(output.payload.status, expected);
@@ -112,7 +114,7 @@ test("member normalization matches reader constraints", (t) => {
   const normalized = fixture(t, { members: [members[1], { repo: "A-NOVEL-KIT/A", number: 5 }, members[0]] });
   succeeds(normalized.result);
   assert.deepEqual(normalized.payload.members, members);
-  for (const invalid of [
+  const invalidSets = [
     [],
     [{ repo: "owner/repo\n", number: 1 }],
     [{ repo: "owner/repo", number: "1" }],
@@ -120,18 +122,19 @@ test("member normalization matches reader constraints", (t) => {
     [{ repo: "owner/repo", number: 1.5 }],
     [{ repo: "owner/repo", number: 2147483648 }],
     Array.from({ length: 51 }, (_, i) => ({ repo: "owner/repo", number: i + 1 })),
-  ])
-    assert.equal(fixture(t, { members: invalid }).writes, 0);
+  ];
+  for (const invalid of invalidSets) assert.equal(fixture(t, { members: invalid }).writes, 0);
 });
 
 test("snapshot writer yields to a peer's changed set, clock, freeze or boundary", (t) => {
-  for (const peer of [
+  const peers = [
     marker("pending", { members: members.slice(0, 1) }),
     marker("pending", { at: now }),
     marker("pending", { members: [members[0], { repo: "a-novel-kit/c", number: 2 }] }),
     marker("frozen", { members: members.slice(0, 1) }),
     marker("retired", { since: boundary }),
-  ]) {
+  ];
+  for (const peer of peers) {
     const peerBody = body(peer);
     const output = fixture(t, { before: marker("pending"), server: { peerBefore: peerBody } });
     succeeds(output.result);
@@ -191,20 +194,22 @@ test("corrupt wave boundaries are dropped and rehearsal credentials remain read-
 });
 
 test("malformed fences are repaired without discarding human prose", (t) => {
-  for (const malformed of [
+  const malformedBodies = [
     `Human introduction.\n${start}\nHuman conclusion.\n`,
     `Human introduction.\n${end}\nHuman conclusion.\n`,
     `${end}\nHuman introduction.\n${start}\nHuman conclusion.\n`,
     `${start}\n${start}\nHuman introduction.\nHuman conclusion.\n${end}\n`,
     `${body(null)}<!-- example ${start} -->\n`,
-  ]) {
+  ];
+  for (const malformed of malformedBodies) {
     const output = fixture(t, { body: malformed });
     succeeds(output.result);
     assert.equal(output.payload.status, "pending");
     assert(output.text.includes("Human introduction."));
     assert(output.text.includes("Human conclusion."));
-    assert.equal(output.text.split("\n").filter((line) => line === start).length, 1);
-    assert.equal(output.text.split("\n").filter((line) => line === end).length, 1);
+    const lines = output.text.split("\n");
+    assert.equal(lines.filter((line) => line === start).length, 1);
+    assert.equal(lines.filter((line) => line === end).length, 1);
   }
 });
 
@@ -216,35 +221,36 @@ test("a fully merged wave retires after a member repository is renamed", (t) => 
   assert.equal(output.payload.status, "retired");
 });
 
+/** An approved, non-draft member in the given state and review-gate result. */
+function approved(member, state, reviewGate) {
+  return { ...member, state, isDraft: false, reviewDecision: "APPROVED", reviewGate };
+}
+
+/** Runs the merge-gate readiness step for the first member's PR and returns the check it posts. */
+function gate(t, ready) {
+  const w = workspace(t);
+  w.stub("gh", `import * as fs from 'node:fs'; fs.writeFileSync('check.json', fs.readFileSync(0, 'utf8'));`);
+  succeeds(
+    w.bash(evaluate, {
+      REPO_FULL: ready[0].repo,
+      HEAD_SHA: "head",
+      EPIC: "900",
+      PR_NUMBER: String(ready[0].number),
+      MEMBERS: JSON.stringify(ready),
+    })
+  );
+  return JSON.parse(w.read("check.json"));
+}
+
 test("the gate holds a frozen wave whose member closed without merging", (t) => {
-  const evaluate = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
-  for (const [states, conclusion] of [
+  const cases = [
     [["OPEN", "OPEN"], "success"],
     [["OPEN", "MERGED"], "success"],
     [["OPEN", "CLOSED"], "failure"],
-  ]) {
-    const w = workspace(t);
-    w.stub(
-      "gh",
-      `import * as fs from 'node:fs'; const input = fs.readFileSync(0, 'utf8'); fs.writeFileSync('check.json', input);`
-    );
-    const ready = members.map((m, i) => ({
-      ...m,
-      state: states[i],
-      isDraft: false,
-      reviewDecision: "APPROVED",
-      reviewGate: "SUCCESS",
-    }));
-    succeeds(
-      w.bash(evaluate, {
-        REPO_FULL: ready[0].repo,
-        HEAD_SHA: "head",
-        EPIC: "900",
-        PR_NUMBER: String(ready[0].number),
-        MEMBERS: JSON.stringify(ready),
-      })
-    );
-    const check = JSON.parse(w.read("check.json"));
+  ];
+  for (const [states, conclusion] of cases) {
+    const ready = members.map((m, i) => approved(m, states[i], "SUCCESS"));
+    const check = gate(t, ready);
     assert.equal(check.conclusion, conclusion, states.join("+"));
     if (conclusion === "failure")
       assert.match(check.output.summary, /1 of 2 member\(s\) not ready[^]*closed without merging/);
@@ -252,31 +258,14 @@ test("the gate holds a frozen wave whose member closed without merging", (t) => 
 });
 
 test("the gate holds an Epic whose member has not passed review-gate", (t) => {
-  const evaluate = step("generic-actions/merge-gate/action.yaml", "Evaluate readiness + post merge-gate");
-  for (const [reviewGate, conclusion] of [
+  const cases = [
     ["SUCCESS", "success"],
     ["FAILURE", "failure"],
     [null, "failure"],
-  ]) {
-    const w = workspace(t);
-    w.stub("gh", `import * as fs from 'node:fs'; fs.writeFileSync('check.json', fs.readFileSync(0, 'utf8'));`);
-    const open = members.map((m, i) => ({
-      ...m,
-      state: "OPEN",
-      isDraft: false,
-      reviewDecision: "APPROVED",
-      reviewGate: i ? reviewGate : "SUCCESS",
-    }));
-    succeeds(
-      w.bash(evaluate, {
-        REPO_FULL: open[0].repo,
-        HEAD_SHA: "head",
-        EPIC: "900",
-        PR_NUMBER: String(open[0].number),
-        MEMBERS: JSON.stringify(open),
-      })
-    );
-    const check = JSON.parse(w.read("check.json"));
+  ];
+  for (const [reviewGate, conclusion] of cases) {
+    const open = members.map((m, i) => approved(m, "OPEN", i ? reviewGate : "SUCCESS"));
+    const check = gate(t, open);
     assert.equal(check.conclusion, conclusion, String(reviewGate));
     if (conclusion === "failure") assert.match(check.output.summary, new RegExp(`review-gate=${reviewGate ?? "none"}`));
   }

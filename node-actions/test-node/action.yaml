@@ -32,7 +32,9 @@ runs:
         github_token: ${{ inputs.github_token }}
     - name: run test
       shell: bash
-      run: pnpm run ${{ inputs.test_action }}
+      env:
+        TEST_ACTION: ${{ inputs.test_action }}
+      run: pnpm run "$TEST_ACTION"
     - name: archive code coverage results
       id: upload-artifact
       uses: actions/upload-artifact@v7

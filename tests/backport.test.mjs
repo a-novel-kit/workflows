@@ -93,6 +93,17 @@ test("a release line is created from its baseline once, and a line missing that 
   assert.match(sh("ensure_release_line 1.4 v1.4.1").stderr, /does not contain v1\.4\.1/);
 });
 
+/** Reads the `name=value` lines a step wrote to its GITHUB_OUTPUT file. */
+function outputs(w) {
+  return Object.fromEntries(
+    w
+      .read("output")
+      .trim()
+      .split("\n")
+      .map((line) => line.split("="))
+  );
+}
+
 test("the line job finds a missing line's baseline among the tags, and leaves an existing line alone", (t) => {
   const w = workspace(t);
   const read = step(".github/workflows/backport-run.yaml", "Read the release line");
@@ -105,19 +116,11 @@ test("the line job finds a missing line's baseline among the tags, and leaves an
     console.log(['v1.4.2 aaa', 'v1.4.10 bbb', 'v1.4.11-rc.1 ccc', 'v1.40.0 ddd'].join('\\n'));
   `
   );
-  const outputs = () =>
-    Object.fromEntries(
-      w
-        .read("output")
-        .trim()
-        .split("\n")
-        .map((line) => line.split("="))
-    );
   succeeds(w.bash(read, { LINE: "1.4", REPO: "a-novel-kit/example" }));
-  assert.deepEqual(outputs(), { missing: "true", baseline: "bbb" });
+  assert.deepEqual(outputs(w), { missing: "true", baseline: "bbb" });
   w.write("output", "");
   succeeds(w.bash(read, { LINE: "1.4", REPO: "a-novel-kit/example", LINE_EXISTS: "true" }));
-  assert.deepEqual(outputs(), { missing: "false" });
+  assert.deepEqual(outputs(w), { missing: "false" });
   assert.notEqual(w.bash(read, { LINE: "1.4; touch injected", REPO: "a-novel-kit/example" }).status, 0);
 });
 
@@ -188,24 +191,26 @@ test("a clean backport is opened by the Dependencies App and approved; one fitte
   const tokens = w.read("tokens").trim().split("\n").map(JSON.parse);
   const by = (sha) => tokens.filter((call) => call.join(" ").includes(`backport/v1.4-${sha.slice(0, 12)}`));
   const cleanURL = `https://github.com/pulls/backport/v1.4-${clean.slice(0, 12)}`;
+  const cleanCalls = [
+    ["dependencies", "api", "-X"],
+    ["dependencies", "pr", "create"],
+    ["agent", "pr", "review"],
+    ["agent", "pr", "merge"],
+  ];
   assert.deepEqual(
     by(clean).map(([token, ...args]) => [token, args[0], args[1]]),
-    [
-      ["dependencies", "api", "-X"],
-      ["dependencies", "pr", "create"],
-      ["agent", "pr", "review"],
-      ["agent", "pr", "merge"],
-    ]
+    cleanCalls
   );
   assert.deepEqual(by(clean).at(-1).slice(1), ["pr", "merge", cleanURL, "--auto", "--squash"]);
+  const fittedCalls = [
+    ["agent", "api", "-X"],
+    ["agent", "pr", "create"],
+  ];
   assert.deepEqual(
     by(fitted).map(([token, ...args]) => [token, args[0], args[1]]),
-    [
-      ["agent", "api", "-X"],
-      ["agent", "pr", "create"],
-    ]
+    fittedCalls
   );
-  // Without the Dependencies App's credentials, every backport waits for a person, as before.
+  // Without the Dependencies App's credentials, every backport waits for a person.
   w.write("tokens", "");
   git(
     "push",
@@ -248,11 +253,12 @@ test("a backport refuses refs that are not default-branch commits before creatin
   git("switch", "-q", "-c", "side");
   const side = commit("auth.js", "allow();\n", "fix: unreviewed");
   git("switch", "-q", "master");
-  for (const [refs, message] of [
+  const refusals = [
     [`${fix} ${side}`, /is not on master/],
     ["--help", /must not begin with '-'/],
     ["0000000", /is not a commit/],
-  ]) {
+  ];
+  for (const [refs, message] of refusals) {
     const result = backports(refs);
     assert.notEqual(result.status, 0, refs);
     assert.match(result.stderr, message, refs);

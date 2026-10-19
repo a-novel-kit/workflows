@@ -7,9 +7,8 @@ on:
     branches:
       - "**"
 
-# Cancel an in-progress lint run when a newer commit lands on the same ref, since the superseded
-# run's result is worthless. This workflow only lints, with no release or deploy work that has to
-# run to completion.
+# A newer commit on the same ref supersedes a run. Nothing here releases or deploys, so cancelling
+# the older run loses nothing.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -23,8 +22,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # The branch's setup-node, called directly: lint-node pins its sibling to the last release,
-      # so it would test that release's setup-node instead of this branch's.
+      # Calls this branch's setup-node directly, since lint-node pins setup-node to the last release.
       - uses: $/node-actions/setup-node
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -98,7 +96,7 @@ jobs:
         env:
           RENOVATE_GITHUB_COM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Check the shipped Bash run blocks, which are embedded in YAML.
+  # Checks the Bash that the manifests embed in their run blocks.
   lint-shell:
     runs-on: ubuntu-latest
     permissions:
@@ -123,10 +121,8 @@ jobs:
           version: "0.11.0"
           paths: ${{ runner.temp }}/workflow-shell/*.sh
 
-  # The repo that ships the audit was the one repo not running it, so its own workflows went
-  # unchecked until a fleet sweep ran zizmor here by hand. Dogfooded with a relative path, against
-  # the repo-local config — see .github/zizmor.yml for why it exists rather than the shipped
-  # baseline.
+  # Runs this branch's audit against .github/zizmor.yml, a copy of the shipped baseline with
+  # this repository's own exceptions.
   lint-workflows:
     runs-on: ubuntu-latest
     permissions:

@@ -1,10 +1,12 @@
 name: notify-issues (reusable)
 
-# Tells people in Discord when an issue is theirs to pick up. Each org's `.github` repo calls this on
-# a schedule: GitHub raises no event when a board Status changes, so the board is polled. It posts
-# each open board issue that entered Ready, and each one whose assignees changed outside Backlog,
-# since the caller's previous successful run, so a late or failed run is caught up by the next. A
-# post goes to its repository's issues channel, or the org's when the repository has none, and pings
+# Tells people in Discord when an issue is theirs to pick up. Each org's `.github` repository calls
+# this engine from a workflow a clock dispatches, since GitHub raises no event when a board Status
+# changes. The engine posts each open board issue that entered Ready, and each one whose assignees
+# changed outside Backlog, since the caller's previous successful run. The next run therefore catches
+# up a late or failed one.
+#
+# A post goes to its repository's issues channel, or the org's when the repository has none. It pings
 # the assignees through the GitHub-to-Discord map, or the repository's role when nobody is assigned.
 on:
   workflow_call:
@@ -12,21 +14,23 @@ on:
       project_id:
         required: true
         type: string
-        description: Node id of the org "Tasks" board (PVT_…).
+        description: Node id (PVT_…) of the org project board to poll.
       client_id:
         required: true
         type: string
-        description: The org's [Agent] bot App client id; the default token cannot read org boards.
+        description: >-
+          Client id of the GitHub App that reads the org board and its issues. The default token
+          cannot read an org board.
       roles:
         required: false
         type: string
         default: "{}"
-        description: JSON map from "<org>/<repo>" to the Discord role pinged for an unassigned issue (vars.DISCORD_REPO_ROLES).
+        description: JSON map from "<org>/<repo>" to the Discord role id that an unassigned issue pings.
       bws_server_url:
         required: false
         type: string
         default: ""
-        description: Bitwarden server holding the map (vars.BWS_SERVER_URL). Empty means the US cloud.
+        description: Bitwarden server holding the GitHub-to-Discord map. Empty means the US cloud.
       dry_run:
         required: false
         type: string
@@ -35,25 +39,27 @@ on:
     secrets:
       private_key:
         required: true
-        description: The [Agent] bot App private key (PEM).
+        description: Private key (PEM) of the App that client_id names.
       webhook:
         required: false
-        description: Discord webhook of the org's issues channel (ISSUES_WEBHOOK), for repositories missing from webhooks. Empty skips their posts.
+        description: >-
+          Discord webhook of the org's issues channel, for repositories missing from webhooks. Empty
+          skips their posts.
       webhooks:
         required: false
-        description: JSON map from "<org>/<repo>" to the webhook of that repository's issues channel (ISSUES_WEBHOOKS).
+        description: JSON map from "<org>/<repo>" to the webhook of that repository's issues channel.
       bws_access_token:
         required: false
-        description: Read-only token for the GitHub-to-Discord map (BWS_READ_TOKEN). Empty posts without user pings.
+        description: Bitwarden token that reads the GitHub-to-Discord map. Empty posts without user pings.
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
     environment:
       name: governance
       deployment: false
-    # Reads the caller's previous run; the board goes through the App.
+    # The default token reads the caller's previous run. The board goes through the App.
     permissions:
       actions: read
     outputs:
@@ -78,7 +84,7 @@ jobs:
           CALLER: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          # A first run looks back one schedule interval rather than over the whole board.
+          # A first run looks back one dispatch interval, 15 minutes.
           workflow="${CALLER%@*}"
           since="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "${workflow##*/}" --status success \
             --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
@@ -132,7 +138,7 @@ jobs:
       matrix:
         event: ${{ fromJSON(needs.scan.outputs.events) }}
     steps:
-      # Resolved in the posting job: masked Discord ids cannot cross a job boundary.
+      # The posting job resolves the assignees, because masked Discord ids cannot cross a job boundary.
       - name: Resolve the assignees
         id: users
         if: matrix.event.user_ids != ''

@@ -1,19 +1,21 @@
 name: codecov
-description: Uploads code coverage reports to Codecov.
+description: >
+  Check out the repository, download coverage artifacts and upload their reports to Codecov. A failed
+  upload fails the step.
 
 inputs:
   coverage_artifact:
     required: false
-    description: The name of the artifact to download the coverage report from.
+    description: Name of the artifact that holds the coverage reports.
   coverage_artifact_ids:
     required: false
-    description: The IDs of the artifacts to download.
+    description: Comma-separated IDs of the artifacts to download.
   coverage_files:
     required: false
-    description: The coverage report file(s) to upload.
+    description: Coverage report files to upload. Empty lets Codecov search the workspace.
   codecov_token:
     required: true
-    description: The codecov token used to upload coverage reports.
+    description: Codecov upload token of the repository.
 
 runs:
   using: "composite"

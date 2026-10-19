@@ -1,13 +1,15 @@
 name: refresh apko locks
 description: >
-  Re-resolve apko lock files and open or update one pull request with the changes, as the bot.
-  A lock pins every package its config resolves to, so builds stay reproducible; this is how the
-  pins move forward. Run it on a schedule.
+  Re-resolve apko lock files and open or update one pull request with the changes, as a GitHub App.
+  A lock pins every package its config resolves to, so builds stay reproducible, and a periodic run
+  of this action moves the pins forward. A run with no change opens nothing.
 
 inputs:
   app_private_key:
     required: true
-    description: Private key of the GitHub App that pushes the branch and opens the pull request.
+    description: >
+      Private key of the GitHub App that writes the branch and opens the pull request. The App needs
+      contents and pull requests write.
   client_id:
     required: true
     description: Client ID of that App.
@@ -19,8 +21,8 @@ inputs:
   version:
     required: true
     description: >
-      The apko release that resolves the locks, such as "1.4.8". Pin it with a
-      "# renovate: datasource=github-tags depName=chainguard-dev/apko" comment so it moves with the
+      apko release that resolves the locks, such as "1.4.8". Pin it with a
+      "# renovate: datasource=github-tags depName=chainguard-dev/apko" comment, so it moves with the
       apko the builds use.
   arch:
     required: false
@@ -29,7 +31,7 @@ inputs:
   branch:
     required: false
     default: chore/deps/apko-locks
-    description: Branch that carries the refresh. Each run replaces its content.
+    description: Branch that carries the refresh. Each run with a change replaces its content.
 
 runs:
   using: composite
@@ -62,7 +64,7 @@ runs:
         ARCH: ${{ inputs.arch }}
       run: |
         set -euo pipefail
-        # Lists the package changes between two locks, one "name: old → new" line each.
+        # Lists the package changes between two locks, one Markdown list item each.
         changes() {
           jq -rn --slurpfile old "$1" --slurpfile new "$2" '
             def pins($lock): [$lock[0].contents.packages[]? | {(.name): .version}] | add // {};

@@ -42,19 +42,9 @@
       "automerge": true
     },
     {
-      "description": "Hold pnpm off 11.12.0: that release regressed pnpm's own global self-installer (createFullPkgId throws 'Cannot use in operator to search for integrity in undefined'), so pnpm/action-setup crashes during CI setup the moment a repo bumps its packageManager field to it. The range allows every other version, so Renovate resumes bumping as soon as a fixed patch (11.12.1+) ships \u2014 drop this rule then.",
-      "matchPackageNames": ["pnpm"],
-      "allowedVersions": "<11.12.0 || >11.12.0"
-    },
-    {
       "description": "Hold TypeScript on the v6 line until the toolchain supports the v7 native-compiler rewrite. TS7 removes JS-API surface prettier's .ts-config loader relies on (it reads an undefined ModuleKind member and throws), and typescript-eslint still caps its peer range at typescript <6.1.0, so a frozen-lockfile install fails on the unmet peer. Drop this rule once typescript-eslint's peer range admits v7.",
       "matchPackageNames": ["typescript"],
       "allowedVersions": "<7"
-    },
-    {
-      "description": "Hold golangci-lint off v2.13.0: its bundled nilness analyzer panics on valid service code with 'internal error: unhandled builtin recover', so both Renovate artifact generation and lint-go fail. The range admits every other release, so Renovate resumes on the first fixed patch \u2014 drop this rule then.",
-      "matchPackageNames": ["github.com/golangci/golangci-lint/v2"],
-      "allowedVersions": "<2.13.0 || >2.13.0"
     },
     {
       "description": "Hold google.golang.org/grpc off v1.84.0 because CVE-2026-84445 is reported in that release while v1.83.2 remains fixed. The range admits every other release, so Renovate resumes on the first fixed stable patch \u2014 drop this rule then.",

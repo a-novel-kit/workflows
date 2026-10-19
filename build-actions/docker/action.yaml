@@ -1,8 +1,8 @@
 name: build docker service
 description: >
-  Build a docker container from a Dockerfile, and make sure it reports healthy when run. Pushes to the
-  default branch, releases, and pull requests labeled with-feature-env are tagged; every other build is
-  pushed by digest only.
+  Build an image from a Dockerfile, verify that it runs healthy, push it and attest its provenance.
+  Pushes to the default branch, releases and pull requests labeled with-feature-env are tagged. Every
+  other build is pushed by digest alone.
 
 inputs:
   mode:
@@ -21,10 +21,8 @@ inputs:
   version:
     required: false
     description: >
-      Explicit release version (e.g. 1.2.3) for the dispatched release flow. When
-      set, the image is tagged vX.Y.Z / vX.Y / vX / latest from it instead of from
-      the git ref (the workflow runs on the default branch, not the tag). Leave
-      empty for the legacy tag-push flow, which keeps the ref-derived tags.
+      Version of a dispatched release, such as 1.2.3, which runs on the default branch. The image is
+      then tagged vX.Y.Z, vX.Y, vX and latest from it. Empty derives the tags from the git ref.
   run_args:
     required: false
     description: Docker flags for the test run. Supports quoted values and $NAME/${NAME} environment references; command substitution is not evaluated.
@@ -35,16 +33,14 @@ inputs:
   skip_healthcheck:
     required: false
     description: >
-      Skip the build-then-run smoke test (build + push only). Set true when the
-      image is exercised by a downstream job anyway, so the caller can drop the
-      service containers this smoke test would otherwise need.
+      When "true", build and push without the smoke run. Use it when a later job exercises the
+      image, so the caller needs no service containers for the smoke run.
   github_token:
     required: true
     description: The GitHub token to use for publication.
   context:
     required: false
     description: The context to use for the build.
-    # Default to the repository root so the build context matches local and CI builds.
     default: .
   secrets:
     description: "List of secrets to expose to the build (e.g., key=string, GIT_AUTH_TOKEN=mytoken)."
@@ -58,11 +54,9 @@ inputs:
   cache:
     required: false
     description: >
-      Reuse a cross-run GHA layer cache (type=gha) for the build. Default true,
-      which persists the go build + module cache so an image whose sources are
-      unchanged restores its previous compilation. Set false for images that do
-      not compile (e.g. a stock-base database image), where caching the large
-      base to GHA is pure overhead and can make the build slower than cold.
+      When "true", reuse a GitHub Actions layer cache across runs, so an image whose Go sources are
+      unchanged restores its compilation. Set "false" for an image that compiles nothing, such as a
+      stock database image, where caching the large base costs more time than it saves.
     default: "true"
   reproducible:
     required: false
@@ -88,13 +82,11 @@ runs:
     - uses: actions/checkout@v7
       with:
         persist-credentials: false
-    # A fixed epoch keeps the digest a function of the image's content alone: a commit date
-    # would change it whenever a build file changes, even when the image doesn't.
+    # A fixed epoch keeps the digest a function of the image's content alone, whatever the commit date.
     - if: ${{ inputs.reproducible == 'true' }}
       shell: bash
       run: echo "SOURCE_DATE_EPOCH=0" >>"$GITHUB_ENV"
-    # Derive vX.Y and vX from an explicit version. The dispatched release passes one
-    # because the workflow runs on the default branch, where the ref is not a tag.
+    # A dispatched release runs on the default branch, whose ref is no tag, so it passes its version.
     - id: ver
       if: ${{ inputs.version != '' }}
       shell: bash
@@ -109,9 +101,9 @@ runs:
       with:
         images: ghcr.io/${{ inputs.image_name }}
         tags: |
-          # Ref-derived tags for the tag-push flow, off when a version is passed.
-          # A pull request is tagged only while labeled with-feature-env. The label approves the head
-          # it was added on, so a push, whose payload still carries it, is not tagged.
+          # Ref-derived tags apply when no version is passed. A pull request is tagged only while
+          # labeled with-feature-env. The label approves the head it was added on, so a push, whose
+          # payload still carries it, is not tagged.
           type=ref,event=pr,enable=${{ github.event.action != 'synchronize' && contains(github.event.pull_request.labels.*.name, 'with-feature-env') }}
           type=schedule,pattern=nightly,enable=${{ inputs.version == '' && inputs.mode == 'job' }}
           # Only the default branch is tagged; other branches and merge-queue groups push untagged.
@@ -150,7 +142,7 @@ runs:
         password: ${{ inputs.github_token }}
     - uses: docker/setup-buildx-action@v4
       with:
-        # Hosted runners are discarded after the job; removing a large builder took 10s.
+        # Hosted runners are discarded after the job, and removing a large builder takes about 10 seconds.
         cleanup: false
     - uses: docker/build-push-action@v7
       env:
@@ -158,11 +150,8 @@ runs:
         DOCKER_BUILD_RECORD_UPLOAD: "false"
       with:
         context: ${{ inputs.context }}
-        # Persist the module and go-build cache across runs, so an image whose Go
-        # sources are unchanged, or only partly changed, reuses the previous run's
-        # compilation. mode=max also caches the intermediate builder stage where
-        # `go build` runs. The scope is per image, so the parallel jobs building
-        # different images keep separate caches.
+        # mode=max also caches the builder stage where `go build` runs. Each image has its own
+        # scope, so parallel jobs building different images keep separate caches.
         cache-from: ${{ inputs.cache == 'true' && format('type=gha,scope={0}', inputs.image_name) || '' }}
         # Only pushes to the default branch write the cache: other refs read it, a merge-queue
         # branch's cache is unreachable once the branch is deleted, and a pull_request_target run
@@ -218,8 +207,8 @@ runs:
         # The registry copy adds a sha256-<digest> tag, so an untagged image's attestation stays
         # in GitHub's attestation store, where `gh attestation verify` still finds it.
         push-to-registry: ${{ steps.meta.outputs.tags != '' }}
-        # Linked-artifact records need a broader permission and add no value to
-        # digest/source verification, so publish only the signed attestation.
+        # Verification needs only the signed attestation; a linked-artifact record needs a broader
+        # permission.
         create-storage-record: false
     - name: Wait before retrying the attestation
       if: ${{ steps.attest.outcome == 'failure' }}

@@ -1,37 +1,30 @@
 name: board-write
 description: >
-  The write half of the board automation: set one field (single-select or date) on a
-  Projects v2 board item, for a given issue or PR, as the [Agent] App. It resolves the
-  field + option node-ids and the item — adding the item to the board if it isn't a
-  member yet — and compares the current value before writing, so a re-run or an
-  overlapping trigger is a no-op rather than a redundant mutation. This is the single
-  privileged path that mutates the board; the status deriver and the rollup engine
-  both go through it, which is what keeps the board single-writer.
+  Set one single-select or date field on the Projects v2 board item of one or more issues or pull
+  requests, as a GitHub App. The action resolves the field, the option and each item, and adds an
+  item that is not on the board yet. It compares the current value before writing, so a re-run or
+  an overlapping trigger writes nothing.
 
 inputs:
   client_id:
     required: true
     description: >
-      Client id for the org's [Agent] bot. The default GITHUB_TOKEN cannot see
-      org-level Projects v2, so a bot token is required.
+      Client ID of a GitHub App installed on the org that runs the workflow, with organization
+      Projects write. The default workflow token cannot reach an org's Projects v2.
   app_private_key:
     required: true
-    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+    description: Private key (PEM) of that App.
   project_id:
     required: true
     description: >
-      Node id of the org "Tasks" board (PVT_…). Passed in per-org by the caller — the
-      same way client_id is — so the action needs no title lookup. Find it with:
-      gh project view <n> --owner <org> --format json.
+      Node id of the Projects v2 board (PVT_…). Find it with: gh project view <n> --owner <org>
+      --format json.
   content_id:
     required: true
     description: >
-      Node id of the issue or PR whose board item to write, or several such ids separated
-      by newlines or spaces. The caller resolves what to write (e.g. a PR's linked
-      issues); board-write finds each content's item in the project and applies the same
-      field and value to all of them. Several ids belong here because a composite action
-      cannot loop a `uses:` step, which leaves this the only place the fan-out can happen
-      without a second implementation of the write.
+      Node id of the issue or pull request whose board item to write, or several such ids separated
+      by newlines or spaces. Every id gets the same field and value. A composite action cannot loop a
+      `uses:` step, so a caller with several contents passes them all here.
   field:
     required: true
     description: Name of the field to set, e.g. "Status" or "Start date".
@@ -44,15 +37,14 @@ inputs:
     required: false
     default: "true"
     description: >
-      When "true" (default), add content to the board if it isn't a member yet, so a
-      derived write can't silently no-op on an un-boarded item. "false" errors instead.
+      When "true" (default), add a content that is not on the board yet, so a derived write never
+      silently skips it. When "false", a missing item fails the run.
   only_if_empty:
     required: false
     default: "false"
     description: >
-      When "true", write only if the field is currently empty; a field that already
-      holds any value is left untouched. Use it for set-once fields like Start date, so
-      a re-run or the reconcile sweep can't overwrite the original stamp.
+      When "true", write only a field that is empty and leave any set value untouched. A set-once
+      field such as Start date uses it, so a re-run keeps the first stamp.
   dry_run:
     required: false
     default: "false"
@@ -61,28 +53,23 @@ inputs:
     required: false
     default: ""
     description: >
-      Org-level HALT, threaded from the caller as `kill_switch: vars.AGENT_KILL_SWITCH`
-      (a composite action cannot read the `vars` context itself). FAIL-SAFE: RUNNING only when the
-      value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset, 0, off, false,
-      no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) engages the halt. When engaged
-      this single board writer no-ops (no mutation, changed=false) and exits 0 — read FIRST, before
-      any write (the guard and the write share one step, so the exit is sufficient here).
+      Org-level halt, passed in by the caller because a composite action cannot read the `vars`
+      context. The action runs only when the value, lowercased and stripped of whitespace, is empty,
+      0, off, false, no or disabled. Any other value engages the halt. The action then writes
+      nothing, sets `changed` to "false" and exits 0.
 
 outputs:
   item_id:
-    description: >
-      Node id of the board item that was resolved (or added). With several content ids, the
-      last one; the outputs describe the run rather than one item.
+    description: Node id of the board item resolved or added. With several content ids, the last one.
     value: ${{ steps.write.outputs.item_id }}
   changed:
-    description: '"true" if any item was mutated, "false" if every one already held the value.'
+    description: '"true" if the run wrote a value to at least one item, "false" otherwise.'
     value: ${{ steps.write.outputs.changed }}
 
 runs:
   using: composite
   steps:
-    # Mint a token scoped to the org's Projects v2 alone, which bounds a leak of
-    # this step's token to board edits.
+    # Organization Projects write alone bounds a leak of this token to board edits.
     - name: Mint org-Projects token
       id: token
       uses: actions/create-github-app-token@v3
@@ -108,12 +95,10 @@ runs:
       run: |
         set -euo pipefail
 
-        # Org-level halt, read before the write. Fail-safe: running only for an explicit off-token
-        # (empty/unset, 0, off, false, no, disabled); any other value engages the halt. This is the
-        # single privileged board mutator, and its guard and mutation share one step, so the `exit 0`
-        # here stops every derived board write (no mutation, changed=false) while the org is halted.
+        # Org-level halt, read before any write. Only an explicit off-token runs. The guard shares its
+        # step with the write, so its `exit 0` ends the action.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "AGENT_KILL_SWITCH engaged — skipping board write for \"${FIELD}\" on ${CONTENT_ID} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             {
@@ -131,10 +116,8 @@ runs:
           fi
         done
 
-        # 1. Resolve the field on this board: its node id, type, and — for a
-        #    single-select — the option node-ids. A single-select field satisfies both
-        #    ProjectV2FieldCommon (id, dataType) and ProjectV2SingleSelectField
-        #    (options); a date field is a plain ProjectV2Field.
+        # 1. Resolve the field's node id and type, and the option ids of a single-select field. A
+        #    single-select field matches both fragments, and a date field matches the first only.
         field_q='query($proj:ID!,$field:String!){ node(id:$proj){ ... on ProjectV2{
           field(name:$field){
             ... on ProjectV2FieldCommon{ id dataType }
@@ -147,10 +130,10 @@ runs:
           exit 1
         fi
 
-        # Build the GraphQL value fragment to write, and the sub-selection that reads
-        # the item's current value for the compare-before-write. Both inlined values are
-        # safe to interpolate: a single-select option id is a GitHub node id, and a date
-        # is format-checked below.
+        # Build the value fragment to write and the selection that reads the current value. The value
+        # is inlined into the mutation, since gh -F coerces an all-digit option id to a number. An
+        # option id comes from GitHub's own option list and a date passes the checks below, so both
+        # are safe to inline.
         case "$data_type" in
           SINGLE_SELECT)
             opt_id=$(echo "$fresp" | jq -r --arg v "$VALUE" \
@@ -167,9 +150,8 @@ runs:
               echo "::error::date field \"$FIELD\" needs a YYYY-MM-DD value, got \"$VALUE\""
               exit 1
             fi
-            # Reject a well-formed but impossible date (2026-02-30, say) with a clear
-            # message. A real date round-trips through `date -d`; a bad one errors or
-            # normalizes to a different day.
+            # A real date round-trips through `date -d`. An impossible one, such as 2026-02-30,
+            # errors or normalizes to another day.
             if [ "$(date -d "$VALUE" +%Y-%m-%d 2>/dev/null)" != "$VALUE" ]; then
               echo "::error::\"$VALUE\" is not a real calendar date"
               exit 1
@@ -183,9 +165,8 @@ runs:
             ;;
         esac
 
-        # content_id may name several contents, newline- or space-separated: a pull request can close
-        # more than one issue. The loop lives here because a composite action cannot loop a `uses:`
-        # step, leaving this the single path that mutates the board.
+        # content_id may name several contents, since a pull request can close more than one issue.
+        # The loop lives here because a composite action cannot loop a `uses:` step.
         read -r -a content_ids <<<"$(printf '%s' "$CONTENT_ID" | tr '\n' ' ')"
 
         any_changed=false
@@ -194,11 +175,9 @@ runs:
         for content_id in "${content_ids[@]}"; do
           [ -n "$content_id" ] || continue
 
-          # 2. Resolve the content's item in this project, adding it if missing so a derived
-          #    write on an un-boarded Task boards it. Page through projectItems so a content
-          #    sitting on many projects still matches when the target board is not on the
-          #    first page. Each item carries its current value for this field, which the
-          #    compare-before-write reads, so it costs no request of its own.
+          # 2. Find the content's item on this board, paging projectItems because a content can sit
+          #    on many boards. The item carries the field's current value for the compare below. A
+          #    missing item is added when add_if_missing allows it.
           item_sel="id project{ id } fieldValueByName(name:\$field){ $cur_frag }"
           item_q="query(\$c:ID!,\$cursor:String,\$field:String!){ node(id:\$c){
             ... on Issue{ projectItems(first:100, after:\$cursor){
@@ -238,12 +217,10 @@ runs:
           item_id=$(echo "$item" | jq -r '.id')
           last_item="$item_id"
 
-          # 3. Compare-before-write against the value read with the item. An equal value means
-          #    a re-run or an overlapping trigger, so nothing is mutated.
+          # 3. Compare before writing. An equal value, from a re-run or an overlapping trigger, writes
+          #    nothing.
           cur=$(echo "$item" | jq -r '.fieldValueByName.current // empty')
 
-          # A set-once field such as Start date keeps whatever it already holds, so a re-run
-          # or the sweep cannot overwrite the original stamp.
           if [ "$ONLY_IF_EMPTY" = "true" ] && [ -n "$cur" ]; then
             echo "No change — \"$FIELD\" already set (\"$cur\") on item $item_id and only_if_empty." | tee -a "$GITHUB_STEP_SUMMARY"
             continue
@@ -254,7 +231,7 @@ runs:
             continue
           fi
 
-          # 4. Write it (or, under dry-run, just report).
+          # 4. Write the value, or report it under dry_run.
           if [ "$DRY_RUN" = "true" ]; then
             echo "- [dry-run] would set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." \
               | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,10 +1,11 @@
 name: relay-context
 description: >
-  Turns a `workflow_run` event from the relay workflow into the context a privileged gate needs. A
-  pull request's own workflow can rewrite or imitate the relay, so its run is only a wake-up signal:
-  only a `pull_request_review` or `merge_group` run counts, a merge group must sit on a
-  `gh-readonly-queue/` branch, and a review's head is read from its pull request rather than from the
-  run. Any other run leaves every output empty, and the caller skips its gate.
+  Turn a `workflow_run` event from the relay workflow into the context a privileged gate needs. A
+  pull request's own workflow can rewrite or imitate the relay, so its run is only a wake-up signal.
+  Only a `pull_request_review` or `merge_group` run counts, and a merge group must sit on a
+  `gh-readonly-queue/` branch. A review's head is read live from its open pull request, since a push
+  can move it after the review. Any other run leaves every output empty, and the caller skips its
+  gate.
 
 inputs:
   github_token:

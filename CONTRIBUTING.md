@@ -1,29 +1,68 @@
 # Contributing to workflows
 
-The platform taxonomy — repository kinds, where the reusable **composite actions** sit in the tooling layer, and the versioning model — lives in the [libraries, tooling & platform concepts](https://github.com/a-novel-kit/.github/blob/master/CONTRIBUTING.md); this file covers what's specific to `workflows`. Platform setup and day-to-day commands are in the [developer guide](https://a-novel-kit.github.io/stack/).
+This guide covers what is specific to `workflows`. Read the [README](./README.md) first: it says what
+the repository ships and how callers pin it. The [developer guide](https://a-novel-kit.github.io/stack/)
+sets up the platform, and the
+[libraries, tooling and platform concepts](https://github.com/a-novel-kit/.github/blob/master/CONTRIBUTING.md)
+place this repository in the tooling layer.
 
-Everything here is a [composite action](https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action); GitHub's docs cover the [`runs` / `inputs` / `outputs` syntax](https://docs.github.com/en/actions/sharing-automations/creating-actions/metadata-syntax-for-github-actions). The rest of this file is the conventions particular to this repo.
+## Where things live
 
-## Layout and the catalog
+| Path                                                                        | Holds                                                                       |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `<group>/<name>/action.yaml`                                                | One composite action, with its scripts beside it or in its group directory. |
+| `.github/workflows/*-run.yaml`, `reconcile-board.yaml`, `token-expiry.yaml` | The reusable workflows other repositories call.                             |
+| `.github/workflows/`, other files                                           | This repository's own CI and release, and its governance callers.           |
+| `renovate/`                                                                 | The Renovate presets, one per repository class plus shared parts.           |
+| `docs/migrations/`                                                          | One guide per release that asks callers to change something.                |
+| `tests/`                                                                    | The regression suites for the actions, workflows and presets.               |
 
-Each action lives at `<group>/<name>/action.yaml`, grouped by the kind of work it does — the [Action catalog](./README.md#action-catalog) in the README is the full list. That catalog is maintained by hand from each action's `name` and `description`, so keep those two fields accurate and update the README whenever they change.
+GitHub shows each action's `name` and `description` to its callers, and the README catalog copies them
+by hand. Update the README in the same change.
+
+The workflows with a "Managed by `a-novel repo update`" banner, and `.github/CODEOWNERS`, are rendered
+from the stack's repocfg templates. Change them there.
 
 ## Versioning
 
-The whole repository is released as a single unit: one `v*` Git tag covers every action at once, with no per-action versions. Releases are cut from the GitHub UI (Actions ▸ release ▸ pick a bump type), which runs `publish-actions/release-core` to compute the next tag, push it, and create the GitHub Release. The protected `release` environment gates who may publish.
+One `v*` tag releases every action, workflow and preset together. Releases are cut from the Actions tab
+(release ▸ pick a bump type ▸ Run), which runs `publish-actions/release-core` in the protected `release`
+environment.
 
-Because everything ships together, an action may depend on another in this repo — but reference it by its pinned tag (`a-novel-kit/workflows/<group>/<name>@<tag>`), never a relative path. That keeps a release internally consistent: every action in a release calls that same release's version of its siblings, rather than whatever currently sits on `master`.
+An action that calls a sibling references it by tag, as `a-novel-kit/workflows/<group>/<name>@<tag>`,
+so a release always runs its own siblings. The release rewrites those pins to its new tag. A script
+that several actions share loads through `$GITHUB_ACTION_PATH`, as the security actions load
+`security-actions/run-scan.mjs`.
 
-Downstream repos pin every `uses:` to a release tag (never `@master`) so their CI is reproducible, and bump them together on upgrade — Renovate groups them into one `a-novel-kit workflows` update so the versions never drift apart.
+A change that callers must act on ships with a guide in `docs/migrations/`, added to its index.
 
 ## Scripts and tests
 
-Write scripts outside YAML as JavaScript ES modules (`.mjs`) for Node.js 24. Action run blocks may use Bash. Pass action inputs through environment variables so callers' values remain data.
+Write scripts outside YAML as JavaScript modules (`.mjs`) for Node.js 24. A run block may use Bash.
+Pass every input to it through `env:`, so a caller's value stays data.
 
-Tests use Node's built-in runner and assertions; the Drive suites also need GNU `tar`. After `pnpm install`, install Chromium with `pnpm exec playwright install chromium` and run `a-novel test --type=pnpm -y`. `pnpm lint` checks formatting and composite manifest contexts.
+The suites run on Node's built-in test runner. The Drive suites also need GNU `tar`, and the browser
+suite needs Chromium:
 
-The shared test helpers read run blocks from parsed YAML and provide isolated workspaces and command stubs. Prefer complete-step behavior tests; extract a function only when the full step would add unrelated setup. Keep cases for distinct failures and security boundaries. Avoid assertions that merely restate configuration or duplicate another test's outcome. The shell lint job extracts and checks the Bash actually shipped in YAML.
+```bash
+pnpm install
+pnpm exec playwright install chromium
+a-novel test --type=pnpm -y
+```
+
+On a host without Chromium's system libraries, run `tests/drive-browser.test.mjs` in the
+`mcr.microsoft.com/playwright` image that matches the pinned `playwright` version.
+
+`pnpm lint` checks formatting and that no composite manifest names a context it cannot read. CI also
+shellchecks the Bash every run block ships (`lint-shell`) and audits the workflows with zizmor
+(`lint-workflows`).
+
+`tests/helpers.mjs` reads run blocks from the parsed YAML and gives each test an isolated workspace and
+command stubs. Prefer tests of a complete step's behavior, and extract a function only when the full
+step would add unrelated setup. Keep a case for each distinct failure and security boundary, and leave
+out assertions that restate configuration or repeat another test's outcome.
 
 ## Questions?
 
-[Open an issue](https://github.com/a-novel-kit/workflows/issues) — include logs and environment details.
+[Open an issue](https://github.com/a-novel-kit/workflows/issues) with the logs and the environment
+details.

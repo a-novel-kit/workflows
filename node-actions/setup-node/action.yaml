@@ -1,8 +1,7 @@
 name: setup node
 description: >
   Check out the repository, set up pnpm and Node against the GitHub package registry, and install
-  dependencies. The checkout uses the workflow token: the repositories and their packages are public,
-  so an App token would add only a credential every pull request's own workflow could read.
+  dependencies. The repositories and their packages are public, so the workflow token is enough.
 
 inputs:
   github_token:
@@ -11,8 +10,8 @@ inputs:
   ref:
     required: false
     description: >
-      Ref to check out. Defaults to github.head_ref; pass a release tag when publishing from a
-      dispatched release so the build is the bumped commit, not the pre-bump default branch.
+      Ref to check out, github.head_ref by default. A dispatched release passes its tag, so the build
+      is the bumped commit.
     default: ""
 
 outputs:
@@ -37,8 +36,8 @@ runs:
     - id: pnpm-store
       shell: bash
       run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-    # setup-node's pnpm cache matched the exact lockfile only, so every lockfile change
-    # installed cold on its branch, again in the merge queue, and again on master.
+    # setup-node's own pnpm cache matches the exact lockfile only; this one falls back to the
+    # closest store, so a lockfile change still installs warm.
     - id: pnpm-cache
       uses: actions/cache/restore@v6
       with:
@@ -56,11 +55,10 @@ runs:
     - name: install dependencies
       shell: bash
       run: pnpm i --frozen-lockfile
-    # Only pushes to the default branch that install its own commit save: other refs restore
-    # its cache, a merge-queue branch's cache is unreachable once the branch is deleted, and a
-    # pull_request_target run reports the base branch as its ref while the checkout takes the
-    # PR head. Pruning drops packages the lockfile no longer uses, which the fallback key would
-    # otherwise carry forever.
+    # Only a default-branch push that installs its own commit saves: other refs restore its cache,
+    # a merge-queue branch's cache dies with the branch, and a pull_request_target run reports the
+    # base branch while it checks out the pull request. Pruning first keeps the fallback key from
+    # carrying packages the lockfile dropped.
     - id: pnpm-prune
       if: steps.pnpm-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && inputs.ref == ''
       shell: bash

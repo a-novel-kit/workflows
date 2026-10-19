@@ -7,12 +7,12 @@ export class Failure extends Error {}
 
 /** Run a script entry point while keeping private API errors out of public logs. */
 export function runCli(url, main, message) {
-  if (process.argv[1] && url === pathToFileURL(process.argv[1]).href) {
-    main().catch((error) => {
-      console.error(`::error::${error instanceof Failure ? error.message : message}`);
-      process.exitCode = 1;
-    });
+  function fail(error) {
+    console.error(`::error::${error instanceof Failure ? error.message : message}`);
+    process.exitCode = 1;
   }
+
+  if (process.argv[1] && url === pathToFileURL(process.argv[1]).href) main().catch(fail);
 }
 
 /** Events whose main.yaml run tests a pull request's head. */

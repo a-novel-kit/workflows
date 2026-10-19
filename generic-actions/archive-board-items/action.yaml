@@ -1,55 +1,49 @@
 name: archive board items
 description: >
-  Archive (and close) terminal items from the org "Tasks" project. Run it from the
-  release workflow when the repo publishes (everything on master ships, so its
-  awaiting-release work is now released), or — for repos that never publish (e.g.
-  .github) — on merge to the default branch. The reconcile sweep also runs it org-wide
-  (repo "*") over "Applied" items to clear resolved meta work. Archiving a Projects-v2
-  item does not close the issue, so it also CLOSES each one (archive = terminal signal).
-  Idempotent and safe to re-run.
+  Archive the board items in a terminal state and close their issues. An item matches when its
+  Status is one of `status`, or, with `archive_closed`, when its issue is closed. `repo` limits the
+  matches to one repository, and "*" lifts the limit. Archiving a Projects v2 item leaves its issue
+  open, so the action also closes each archived issue unless `close` is "false". Archived items are
+  skipped, so a re-run is safe.
 
 inputs:
   client_id:
     required: true
     description: >
-      Client id for the org's [Agent] bot. The default GITHUB_TOKEN cannot see
-      org-level Projects v2, so a bot token is required.
+      Client ID of a GitHub App installed on the org that runs the workflow, with organization
+      Projects write and Issues write. The default workflow token cannot reach an org's Projects v2.
   app_private_key:
     required: true
-    description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+    description: Private key (PEM) of that App.
   status:
     required: false
     default: Awaiting release
     description: >
-      Comma-separated list of Status values to archive (e.g. "Awaiting release" on
-      publish, or "Applied" for the sweep's meta pass). An item matches if its Status
-      is any of them.
+      Comma-separated Status values to archive, such as "Awaiting release" or "Applied". An item
+      matches when its Status is any of them. Ignored when `archive_closed` is "true".
   repo:
     required: false
     default: ""
     description: >
-      Restrict to this repo's items (owner/name). Empty = the running repo
-      (github.repository). Pass "*" to sweep ALL repos — used by the reconcile sweep
-      to clear org-wide Applied items that aren't tied to a single repo's release.
+      Repository (owner/name) whose items to match. Empty means the running repository, and "*"
+      matches items from every repository.
   close:
     required: false
     default: "true"
     description: >
-      Also CLOSE each archived issue. Archiving a Projects-v2 item does not close the
-      tracker; terminal board work should leave its issue closed too (rule: archived → closed).
+      When "true" (default), also close the issue behind each archived item. A pull request or a
+      draft item has no issue to close and is only archived.
   archive_closed:
     required: false
     default: "false"
     description: >
-      When "true", IGNORE `status` and archive every board item whose linked ISSUE is CLOSED
-      (the rule-4 complement: closed → archived). The sweep runs this org-wide (repo="*") to
-      clear done leaf planning issues that never publish, so closed ⟺ archived on the board.
+      When "true", ignore `status` and archive every item whose issue is closed. Pull request and
+      draft items never match.
   project_id:
     required: true
     description: >
-      Node id of the org "Tasks" board (e.g. PVT_…). Passed in directly — inline
-      it per-org in the caller, the same way client_id is — so the action needs no
-      title lookup. Find it with: gh project view <n> --owner <org> --format json.
+      Node id of the Projects v2 board (PVT_…). Find it with: gh project view <n> --owner <org>
+      --format json.
   dry_run:
     required: false
     default: "false"
@@ -58,8 +52,8 @@ inputs:
 runs:
   using: composite
   steps:
-    # Mint a token scoped to the org's Projects v2 alone, so a leak of this
-    # step's token is bounded to board edits.
+    # The token holds the two permissions the archive and the close need, which bounds a leak to
+    # board edits and issue writes.
     - name: Mint org-Projects token
       id: token
       uses: actions/create-github-app-token@v3
@@ -68,7 +62,7 @@ runs:
         private-key: ${{ inputs.app_private_key }}
         owner: ${{ github.repository_owner }}
         permission-organization-projects: write
-        permission-issues: write # close each archived issue (rule: archived → closed)
+        permission-issues: write # close each archived issue
 
     - name: Archive (and close) terminal board items
       shell: bash
@@ -89,12 +83,10 @@ runs:
           exit 1
         fi
 
-        # Repo scope: empty → the running repo; "*" → every repo (the org-wide sweep).
         REPO_FULL="${REPO_IN:-$GITHUB_REPOSITORY}"
 
-        # Page the board, keeping this repo's still-on-board items in $STATUS.
-        #    isArchived guards idempotency: an already-archived item is skipped, so a
-        #    re-run or an overlapping trigger never double-archives.
+        # Page the board and keep the unarchived items that match. Skipping archived items makes a
+        # re-run or an overlapping trigger a no-op.
         items_q='
           query($proj:ID!,$cursor:String){ node(id:$proj){ ... on ProjectV2{
             items(first:100, after:$cursor){
@@ -131,7 +123,7 @@ runs:
         echo "Found ${count:-0} ${kind} item(s) for $REPO_FULL." | tee -a "$GITHUB_STEP_SUMMARY"
         [ "${count:-0}" -eq 0 ] && exit 0
 
-        # Archive each match (or just report, under dry-run).
+        # Archive each match and close its issue, or report it under dry_run.
         archive_m='mutation($proj:ID!,$item:ID!){
           archiveProjectV2Item(input:{projectId:$proj,itemId:$item}){ item{ id } } }'
         while IFS= read -r row; do
@@ -144,8 +136,7 @@ runs:
             echo "- [dry-run] would $verb #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             gh api graphql -f query="$archive_m" -F proj="$proj_id" -F item="$id" >/dev/null
-            # Archiving a board item leaves its issue open, so close the tracker too. Best-effort:
-            # a board item that is a PR or a draft has no closable issue.
+            # The close is best-effort, since a pull request or draft item has no issue to close.
             if [ "$CLOSE" = "true" ] && [ -n "$num" ] && [ "$num" != "null" ] && [ -n "$rp" ] && [ "$rp" != "null" ]; then
               gh issue close "$num" --repo "$rp" --reason completed >/dev/null 2>&1 || true
             fi

@@ -1,10 +1,11 @@
 name: discord-users
 description: >
-  Resolve GitHub user ids to Discord user ids through the map in Bitwarden Secrets Manager: one
-  secret per person, keyed by the immutable GitHub user id, valued with the Discord id. The map
-  links two identities, so it never reaches a log: bws output stays in a variable and every resolved
-  id is masked. Fail-soft: an unmapped user, a missing token or a Bitwarden outage resolves nobody,
-  and the caller posts without that ping.
+  Resolve GitHub user ids to Discord user ids through a map in Bitwarden Secrets Manager. The map
+  holds one secret per person, keyed by the immutable GitHub user id and valued with the Discord id.
+  The map links two identities, so it never reaches a log. The bws output stays in a variable and
+  every resolved id is masked. The action fails soft. An unmapped user is skipped, and a missing
+  token, a failed install or a Bitwarden outage resolves nobody, so the caller posts without those
+  pings.
 
 inputs:
   github_user_ids:
@@ -14,8 +15,8 @@ inputs:
     required: false
     default: ""
     description: >
-      Access token of the read-only Notifier machine account, threaded from the caller as
-      bws_access_token: secrets.BWS_READ_TOKEN. Its only project is the map. Empty resolves nobody.
+      Access token of a Bitwarden machine account with read access to the map's project alone. Every
+      secret the account reads counts as a map entry. Empty resolves nobody.
   bws_server_url:
     required: false
     default: ""
@@ -29,7 +30,7 @@ outputs:
 runs:
   using: composite
   steps:
-    # The checksum is the one Bitwarden publishes for this release; bumping the version bumps both.
+    # The checksum is the one Bitwarden publishes for this release. A version bump changes both.
     - name: Install bws
       id: install
       if: inputs.bws_access_token != ''
@@ -61,7 +62,7 @@ runs:
         if [ -z "$BWS_ACCESS_TOKEN" ] || [ -z "$BWS" ]; then exit 0; fi
         [ -z "$SERVER_URL" ] || export BWS_SERVER_URL="$SERVER_URL"
 
-        # Every entry of the map: held here, never printed.
+        # The whole map stays in this variable and is never printed.
         if ! map="$("$BWS" secret list --output json 2>/dev/null)"; then
           echo "::warning::Bitwarden did not answer; posting without user pings."
           exit 0

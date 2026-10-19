@@ -1,29 +1,28 @@
 name: lint dockerfile
 description: >
-  Run hadolint over a repo's Dockerfiles. A repo with no Dockerfiles is a clean pass, so the
-  job is safe to add anywhere. Advisory mode reports findings without failing, for a repo
-  clearing an existing backlog before the check gates. hadolint also shellchecks each RUN block.
+  Run hadolint over a repo's Dockerfiles. hadolint also shellchecks each RUN block. A repo with no
+  Dockerfiles passes, so the job fits any repo. Advisory mode reports findings without failing, for
+  a repo clearing an existing backlog before the check gates.
 
 inputs:
   paths:
     required: false
     description: >
-      Space- or newline-separated globs of Dockerfiles to lint. Empty (the default) lints every
-      tracked file named `Dockerfile`, `<x>.Dockerfile` (the fleet's convention, either casing)
-      or `Dockerfile.<x>` — the last capital-D only, because a lowercase `dockerfile.<x>` is far
-      more likely to be source (`dockerfile.go`) than a Dockerfile variant. Discovery excludes
-      vendored and gitignored trees. The caller must have checked the repo out for it to see them.
+      Space- or newline-separated globs of Dockerfiles to lint. Empty lints every tracked file named
+      `Dockerfile` or `<x>.Dockerfile` in either casing, or `Dockerfile.<x>` with a capital D.
+      Discovery reads tracked files only, so it skips gitignored trees. The caller checks the repo
+      out first.
   advisory:
     required: false
     default: "false"
     description: >
-      When "true", findings go to the run summary and the log but the check passes — for a repo
-      adopting the lint over an existing backlog. When "false" (the default), any finding fails.
+      When "true", the log lists the findings, the run summary counts them, and the check passes.
+      When "false", any finding fails the check.
   version:
     required: true
     description: >
-      hadolint release tag, with or without the leading v. Pinned by the caller so Renovate bumps
-      it per repo. Annotate it:
+      hadolint release tag, with or without the leading v. The caller pins it so Renovate bumps it
+      per repo, with the annotation
       `# renovate: datasource=github-releases depName=hadolint/hadolint`.
 
 runs:
@@ -36,18 +35,16 @@ runs:
         ADVISORY: ${{ inputs.advisory }}
         HADOLINT_VERSION: ${{ inputs.version }}
       run: |
-        # errexit is disabled deliberately: hadolint exits non-zero on findings and this step
-        # decides gating from that code itself, rather than aborting on it.
+        # errexit is off because hadolint exits non-zero on findings, and the step gates on that code.
         set +e -u
         shopt -s nullglob
         if [ -n "${PATHS//[[:space:]]/}" ]; then
-          # Word-split the caller's globs into a file list on purpose.
+          # The caller's globs split into words and expand into the file list.
           # shellcheck disable=SC2206
           files=($PATHS)
         else
-          # Match a bare `Dockerfile` and the fleet's `<x>.Dockerfile` in either casing, but the
-          # `Dockerfile.<x>` variant form only with a capital D: a case-insensitive dotted match
-          # also claims ordinary source, and `dockerfile.go` is not a Dockerfile.
+          # A lowercase `dockerfile.<x>` is usually source, such as `dockerfile.go`, so the
+          # `Dockerfile.<x>` form needs a capital D.
           mapfile -t files < <(git ls-files \
             | grep -E '(^|/)[Dd]ockerfile$|\.[Dd]ockerfile$|(^|/)Dockerfile\.[^/]+$')
         fi
@@ -57,10 +54,8 @@ runs:
           exit 0
         fi
         bin="$RUNNER_TEMP/hadolint"
-        # Retried, because this check gates: a single reset connection to the releases CDN would
-        # otherwise fail the build on a repo whose Dockerfiles are fine. `--retry-all-errors` is what
-        # covers a transport-level reset (curl exit 35) — plain `--retry` only covers transient HTTP
-        # statuses and timeouts, and the reset is what was actually observed.
+        # The check gates, so the download retries. `--retry-all-errors` also retries a
+        # transport-level reset (curl exit 35), which plain `--retry` leaves fatal.
         if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
           "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION#v}/hadolint-Linux-x86_64" \
           -o "$bin"; then

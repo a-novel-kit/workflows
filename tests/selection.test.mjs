@@ -8,6 +8,17 @@ function filter(source, variable) {
   return (data) => succeeds(command("jq", ["-c", match[1]], { input: JSON.stringify(data) }));
 }
 
+/** A pull request node numbered from 1 that may carry the Epic 417 label and close an issue under that Epic. */
+function pullRequest([label, closes], i) {
+  return {
+    number: i + 1,
+    headRefOid: `sha${i}`,
+    repository: { name: "repo" },
+    labels: { nodes: label ? [{ name: "epic:417" }] : [] },
+    closingIssuesReferences: { nodes: closes ? [{ parent: { number: 417 } }] : [] },
+  };
+}
+
 test("status and reconcile selectors include every closing issue and label-only Epic member", () => {
   const derive = step("generic-actions/derive-status/action.yaml", "Compute Status + resolve the Task");
   const ids = filter(derive, "issue_ids");
@@ -19,18 +30,13 @@ test("status and reconcile selectors include every closing issue and label-only 
     '"I10"\n"I11"'
   );
   assert.equal(ids([]), "");
-  const nodes = [
+  const memberships = [
     [true, true],
     [true, false],
     [false, true],
     [false, false],
-  ].map(([label, closes], i) => ({
-    number: i + 1,
-    headRefOid: `sha${i}`,
-    repository: { name: "repo" },
-    labels: { nodes: label ? [{ name: "epic:417" }] : [] },
-    closingIssuesReferences: { nodes: closes ? [{ parent: { number: 417 } }] : [] },
-  }));
+  ];
+  const nodes = memberships.map(pullRequest);
   const workflow = read(".github/workflows/reconcile-board.yaml");
   assert.deepEqual(
     JSON.parse(filter(workflow, "tasks")(nodes)).map((pr) => pr.number),
@@ -58,13 +64,14 @@ test("Go package discovery propagates failed reads and rejects an empty filtered
   `
   );
   const fixture = { root: "example.org/repo", modules: "example.org/repo", packages: "example.org/repo/internal/dao" };
-  for (const changes of [
+  const failures = [
     { fail: "root" },
     { fail: "modules" },
     { fail: "packages" },
     { packages: "" },
     { packages: "example.org/repo/mocks\nexample.org/repo/test\nexample.org/repo/proto" },
-  ]) {
+  ];
+  for (const changes of failures) {
     assert.notEqual(
       w.bash(script, { PACKAGES: "packages.txt", GO_FIXTURE: JSON.stringify({ ...fixture, ...changes }) }).status,
       0
@@ -79,7 +86,7 @@ test("Go package discovery propagates failed reads and rejects an empty filtered
 test("Dockerfile discovery accepts fleet naming conventions without claiming source files", () => {
   const source = read("generic-actions/lint-dockerfile/action.yaml");
   const pattern = source.match(/\| grep -E '(.*)'\)/)[1];
-  for (const [name, expected] of [
+  const candidates = [
     ["builds/database.Dockerfile", true],
     ["builds/standalone.grpc.Dockerfile", true],
     ["Dockerfile", true],
@@ -91,7 +98,8 @@ test("Dockerfile discovery accepts fleet naming conventions without claiming sou
     ["src/dockerfile.ts", false],
     ["dockerfile/notes.txt", false],
     [".agents/skills/write-dockerfiles/SKILL.md", false],
-  ])
+  ];
+  for (const [name, expected] of candidates)
     assert.equal(command("grep", ["-Eq", pattern], { input: `${name}\n` }).status === 0, expected, name);
 });
 
@@ -104,12 +112,12 @@ test("Docker provenance uses the published digest and security tools require cal
   // Each retry repeats the first attempt and runs only when the one before it failed; the last fails the job.
   const attempts = steps.filter((s) => s.uses?.startsWith("actions/attest@"));
   assert.equal(attempts.length, 3);
-  attempts.forEach((attempt, i) => {
+  for (const [i, attempt] of attempts.entries()) {
     assert.equal(attempt.uses, steps[index].uses);
     assert.deepEqual(attempt.with, steps[index].with);
     assert.equal(attempt["continue-on-error"], i < attempts.length - 1 ? true : undefined);
     if (i > 0) assert.equal(attempt.if, `\${{ steps.${attempts[i - 1].id}.outcome == 'failure' }}`);
-  });
+  }
   // docker-job publishes through docker, so it inherits the same attestation.
   const job = manifest("build-actions/docker-job/action.yaml");
   assert.deepEqual(
@@ -117,7 +125,7 @@ test("Docker provenance uses the published digest and security tools require cal
     [["a-novel-kit/workflows/build-actions/docker", "job"]]
   );
   assert.equal(job.outputs.digest.value, "${{ steps.build.outputs.digest }}");
-  for (const action of [
+  const pinned = [
     "generic-actions/lint-shell",
     "generic-actions/lint-dockerfile",
     "security-actions/scan-secrets",
@@ -125,7 +133,8 @@ test("Docker provenance uses the published digest and security tools require cal
     "security-actions/lint-workflows",
     "publish-actions/release-core",
     "publish-actions/release-core-hotfix",
-  ]) {
+  ];
+  for (const action of pinned) {
     const input = manifest(`${action}/action.yaml`).inputs[action.startsWith("publish-") ? "cli_version" : "version"];
     assert.equal(input.required, true, action);
     assert.equal(input.default, undefined, action);
@@ -160,7 +169,7 @@ test("a reproducible docker build is content-addressed and drops build-time meta
   );
   assert.equal(push.with.provenance, "${{ inputs.reproducible == 'true' && 'false' || '' }}");
   assert.equal(push.with.labels, "${{ steps.labels.outputs.labels }}");
-  // A fixed epoch: a commit date would move the digest with every build-file change.
+  // A fixed epoch keeps the digest independent of commit dates.
   const epoch = steps.find((s) => s.run?.includes("SOURCE_DATE_EPOCH"));
   assert.equal(epoch.if, "${{ inputs.reproducible == 'true' }}");
   assert.equal(epoch.run.trim(), 'echo "SOURCE_DATE_EPOCH=0" >>"$GITHUB_ENV"');
@@ -174,10 +183,11 @@ test("a reproducible docker build is content-addressed and drops build-time meta
     "org.opencontainers.image.version=v1.2.3",
     "org.opencontainers.image.revision=0123abc",
   ].join("\n");
-  for (const [reproducible, kept] of [
+  const cases = [
     ["true", "org.opencontainers.image.source=https://github.com/a-novel/service"],
     ["false", all],
-  ]) {
+  ];
+  for (const [reproducible, kept] of cases) {
     w.write("output", "");
     succeeds(w.bash(labels, { LABELS: all, REPRODUCIBLE: reproducible }));
     assert.equal(w.read("output"), `labels<<LABELS_END\n${kept}\nLABELS_END\n`);

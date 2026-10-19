@@ -1,52 +1,41 @@
-# Repo-local zizmor config for a-novel-kit/workflows.
+# zizmor config for this repository's own workflows.
 #
-# security-actions/lint-workflows mounts EITHER this file OR the baseline it ships, never both, so
-# this file must carry the baseline's rules as well as the ones specific to this repo. Keep the two
-# in sync: security-actions/lint-workflows/zizmor.yml is the original.
+# security-actions/lint-workflows mounts one config, so this file carries the baseline's rules
+# beside this repository's exceptions. security-actions/lint-workflows/zizmor.yml is the original;
+# keep the shared rules identical.
 
 rules:
   unpinned-uses:
     config:
       policies:
-        # Tag pins are deliberate across this fleet, not an oversight: Renovate
-        # moves the whole a-novel-kit/workflows reference set as one grouped
-        # update, and a repo must sit at a single workflows version. Per-action
-        # hash pins break that grouping and make the diff unreadable.
-        #
-        # ref-pin still fails a genuinely floating `@master` or a missing ref,
-        # which is the failure this audit exists to catch. It only accepts a tag
-        # as sufficient.
+        # The fleet pins actions by tag: Renovate moves the whole a-novel-kit/workflows
+        # reference set as one grouped update, and a repository sits at one workflows
+        # version. ref-pin accepts a tag and still fails a floating `@master` or a
+        # missing ref.
         "*": ref-pin
 
   cache-poisoning:
     ignore:
-      # main.yaml both restores a build cache and builds images, which is the
-      # shape this audit looks for. The attack needs a lower-trust branch to
-      # write a cache a release run then reads; GitHub scopes cache writes so a
-      # PR branch cannot reach the default branch's scope, and releases are cut
-      # from release.yaml. zizmor rates the finding Low for the same reason.
+      # main.yaml restores a build cache and builds images, the shape this audit
+      # flags. The attack needs a lower-trust branch to write a cache that a
+      # release run reads. GitHub scopes cache writes so a pull request branch
+      # cannot reach the default branch's scope, and releases run from
+      # release.yaml.
       - main.yaml
 
   github-app:
     ignore:
       # Each mints an App token with `owner:` and no `repositories:`, which zizmor reads as
-      # over-broad. For these five it is the requirement, not an oversight — each is an org-wide
-      # sweep, and the suggested fix (naming specific repositories) would blind it:
+      # over-broad. Each is an org-wide sweep, and a repository list would blind it:
       #
-      #   token-expiry.yaml — enumerates the ORGANISATION's PATs. Its one permission,
-      #     organization-personal-access-tokens:read, is an org-level grant; a repository list
-      #     does not narrow an org-level read, it just breaks it.
-      #   reconcile-board.yaml — an org-scoped PR search feeding the board reconcile. Naming
-      #     repositories would mean the sweep silently stops covering whatever is not on the list.
-      #   notify-issues-run.yaml — reads the org board, whose issues live in every repository.
-      #   notify-pr-run.yaml — reads the issues a pull request closes, which can live in any
-      #     repository, with their board dates.
-      #   notify-stuck-run.yaml — searches the org's open pull requests for stuck bot ones, which
-      #     can live in any repository.
+      #   token-expiry.yaml: reads the organization's PATs through an org-level grant.
+      #   reconcile-board.yaml: searches every repository's pull requests for the board.
+      #   notify-issues-run.yaml: reads the org board, whose issues live in every repository.
+      #   notify-pr-run.yaml: reads the issues a pull request closes, in any repository.
+      #   notify-stuck-run.yaml: searches every repository for stuck bot pull requests.
       #
-      # All five already hold the narrow line that IS available to them: a default token that is
-      # unused or read-only, and read-only `permission-*` scopes on the App token.
-      # Widen any of them and this suppression stops being justified.
+      # All five keep the default token unused or read-only and give the App token read-only
+      # `permission-*` scopes. A wider grant voids this exception.
       - token-expiry.yaml
       - reconcile-board.yaml
       - notify-issues-run.yaml
@@ -55,9 +44,7 @@ rules:
 
   artipacked:
     ignore:
-      # The one checkout in this repo that must keep its credentials. It checks out with an
-      # explicitly minted, repo-scoped bot token and then pushes the release line and its backport
-      # branches with plain `git push`, with no credential helper of its own, so the persisted one is
-      # what authenticates. Setting persist-credentials: false here does not harden the workflow, it
-      # breaks it. Every other checkout in the repo sets it.
+      # The one checkout here that keeps its credentials. It checks out with a minted, repo-scoped
+      # bot token, and its plain `git push` of the release line and the backport branches
+      # authenticates through the persisted credential.
       - backport-run.yaml

@@ -1,118 +1,102 @@
 name: merge-gate (reusable)
 
-# The reusable merge-gate engine (workflow_call). Every governed repo's thin `merge-gate.yaml`
-# caller, provisioned by repocfg, calls this with its org creds. It runs in the caller's context and
-# gates that repo's PRs, so nested actions are remote-pinned: a `./` path in a reusable workflow
-# resolves against the caller.
-#
-# The required "may this PR merge?" gate, plus the landing coordinator for epic members. Two jobs:
-#
-#   evaluate   — posts the required `merge-gate` check on every PR and on the merge queue's group.
-#                The queue validates required checks on the group, so a gate that skipped it would
-#                leave a queued PR waiting out the timeout and dropping. The [Agent] App posts the
-#                check through the Checks API, giving the ruleset the stable integration id it
-#                requires, so this job is only the runner and its id is not `merge-gate`, which would
-#                duplicate the check name. A standalone PR passes; an Epic member holds until every
-#                sibling is ready.
-#
-#   auto-merge — enables native auto-merge on an Epic member so the whole set lands together once the
-#                gate and the approval go green. Enabling while the gate is still red is safe: GitHub
-#                parks the request and merges when it goes green.
+# Gates a repository's pull requests and coordinates the landing of Epic members. Each governed
+# repository calls this engine from the `merge-gate.yaml` that repocfg renders.
 on:
   workflow_call:
     inputs:
       client_id:
-        description: The [Agent] bot App client id.
+        description: >-
+          Client id of the GitHub App that posts the `merge-gate` check and arms auto-merge on Epic
+          members. Its identity fixes the integration id the ruleset requires.
         required: true
         type: string
       kill_switch:
         description: >-
-          Org-level HALT token, threaded from the caller's `vars.AGENT_KILL_SWITCH` (a composite action
-          can't read `vars` itself). FAIL-SAFE — RUNNING only for an explicit off-token (empty/unset, 0,
-          off, false, no, disabled); ANYTHING ELSE engages the org-wide hold. The value need not exist —
-          an unset caller var reads as empty, which is a running state.
+          Org-wide halt value. Any value but an explicit off value (empty, 0, off, false, no,
+          disabled) posts a failing `merge-gate` check on every pull request and arms no auto-merge.
+          Auto-merge armed before the halt stays armed, and the failing check blocks that merge once
+          the next event or reconcile sweep posts it.
         required: false
         type: string
         default: ""
       planning_repo:
         description: >-
-          Repository (name only; owner is the org) holding the Epic issues the gate resolves
-          membership from and writes the activation snapshot into. Defaults to the org `.github` repo.
-          The gate, epic-membership and detect-partial-landing must all read the same repo: the gate
-          writes the snapshot there and the others look for it there, so a value set on one and left
-          default on another degrades every Epic to live label membership without an error anywhere.
+          Name of the org repository holding the Epic issues, where the gate reads membership and
+          writes the activation snapshot. epic-membership and detect-partial-landing must read the
+          same repository. A mismatch silently degrades every Epic to live label membership.
         required: false
         type: string
         default: .github
       snapshot_dry_run:
         description: >-
           When "true", the gate logs the activation snapshot it would capture and leaves the Epic body
-          alone; the `merge-gate` check-run is posted either way. Defaults to writing, since a
-          rehearsing gate captures nothing and every Epic falls back to live label membership.
+          alone. The `merge-gate` check is posted either way. Without a snapshot, every Epic falls back
+          to live label membership.
         required: false
         type: string
         default: "false"
       pull_request_number:
         description: >-
-          Pull request to gate. Defaults to the triggering one; a caller relaying `pull_request_review`
-          through `workflow_run` passes `relay-context`'s.
+          Number of the pull request to gate. Empty gates the triggering pull request. A caller
+          relaying a review through `workflow_run` passes the number `relay-context` reads.
         required: false
         type: string
         default: ""
       head_sha:
-        description: Head to post the check on. Defaults to the triggering pull request's or merge group's head.
+        description: Commit to post the check on. Empty uses the triggering pull request's or merge group's head.
         required: false
         type: string
         default: ""
       merge_group_head_ref:
         description: >-
-          Head ref of the merge-queue group to gate. Defaults to the triggering merge group; a caller
-          relaying `merge_group` through `workflow_run` passes `relay-context`'s.
+          Head ref of the merge-queue group to gate. Empty uses the triggering merge group. A caller
+          relaying a merge group through `workflow_run` passes the ref `relay-context` reads.
         required: false
         type: string
         default: ""
     secrets:
       app_private_key:
-        description: The [Agent] bot App private key (PEM).
+        description: Private key (PEM) of the App that client_id names.
         required: true
 
 jobs:
+  # Posts the required `merge-gate` check on every pull request and on the merge queue's group. The
+  # queue validates required checks on the group, so a gate that skipped the group would leave a
+  # queued pull request to time out and drop. The App posts the check through the Checks API, under
+  # the stable integration id the ruleset requires, so this job only runs the gate. A standalone pull
+  # request passes, and an Epic member holds until every sibling is ready.
   evaluate:
     runs-on: ubuntu-latest
-    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
     environment:
       name: governance
       deployment: false
-    # The gate mints its own [Agent] token with checks:write and never uses the
-    # default token, so this job needs no repository permissions.
+    # The gate mints its own App token and never uses the default token.
     permissions: {}
     steps:
       - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.63.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
-          # Org-level halt. Fail-safe: running only for an explicit off-token (empty/unset, 0, off,
-          # false, no, disabled); any other value engages it, and the gate then posts a `failure` hold
-          # on every PR ahead of any success path, so nothing merges org-wide. It is threaded from the
-          # org variable because a composite action cannot read `vars` itself, and the variable need
-          # not exist: an unset value reads as empty, which is a running state.
           kill_switch: ${{ inputs.kill_switch }}
           planning_repo: ${{ inputs.planning_repo }}
           snapshot_dry_run: ${{ inputs.snapshot_dry_run }}
-          # An empty `with:` value overrides the action's default, so fall back to the event here.
+          # An empty `with:` value overrides the action's default, so the event fallback lives here.
           pull_request_number: ${{ inputs.pull_request_number || github.event.pull_request.number }}
           head_sha: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           merge_group_head_ref: ${{ inputs.merge_group_head_ref || github.event.merge_group.head_ref }}
 
+  # Arms native auto-merge on an Epic member, so the whole set lands together once the gate and the
+  # approval go green. GitHub parks a request armed while the gate is red and merges when it turns
+  # green.
   auto-merge:
-    # Only where there is a PR to enable (pull request events), and never on a draft.
     if: ${{ (github.event_name == 'pull_request' || github.event_name == 'pull_request_target') && github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     environment:
       name: governance
       deployment: false
-    # The member check reads the event payload with no API call, and enable-auto-merge
-    # mints its own [Agent] token, so no default-token permissions are needed.
+    # The member check reads the event payload, and enable-auto-merge mints its own App token.
     permissions: {}
     steps:
       - name: Is this an epic member?
@@ -131,10 +115,5 @@ jobs:
           pull_request_number: ${{ github.event.pull_request.number }}
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
-          # Live, so auto-merge is enabled for Epic members.
           dry_run: "false"
-          # Org-level halt, fail-safe as above: when engaged, nothing is armed, and merge-gate holds
-          # anyway. A halt does not disarm auto-merge already armed on an idle ready PR; merge-gate's
-          # red check still blocks the merge, with a latency window until the next event or reconcile
-          # sweep re-posts the hold.
           kill_switch: ${{ inputs.kill_switch }}

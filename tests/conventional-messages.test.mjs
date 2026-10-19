@@ -10,12 +10,14 @@ import { read, root } from "./helpers.mjs";
 const conventional = /^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: \S/;
 
 function manifests(dir = root) {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    if (entry.name === "node_modules" || entry.name === ".git") return [];
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) return manifests(path);
-    return /\.ya?ml$/.test(entry.name) ? [relative(root, path)] : [];
-  });
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entryManifests);
+}
+
+function entryManifests(entry) {
+  if (entry.name === "node_modules" || entry.name === ".git") return [];
+  const path = join(entry.parentPath, entry.name);
+  if (entry.isDirectory()) return manifests(path);
+  return /\.ya?ml$/.test(entry.name) ? [relative(root, path)] : [];
 }
 
 // A command may continue over lines ending in a backslash; the first -m is the subject.

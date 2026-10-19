@@ -32,7 +32,10 @@ function client(responses) {
   return { drive: new Drive("private-token", repository), calls, responses };
 }
 function folders(maintenance = false) {
-  return ["references", "results"].map((id) => ({
+  return ["references", "results"].map((id) => folder(id, maintenance));
+}
+function folder(id, maintenance) {
+  return {
     id,
     mimeType: "application/vnd.google-apps.folder",
     driveId: "shared-drive",
@@ -43,7 +46,7 @@ function folders(maintenance = false) {
       canAddChildren: maintenance || id === "results",
       canDeleteChildren: maintenance,
     },
-  }));
+  };
 }
 async function directory(t) {
   const dir = await mkdtemp(join(tmpdir(), "drive-client-"));
@@ -98,12 +101,13 @@ test("maintenance requires visible sibling parents even with deletion access", a
   }
 });
 test("hidden parents do not weaken candidate storage or reference access checks", async () => {
-  for (const invalid of [
+  const overrides = [
     { id: "shared-drive" },
     { driveId: "other-drive" },
     { capabilities: { canListChildren: true, canAddChildren: true } },
     { capabilities: { canListChildren: true, canDeleteChildren: true } },
-  ]) {
+  ];
+  for (const invalid of overrides) {
     const values = folders();
     for (const folder of values) delete folder.parents;
     Object.assign(values[0], invalid);
@@ -114,7 +118,7 @@ test("hidden parents do not weaken candidate storage or reference access checks"
   }
 });
 test("wrong storage and reference write access are rejected", async () => {
-  for (const invalid of [
+  const overrides = [
     { driveId: null },
     { parents: ["other-platform"] },
     { parents: ["shared-drive"] },
@@ -123,7 +127,8 @@ test("wrong storage and reference write access are rejected", async () => {
     { mimeType: "application/x-tar" },
     { trashed: true },
     { capabilities: { canListChildren: true, canAddChildren: true } },
-  ]) {
+  ];
+  for (const invalid of overrides) {
     const values = folders();
     Object.assign(values[0], invalid);
     await assert.rejects(
@@ -138,10 +143,8 @@ test("wrong storage and reference write access are rejected", async () => {
   );
 });
 test("listing is scoped to platform, protocol and repository, including every page", async () => {
-  const { drive, calls } = client([
-    { data: { nextPageToken: "next", files: [{ id: "one" }] } },
-    { data: { files: [{ id: "two" }] } },
-  ]);
+  const pages = [{ data: { nextPageToken: "next", files: [{ id: "one" }] } }, { data: { files: [{ id: "two" }] } }];
+  const { drive, calls } = client(pages);
   assert.deepEqual(
     (await drive.batches("studio-results")).map((batch) => batch.id),
     ["one", "two"]
@@ -173,7 +176,7 @@ test("resumes at the server-confirmed offset after an ambiguous chunk failure", 
     size = CHUNK + 1024;
   await sparse(archive, size);
   const metadata = await result(archive);
-  const { drive, responses } = client([
+  const responses = [
     { data: { ids: ["batch-id"] } },
     { headers: { location: session } },
     { status: 503, check: (call) => sent(call, `bytes 0-${CHUNK - 1}/${size}`, CHUNK) },
@@ -186,7 +189,8 @@ test("resumes at the server-confirmed offset after an ambiguous chunk failure", 
       data: metadata,
       check: (call) => sent(call, `bytes ${CHUNK / 2}-${size - 1}/${size}`, size - CHUNK / 2),
     },
-  ]);
+  ];
+  const { drive } = client(responses);
   assert.equal((await drive.upload("results", archive, props, join(dir, "id"))).md5Checksum, metadata.md5Checksum);
   assert.equal(await readFile(join(dir, "id"), "utf8"), "batch-id");
   assert.equal(responses.length, 0);
@@ -198,20 +202,11 @@ test("unknown creation outcomes recover the preallocated file and verify provena
   await writeFile(archive, "complete archive");
   await writeFile(identity, "batch-id");
   const metadata = await result(archive);
-  assert.equal(
-    (await client([{ status: 409 }, { data: metadata }]).drive.upload("results", archive, props, identity)).id,
-    "batch-id"
-  );
+  const recovered = client([{ status: 409 }, { data: metadata }]);
+  assert.equal((await recovered.drive.upload("results", archive, props, identity)).id, "batch-id");
   for (const invalid of [{ parents: ["another-platform-results"] }, { md5Checksum: "0".repeat(32) }, { size: "1" }]) {
-    await assert.rejects(
-      client([{ status: 409 }, { data: { ...metadata, ...invalid } }]).drive.upload(
-        "results",
-        archive,
-        props,
-        identity
-      ),
-      Failure
-    );
+    const { drive } = client([{ status: 409 }, { data: { ...metadata, ...invalid } }]);
+    await assert.rejects(drive.upload("results", archive, props, identity), Failure);
   }
 });
 test("expired upload sessions and untrusted session URLs cannot publish", async (t) => {
@@ -220,19 +215,10 @@ test("expired upload sessions and untrusted session URLs cannot publish", async 
     identity = join(dir, "id");
   await writeFile(archive, "archive");
   await writeFile(identity, "batch-id");
-  await assert.rejects(
-    client([{ headers: { location: "https://attacker.test/upload" } }]).drive.upload(
-      "results",
-      archive,
-      props,
-      identity
-    ),
-    Failure
-  );
-  await assert.rejects(
-    client([{ headers: { location: session } }, { status: 404 }]).drive.upload("results", archive, props, identity),
-    (error) => error.status === 404
-  );
+  const untrusted = client([{ headers: { location: "https://attacker.test/upload" } }]);
+  await assert.rejects(untrusted.drive.upload("results", archive, props, identity), Failure);
+  const expired = client([{ headers: { location: session } }, { status: 404 }]);
+  await assert.rejects(expired.drive.upload("results", archive, props, identity), (error) => error.status === 404);
 });
 test("uploads a 4 GiB batch in bounded chunks with offsets beyond 32 bits", async (t) => {
   const dir = await directory(t),
@@ -287,35 +273,27 @@ test("downloads resume after interrupted bodies and verify checksum", async (t) 
     })()
   );
   const checksum = createHash("md5").update("png").digest("hex");
+  const reference = { id: "reference", size: "3", md5Checksum: checksum };
   const { drive } = client([
     { status: 206, headers: { "content-range": "bytes 0-2/3" }, body: broken },
     { status: 206, headers: { "content-range": "bytes 0-2/3" }, body: "png" },
   ]);
-  await drive.download({ id: "reference", size: "3", md5Checksum: checksum }, target);
+  await drive.download(reference, target);
   assert.equal(await readFile(target, "utf8"), "png");
-  await assert.rejects(
-    client([{ status: 206, headers: { "content-range": "bytes 0-2/3" }, body: "bad" }]).drive.download(
-      { id: "reference", size: "3", md5Checksum: checksum },
-      target
-    ),
-    /checksum/
-  );
+  const corrupt = client([{ status: 206, headers: { "content-range": "bytes 0-2/3" }, body: "bad" }]);
+  await assert.rejects(corrupt.drive.download(reference, target), /checksum/);
 });
 
 test("whole-file responses are accepted only within the requested chunk", async (t) => {
   const dir = await directory(t),
     target = join(dir, "reference.tar");
   const checksum = createHash("md5").update("png").digest("hex");
-  await client([{ headers: { "content-length": "3" }, body: "png" }]).drive.download(
-    { id: "reference", size: "3", md5Checksum: checksum },
-    target
-  );
+  const whole = client([{ headers: { "content-length": "3" }, body: "png" }]);
+  await whole.drive.download({ id: "reference", size: "3", md5Checksum: checksum }, target);
   const body = Readable.from([Buffer.from("unrequested data")]);
+  const oversized = client([{ headers: { "content-length": String(CHUNK + 1) }, body: Readable.toWeb(body) }]);
   await assert.rejects(
-    client([{ headers: { "content-length": String(CHUNK + 1) }, body: Readable.toWeb(body) }]).drive.download(
-      { id: "reference", size: String(CHUNK + 1), md5Checksum: checksum },
-      target
-    ),
+    oversized.drive.download({ id: "reference", size: String(CHUNK + 1), md5Checksum: checksum }, target),
     /range/
   );
   assert.equal(body.destroyed, true);

@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { root, succeeds, workspace } from "./helpers.mjs";
 
+const waiter = join(root, "build-actions/wait-container.mjs");
+
 test("container smoke tests wait for readiness, fail promptly and preserve diagnostics", (t) => {
-  for (const [mode, states, ok, message] of [
+  const cases = [
     [
       "service",
       [
@@ -20,7 +22,8 @@ test("container smoke tests wait for readiness, fail promptly and preserve diagn
     ["job", [{ Status: "exited", ExitCode: 23 }], false, "code 23"],
     ["job", [{ Status: "running" }], false, "timed out"],
     ["service", [null], false, "docker inspect"],
-  ]) {
+  ];
+  for (const [mode, states, ok, message] of cases) {
     const w = workspace(t);
     w.stub(
       "docker",
@@ -36,7 +39,7 @@ test("container smoke tests wait for readiness, fail promptly and preserve diagn
       }
     `
     );
-    const result = w.run(process.execPath, [join(root, "build-actions/wait-container.mjs"), mode, "2"], {
+    const result = w.run(process.execPath, [waiter, mode, "2"], {
       STATES: JSON.stringify(states),
       IMAGE_NAME: "owner/image",
       RUN_ARGS: '--env "LABEL=two words" --env \'VALUE=$(touch injected)\' --env DB="${DB}" --env SIMPLE=$SIMPLE',
@@ -49,7 +52,7 @@ test("container smoke tests wait for readiness, fail promptly and preserve diagn
       assert.match(result.stderr, new RegExp(message));
     }
     const calls = JSON.parse(w.read("calls.json"));
-    assert.deepEqual(calls[0], [
+    const started = [
       "run",
       "-d",
       "--network=host",
@@ -64,7 +67,8 @@ test("container smoke tests wait for readiness, fail promptly and preserve diagn
       "--name",
       "test-container",
       "ghcr.io/owner/image:test",
-    ]);
+    ];
+    assert.deepEqual(calls[0], started);
     assert.equal(existsSync(join(w.cwd, "injected")), false);
     assert.deepEqual(
       calls.filter(([cmd]) => ["stop", "logs"].includes(cmd)).map(([cmd]) => cmd),
@@ -76,7 +80,7 @@ test("container smoke tests wait for readiness, fail promptly and preserve diagn
 test("container startup failures do not print arguments containing credentials", (t) => {
   const w = workspace(t);
   w.stub("docker", "process.exit(1)");
-  const result = w.run(process.execPath, [join(root, "build-actions/wait-container.mjs"), "job", "2"], {
+  const result = w.run(process.execPath, [waiter, "job", "2"], {
     RUN_ARGS: "--env PASSWORD=private-fixture-value",
   });
   assert.equal(result.status, 1);
@@ -87,17 +91,14 @@ test("container startup failures do not print arguments containing credentials",
 test("invalid container timeouts and malformed flags fail before starting Docker", (t) => {
   const w = workspace(t);
   w.stub("docker", "import * as fs from 'node:fs'; fs.writeFileSync('started', '')");
-  for (const [limit, args] of [
+  const invalid = [
     ["0", ""],
     ["-1", ""],
     ["bad", ""],
     ["2", "--env 'unclosed"],
-  ]) {
-    assert.notEqual(
-      w.run(process.execPath, [join(root, "build-actions/wait-container.mjs"), "job", limit], { RUN_ARGS: args })
-        .status,
-      0
-    );
+  ];
+  for (const [limit, args] of invalid) {
+    assert.notEqual(w.run(process.execPath, [waiter, "job", limit], { RUN_ARGS: args }).status, 0);
     assert.equal(existsSync(join(w.cwd, "started")), false);
   }
 });

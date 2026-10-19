@@ -1,64 +1,56 @@
 name: release core
 description: >
-  Cut a release in CI: bump the version (package.json, workspace-aware), stamp
-  in-repo version refs, commit, push the tags (a root vX.Y.Z plus any sub-module
-  tags — see plan.mjs), and create the GitHub Release. The caller's cut job runs
-  in the protected `release` environment, which holds the release App's key. A
-  dry run, the rehearsal, needs no credential and runs outside it.
+  Cut a release in CI. It bumps the version of every workspace package.json, stamps in-repository
+  version references, commits, pushes the root vX.Y.Z tag with any sub-module tags, and creates the
+  GitHub Release. The caller's cut job runs in the protected `release` environment, which holds the
+  release App's key. A dry run rehearses without a credential, outside that environment.
 
 inputs:
   cli_version:
     required: true
     description: >
-      a-novel CLI release to install, with or without the leading v. Pinned by the caller so
-      Renovate bumps it per repo. Annotate it:
+      a-novel CLI release to install, with or without the leading v. The caller pins it, so Renovate
+      bumps it per repository and every release runs a reviewed CLI. Annotate it:
       `# renovate: datasource=go depName=github.com/a-novel-kit/stack/cli`.
-
-      It was `@latest`, which resolved at release time to whatever had landed on the CLI — so a
-      release could be cut by code nobody reviewed against it, and two repos releasing minutes
-      apart could use different CLIs.
   release_type:
     required: true
-    description: Semver bump to apply — patch, minor, or major.
+    description: Semver bump to apply, one of patch, minor or major.
   client_id:
     required: false
     default: ""
     description: >
-      Release App client ID, the RELEASE_BOT_CLIENT_ID variable. The App needs contents and
-      workflows write plus the release rulesets' bypass, since the bump commit lands on the
-      protected default branch and the tags are protected. Required unless dry_run.
+      Client ID of the release App. It needs contents and workflows write and the release rulesets'
+      bypass, since the bump commit lands on the protected default branch and the tags are
+      protected. Required unless dry_run.
   app_private_key:
     required: false
     default: ""
     description: >
-      Release App private key (PEM), the RELEASE_BOT_PRIVATE_KEY secret of the `release`
-      environment. Required unless dry_run.
+      Private key (PEM) of the App that client_id names. Required unless dry_run.
   dry_run:
     required: false
     default: "false"
     description: >
-      When "true", bump and report the version/tag but do NOT commit, tag, push,
-      or release — the working tree is reverted. A dry run mints no token, so a
-      rehearsal runs without the release environment.
+      When "true", bump and report the version and tags, then revert the working tree without
+      committing, tagging, pushing or releasing. A dry run mints no token, so it runs outside the
+      release environment.
 
 outputs:
   version:
     description: The bumped version (e.g. 1.2.3).
     value: ${{ steps.cut.outputs.version }}
   tag:
-    description: The root release tag — always vX.Y.Z.
+    description: The root release tag, vX.Y.Z.
     value: ${{ steps.cut.outputs.tag }}
   tags:
-    description: Every tag cut, newline-separated — root vX.Y.Z plus any <subdir>/vX.Y.Z sub-module tags.
+    description: Every tag cut, one per line, the root vX.Y.Z followed by any <subdir>/vX.Y.Z sub-module tags.
     value: ${{ steps.cut.outputs.tags }}
 
 runs:
   using: composite
   steps:
-    # Releases run from the default branch only, so a dispatch or workflow_call
-    # from any other ref is rejected before a token is minted or anything is
-    # mutated: a bump tag pushed from a feature branch names the wrong commit.
-    # A cut whose job is outside the `release` environment reads an empty key.
+    # A tag cut from another branch names the wrong commit, so any other ref fails before a token
+    # is minted. A cut whose job is outside the `release` environment reads an empty key.
     - name: Guard — default branch and credentials
       shell: bash
       env:
@@ -76,10 +68,8 @@ runs:
           exit 1
         fi
 
-    # Token that can push the bump commit and tag and create the release, scoped to this repo.
-    # `workflows` is needed alongside `contents` because the self-pin sync rewrites the version in
-    # `.github/workflows/*` self-refs, and GitHub refuses an App push touching workflow files without
-    # it, answering GH013 "without workflows permission".
+    # The self-pin sync rewrites `.github/workflows/*`, and GitHub refuses an App push touching a
+    # workflow file without workflows write (GH013).
     - name: Mint push token
       id: token
       if: ${{ inputs.dry_run != 'true' }}
@@ -92,9 +82,8 @@ runs:
         permission-contents: write
         permission-workflows: write
 
-    # Bot-authenticated checkout so the later push carries the bot's rights, with
-    # full history and tags so the tag and release notes resolve. A dry run reads
-    # with the job's own token.
+    # The App's checkout gives the later push its rights; full history and tags resolve the tag and
+    # the release notes. A dry run reads with the job's own token.
     - name: Checkout
       uses: actions/checkout@v7
       with:
@@ -117,8 +106,7 @@ runs:
         else
           echo "needed=false" >> "$GITHUB_OUTPUT"
         fi
-    # prepublish:doc scripts call pnpm themselves. Corepack used to provide it from the
-    # packageManager pin, but Node stopped bundling it in v25 and lts/* follows Node's releases.
+    # prepublish:doc scripts call pnpm, and Node ships without Corepack from v25 on.
     - name: Setup pnpm
       if: ${{ steps.stamp.outputs.needed == 'true' }}
       uses: pnpm/action-setup@v6
@@ -127,7 +115,7 @@ runs:
       uses: actions/setup-go@v7.0.0
       with:
         go-version: stable
-        # This step only `go install`s the a-novel CLI, so there is nothing to cache.
+        # Go only installs the a-novel CLI here.
         cache: false
     - name: Install a-novel CLI (for stamp)
       if: ${{ steps.stamp.outputs.needed == 'true' }}
@@ -158,8 +146,7 @@ runs:
         git config user.name "${APP_SLUG}[bot]"
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
-        # Version bump across package.json at the root and in every workspace member.
-        # Plain Node runs it, which skips pnpm's cold-store supply-chain pass. See bump.mjs.
+        # Plain Node bumps every workspace package.json, which skips pnpm's cold-store dependency checks.
         node "$GITHUB_ACTION_PATH/bump.mjs"
 
         # Refresh doc version refs through `a-novel publish stamp` where that script exists.
@@ -170,8 +157,7 @@ runs:
 
         version=$(node -p "require('./package.json').version")
 
-        # Stamp in-repo version refs and compute the tags: the root vX.Y.Z plus any
-        # sub-module tags. plan.mjs also stamps self-references to the new release.
+        # plan.mjs stamps in-repository version references, self-pins included, and prints the tags.
         tags=$(node "$GITHUB_ACTION_PATH/plan.mjs" --self-pins)
         root_tag="v${version}"
 

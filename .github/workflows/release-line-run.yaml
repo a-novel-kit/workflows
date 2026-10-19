@@ -1,75 +1,73 @@
 name: release line (reusable)
 
-# The reusable release-line cut (workflow_call). Every governed repo's thin `hotfix.yaml` caller runs
-# it when a backport pull request merges into `release/**`. It cuts the line's next patch from the
-# branch head behind the protected `release` environment, the human "who may publish" gate, as the
-# release App whose key only that environment holds, and pushes the bump commit to the line together
-# with its tags, so the line's head is always its latest patch. Nested actions are remote-pinned: a
-# `./` path in a reusable workflow resolves against the caller.
+# Cuts a release line's next patch when a backport pull request merges into `release/**`. Each
+# governed repository calls this engine from the `hotfix.yaml` that repocfg renders. The cut runs as
+# the release App behind the protected `release` environment, the human gate on who may publish. It
+# pushes the bump commit to the line together with its tags, so the line's head is always its latest
+# patch. The caller triggers on pull_request_target, so GitHub runs the default branch's copy of the
+# caller and checks the `release` environment against the default branch.
 #
-# The caller triggers on pull_request_target, which GitHub runs from the default branch's workflow
-# file and checks against the `release` environment as the default branch. A push trigger would run
-# the line's own copy of the caller, as old as the tag the line was cut from.
-#
-# A head that is already tagged has nothing to release. The caller serialises runs per line, and
-# each run reads the line's current head rather than the merged commit, so two backports merged
-# together cut one patch and the second run finds nothing to cut.
+# A head that is already tagged has nothing to release. The caller serializes runs per line, and
+# each run reads the line's current head, so two backports merged together cut one patch and the
+# second run finds nothing to cut.
 on:
   workflow_call:
     inputs:
       branch:
-        description: The release line to cut, release/vMAJOR.MINOR (the merged pull request's base)
+        description: Release line to cut, named release/vMAJOR.MINOR. The caller passes the merged pull request's base.
         required: true
         type: string
       severity:
-        description: Escalation severity if the cut fails (sev2 / sev1)
+        description: Escalation severity, sev2 or sev1, when the cut fails.
         required: false
         type: string
         default: sev2
       dry_run:
-        description: When true, bump and report without committing, tagging, pushing or releasing
+        description: When true, computes and reports the bump without committing, tagging, pushing or releasing.
         required: false
         type: boolean
         default: false
       client_id:
-        description: The [Agent] bot App client id, for the failure ticket.
+        description: Client id of the GitHub App that files the escalation ticket when the cut fails.
         required: true
         type: string
       release_client_id:
-        description: The release App client id, the RELEASE_BOT_CLIENT_ID variable.
+        description: >
+          Client id of the release App, the GitHub App that pushes the bump commit and tags past the
+          line's rulesets. Required unless dry_run.
         required: false
         type: string
         default: ""
       project_id:
-        description: Node id of the org "Tasks" board (PVT_…) — escalate drives the failure ticket's Status here.
+        description: Node id (PVT_…) of the org project board that tracks the escalation ticket.
         required: true
         type: string
       mention:
-        description: Threaded to escalate as the SEV1/SEV2 GitHub @mention on tickets.
+        description: GitHub @mention, a user or a team, that a SEV1 or SEV2 escalation ticket pings.
         required: false
         type: string
         default: ""
       push_mention:
-        description: Threaded to escalate as the Discord mention on the SEV1 push ("<@&ROLE_ID>").
+        description: Discord mention, such as "<@&ROLE_ID>", that a SEV1 escalation's push pings.
         required: false
         type: string
         default: ""
     secrets:
       app_private_key:
-        description: The [Agent] bot App private key (PEM).
+        description: Private key (PEM) of the App that client_id names.
         required: true
       release_private_key:
         description: >
-          The release App private key (PEM). Pass secrets.RELEASE_BOT_PRIVATE_KEY by name: it exists
-          only in the `release` environment, which the cut job names.
+          Private key (PEM) of the App that release_client_id names. The caller passes it by name from
+          its `release` environment, which only the cut job opens.
         required: false
       push_webhook:
-        description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
+        description: Chat webhook URL that receives a SEV1 escalation's push. Empty turns the push off.
         required: false
 
 jobs:
-  # Reads the line's state without the `release` environment, so a push with nothing to release never
-  # asks a human to approve.
+  # Reads the line's state outside the `release` environment, so a merge with nothing to release
+  # never asks a person to approve.
   pending:
     runs-on: ubuntu-latest
     permissions:
@@ -121,10 +119,10 @@ jobs:
       contents: read
       actions: read # the lock step reads in-flight release runs
     steps:
-      # An asymmetric lock: wait out any in-flight cut of a release before cutting, so the two never
-      # interleave. Only dispatched runs cut; a release tag's publishing run never conflicts. Only the
-      # cut waits; the ordering is best-effort, and release-core-hotfix refuses a tag that already
-      # exists.
+      # The cut waits out any in-flight cut of a release, so the two never interleave. Only a
+      # dispatched release.yaml run cuts, so a release tag's publishing run never conflicts. A release
+      # does not wait for this cut, so the ordering is best-effort, and release-core-hotfix refuses a
+      # tag that already exists.
       - name: Acquire lock (wait for in-flight release)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -159,8 +157,8 @@ jobs:
           app_private_key: ${{ secrets.release_private_key }}
           dry_run: ${{ inputs.dry_run }}
 
-  # The release environment holds only the release key, so the Agent escalates from the caller's
-  # governance environment.
+  # The `release` environment holds only the release key, so the escalation runs in the caller's
+  # governance environment. A failed pending job escalates too.
   escalate:
     needs: cut
     if: ${{ failure() }}

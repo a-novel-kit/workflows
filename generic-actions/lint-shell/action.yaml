@@ -1,32 +1,29 @@
 name: lint shell
 description: >
-  Run shellcheck over a repo's tracked shell scripts. A repo with no shell files is a clean
-  pass, so the job is safe to add anywhere. Advisory mode reports findings without failing,
-  for a repo clearing an existing backlog before the check gates.
+  Run shellcheck over a repo's tracked shell scripts. A repo with no shell files passes, so the job
+  fits any repo. Advisory mode reports findings without failing, for a repo clearing an existing
+  backlog before the check gates.
 
 inputs:
   paths:
     required: false
     description: >
-      Space- or newline-separated globs of shell files to lint. Empty (the default) lints
-      every tracked `*.sh` file (`git ls-files '*.sh'`), which excludes vendored and
-      gitignored trees. The caller must have checked the repo out for the default to see it.
+      Space- or newline-separated globs of shell files to lint. Empty lints every tracked `*.sh`
+      file. Discovery reads tracked files only, so it skips gitignored trees. The caller checks the
+      repo out first.
   advisory:
     required: false
     default: "false"
     description: >
-      When "true", findings go to the run summary and the log but the check passes — for a
-      repo adopting the lint over an existing backlog. When "false" (the default), any
-      finding fails the check.
+      When "true", the log lists the findings, the run summary counts them, and the check passes.
+      When "false", any finding fails the check.
   version:
     required: true
     description: >
-      shellcheck release tag, with or without the leading v. Pinned by the caller so Renovate
-      bumps it per repo. Annotate it:
-      `# renovate: datasource=github-releases depName=koalaman/shellcheck`.
-
-      Previously the runner's preinstalled shellcheck was used, so the version moved whenever
-      GitHub rebuilt the image — a gate that changed what it accepted with no change in the repo.
+      shellcheck release tag, with or without the leading v. The caller pins it so Renovate bumps
+      it per repo, with the annotation
+      `# renovate: datasource=github-releases depName=koalaman/shellcheck`. The pin keeps what the
+      gate accepts independent of the runner image.
 
 runs:
   using: composite
@@ -37,18 +34,12 @@ runs:
         SHELLCHECK_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        # The tag and the archive name both carry the v, unlike gitleaks and hadolint whose
-        # archives drop it. Normalise so either spelling of the input works.
+        # The release tag and the archive name both carry the v, so the input works with or without it.
         v="v${SHELLCHECK_VERSION#v}"
         tmp=$(mktemp -d)
-        # Downloaded to a file, then extracted, rather than piped into tar — and the retry flag
-        # alone fixes neither half. `--retry-all-errors` is what retries a transport-level reset
-        # (curl exit 35); plain `--retry` covers only transient HTTP statuses and timeouts, so the
-        # reset failed the job on the first attempt. And retrying *into a pipe* is unsound anyway:
-        # curl restarts the transfer while tar has already consumed the partial bytes, leaving its
-        # stream corrupt. Both were observed on one run — `curl: (35) Recv failure` followed by
-        # `xz: (stdin): File format not recognized` — reddening a PR that only bumped prettier.
-        # generic-actions/lint-dockerfile already downloads this way for the same reason.
+        # curl restarts a retried transfer from its first byte, so the archive lands in a file before
+        # tar reads it. `--retry-all-errors` also retries a transport-level reset (curl exit 35),
+        # which plain `--retry` leaves fatal.
         if ! curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors \
           "https://github.com/koalaman/shellcheck/releases/download/${v}/shellcheck-${v}.linux.x86_64.tar.xz" \
           -o "$tmp/shellcheck.tar.xz"; then
@@ -66,12 +57,11 @@ runs:
         PATHS: ${{ inputs.paths }}
         ADVISORY: ${{ inputs.advisory }}
       run: |
-        # errexit is disabled deliberately: shellcheck exits non-zero on findings and this
-        # step decides gating from that code itself, rather than aborting on it.
+        # errexit is off because shellcheck exits non-zero on findings, and the step gates on that code.
         set +e -u
         shopt -s nullglob
         if [ -n "${PATHS//[[:space:]]/}" ]; then
-          # Word-split the caller's globs into a file list on purpose.
+          # The caller's globs split into words and expand into the file list.
           # shellcheck disable=SC2206
           files=($PATHS)
         else

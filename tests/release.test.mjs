@@ -21,22 +21,23 @@ test("release guard treats branch names as data and refuses a cut without the re
     assert.equal(existsSync(join(w.cwd, "injected")), false);
   }
   // A rehearsal needs no key; a cut whose job sits outside the release environment reads none.
-  for (const [dryRun, hasKey, status] of [
+  const keyOutcomes = [
     ["true", "false", 0],
     ["false", "false", 1],
-  ])
-    assert.equal(
-      w.bash(guard, { REF_NAME: "master", DEFAULT_BRANCH: "master", DRY_RUN: dryRun, HAS_KEY: hasKey }).status,
-      status
-    );
+  ];
+  for (const [dryRun, hasKey, status] of keyOutcomes) {
+    const env = { REF_NAME: "master", DEFAULT_BRANCH: "master", DRY_RUN: dryRun, HAS_KEY: hasKey };
+    assert.equal(w.bash(guard, env).status, status);
+  }
 });
 
 test("release bump updates all package formats and quoted filenames, leaving versionless packages alone", (t) => {
-  for (const [type, next] of [
+  const bumps = [
     ["patch", "1.2.4"],
     ["minor", "1.3.0"],
     ["major", "2.0.0"],
-  ]) {
+  ];
+  for (const [type, next] of bumps) {
     const w = repository(t);
     const nested = 'packages/quoted "name"\n/package.json';
     w.write(nested, '{"version" : "0.5.0", "config":{"version":"leave-me"}}');
@@ -50,10 +51,11 @@ test("release bump updates all package formats and quoted filenames, leaving ver
 });
 
 test("a patch moves past the patches its minor already tagged, as a release line's hotfix", (t) => {
-  for (const [tags, next] of [
+  const histories = [
     [["v1.2.3", "v1.2.4", "v1.2.10", "child/v1.2.12", "v1.3.0", "v1.2.11-rc.1"], "1.2.11"],
     [["v1.2.3", "v1.20.4"], "1.2.4"],
-  ]) {
+  ];
+  for (const [tags, next] of histories) {
     const w = repository(t);
     succeeds(w.run("git", ["add", "package.json"]));
     succeeds(
@@ -115,10 +117,11 @@ require (
 });
 
 test("release pushes are atomic, hotfixes push their release line, and dry runs publish nothing", (t) => {
-  for (const [action, pushed] of [
+  const releaseLines = [
     ["release-core", "master"],
     ["release-core-hotfix", "release/v1.2"],
-  ]) {
+  ];
+  for (const [action, pushed] of releaseLines) {
     for (const outcome of ["success", "reject", "dry-run"]) {
       const w = repository(t);
       const git = (...args) => succeeds(w.run("git", args));
@@ -146,7 +149,8 @@ test("release pushes are atomic, hotfixes push their release line, and dry runs 
         "gh",
         "import * as fs from 'node:fs'; fs.writeFileSync('released', JSON.stringify(process.argv.slice(2)))"
       );
-      const result = w.bash(step(`publish-actions/${action}/action.yaml`, "cut"), {
+      const cut = step(`publish-actions/${action}/action.yaml`, "cut");
+      const env = {
         GITHUB_ACTION_PATH: join(root, "publish-actions", action),
         GITHUB_REPOSITORY: "a-novel-kit/example",
         APP_SLUG: "fixture",
@@ -154,7 +158,8 @@ test("release pushes are atomic, hotfixes push their release line, and dry runs 
         STAMP_NEEDED: "false",
         BRANCH: pushed,
         DRY_RUN: String(outcome === "dry-run"),
-      });
+      };
+      const result = w.bash(cut, env);
       if (outcome === "reject") assert.notEqual(result.status, 0, result.stdout);
       else succeeds(result);
       const remote = (...args) => git("--git-dir=remote.git", ...args);
@@ -189,7 +194,7 @@ test("release train distinguishes read failure, empty history and release types"
     for (const message of JSON.parse(process.env.MESSAGES)) console.log(JSON.stringify(message));
   `
   );
-  for (const [messages, tag, failed, expected] of [
+  const cases = [
     [[], "v1.0.0", false, "none"],
     [[], "", false, "minor"],
     [[], "v1.0.0", true, "__ERR__"],
@@ -199,20 +204,11 @@ test("release train distinguishes read failure, empty history and release types"
     [["feat(proto)!: remove field"], "v1.0.0", false, "major"],
     [["fix: change\n\nBREAKING CHANGE: contract"], "v1.0.0", false, "major"],
     [["docs: examples\n\nfeat: quoted example"], "v1.0.0", false, "patch"],
-  ])
-    assert.equal(
-      succeeds(
-        w.bash(
-          `${script}\nderive_bump "$@"`,
-          {
-            MESSAGES: JSON.stringify(messages),
-            API_FAIL: String(failed),
-          },
-          ["owner/repo", tag, "master"]
-        )
-      ),
-      expected
-    );
+  ];
+  for (const [messages, tag, failed, expected] of cases) {
+    const env = { MESSAGES: JSON.stringify(messages), API_FAIL: String(failed) };
+    assert.equal(succeeds(w.bash(`${script}\nderive_bump "$@"`, env, ["owner/repo", tag, "master"])), expected);
+  }
 });
 
 test("release train waits for a cut's approval and never for a rehearsal", (t) => {
@@ -234,17 +230,15 @@ test("release train waits for a cut's approval and never for a rehearsal", (t) =
     console.log(status === 'completed' ? 'completed success' : status + ' ');
   `
   );
-  for (const [statuses, approval, expected, announced] of [
+  const cases = [
     ["in_progress,waiting,waiting,in_progress,completed", "true", "success", true],
     ["in_progress,waiting,completed", "false", "blocked", false],
-  ]) {
+  ];
+  for (const [statuses, approval, expected, announced] of cases) {
     w.write("calls", "0");
     w.write("summary", "");
-    const result = w.bash(`${script}\npoll_run "$@"`, { STATUSES: statuses, GITHUB_SERVER_URL: "https://github.com" }, [
-      "owner/repo",
-      "42",
-      approval,
-    ]);
+    const env = { STATUSES: statuses, GITHUB_SERVER_URL: "https://github.com" };
+    const result = w.bash(`${script}\npoll_run "$@"`, env, ["owner/repo", "42", approval]);
     assert.equal(succeeds(result), expected);
     const link = "- ⏳ **owner/repo** — cut awaiting approval: https://github.com/owner/repo/actions/runs/42";
     assert.equal(w.read("summary").trim(), announced ? link : "");

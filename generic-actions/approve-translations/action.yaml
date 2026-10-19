@@ -1,13 +1,17 @@
 name: approve translations
 description: >
-  Keep the translation approval labels honest from a trusted pull_request_target caller: remove
-  allow-incomplete-translations and allow-translation-drift when a push reaches the PR, since each
-  approved an earlier head, and rerun the head's translation check when either label changes or was
-  removed. It never checks out PR code.
+  Keep the translation approval labels bound to the head they approved. A push removes
+  allow-incomplete-translations and allow-translation-drift, since each approved an earlier head.
+  After such a removal, or a change to either label, the action reruns the translation check of the
+  head's latest run once that run completes. A pull_request run reads the labels itself and is left
+  alone. The step fails when no run completes or the run lacks the job. Call the action from a
+  trusted pull_request_target workflow. It never checks out pull request code.
 inputs:
   github_token:
     required: true
-    description: Token with actions write, contents read and pull requests write; use only from trusted pull_request_target code.
+    description: >
+      Token with actions write, contents read and pull requests write. Pass it only from a trusted
+      pull_request_target job.
   workflow:
     required: false
     default: main.yaml
@@ -54,8 +58,8 @@ runs:
         for _ in $(seq 1 80); do
           run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WORKFLOW" --commit "$HEAD_SHA" \
             --limit 1 --json databaseId,event,status --jq '.[0] // empty')
-          # A pull request run reads labels as it starts and ignores them on a push, and a label
-          # change starts a new one, so it needs no rerun.
+          # A pull_request run reads the labels as it starts, except on a push, and a label change
+          # starts a new run. Such a run needs no rerun.
           if [ "$(jq -r '.event // empty' <<<"${run:-null}")" = pull_request ]; then exit 0; fi
           status=$(jq -r '.status // "missing"' <<<"${run:-null}")
           if [ "$status" = completed ]; then break; fi

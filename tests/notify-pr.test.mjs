@@ -107,33 +107,27 @@ function notify(
     else if (args.some((arg) => arg.endsWith("/jobs"))) console.log(process.env.JOBS);
     else if (args.some((arg) => arg.includes("/actions/runs/"))) console.log(process.env.AT);`
   );
-  succeeds(
-    w.bash(decide, {
-      GITHUB_EVENT_NAME: eventName,
-      GITHUB_EVENT_PATH: `${w.cwd}/event.json`,
-      GITHUB_REPOSITORY: "a-novel/service-authentication",
-      GITHUB_RUN_ID: "555",
-      AT: at,
-      GH_LOG: `${w.cwd}/gh.log`,
-      APP_TOKEN: "token",
-      PR: JSON.stringify(pr),
-      RUNS: runs.map((entry) => JSON.stringify(entry)).join("\n"),
-      MAIN: main ? "true" : "",
-      JOBS: JSON.stringify(jobs),
-      PULLS: pulls,
-      PULL: JSON.stringify(pull),
-      REVIEWS: reviews.map((entry) => JSON.stringify(entry)).join("\n"),
-    })
-  );
+  const env = {
+    GITHUB_EVENT_NAME: eventName,
+    GITHUB_EVENT_PATH: `${w.cwd}/event.json`,
+    GITHUB_REPOSITORY: "a-novel/service-authentication",
+    GITHUB_RUN_ID: "555",
+    AT: at,
+    GH_LOG: `${w.cwd}/gh.log`,
+    APP_TOKEN: "token",
+    PR: JSON.stringify(pr),
+    RUNS: runs.map((entry) => JSON.stringify(entry)).join("\n"),
+    MAIN: main ? "true" : "",
+    JOBS: JSON.stringify(jobs),
+    PULLS: pulls,
+    PULL: JSON.stringify(pull),
+    REVIEWS: reviews.map((entry) => JSON.stringify(entry)).join("\n"),
+  };
+  succeeds(w.bash(decide, env));
   const outputs = Object.fromEntries(
     [...w.read("output").matchAll(/^(\w+)<<(EOF_\w+)\n([^]*?)\n?\2$/gm)].map(([, key, , value]) => [key, value])
   );
-  const calls = w
-    .read("gh.log")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
+  const calls = w.read("gh.log").trim().split("\n").filter(Boolean).map(JSON.parse);
   return { outputs, calls };
 }
 
@@ -149,7 +143,7 @@ test("notify-pr posts a person's merge and merge-queue drop, pinging its owner, 
   });
   const conflict = { dropped: { nodes: [{ reason: "MERGE_CONFLICT" }] } };
   const dropped = "**Dropped from the merge queue** · merge conflict";
-  for (const [name, action, event, pr, expected] of [
+  const cases = [
     ["merged", "closed", {}, { state: "MERGED" }, ["released", "**Merged**", "", "false"]],
     ["closed", "closed", {}, { state: "CLOSED" }, [""]],
     ["dropped from the queue", "dequeued", {}, conflict, ["failed", dropped, "1", "false"]],
@@ -174,7 +168,8 @@ test("notify-pr posts a person's merge and merge-queue drop, pinging its owner, 
     ["assigned", "assigned", {}, {}, [""]],
     ["back to draft", "converted_to_draft", {}, { isDraft: true }, [""]],
     ["reopened", "reopened", {}, {}, [""]],
-  ]) {
+  ];
+  for (const [name, action, event, pr, expected] of cases) {
     const { outputs } = notify(t, "pull_request_target", prEvent(action, event), pullRequest(pr));
     const [color, title, users, role] = expected;
     assert.equal(outputs.channel, "reviews", name);
@@ -193,7 +188,7 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
   const link = " · [read the review](https://github.com/a-novel/service-authentication/pull/7#r1)";
   const requested = { reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", ...dada } }] } };
   const approved = { latestOpinionatedReviews: { nodes: [{ state: "APPROVED", author: { login: "EmperorDada" } }] } };
-  for (const [name, eventName, action, event, pr, expected] of [
+  const cases = [
     [
       "ready without reviewers",
       "pull_request_target",
@@ -277,7 +272,8 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
       { reviewDecision: "APPROVED" },
       ["in-progress", "**Review dismissed** · EmperorDada", "", "false"],
     ],
-  ]) {
+  ];
+  for (const [name, eventName, action, event, pr, expected] of cases) {
     const { outputs } = notify(t, eventName, prEvent(action, event), pullRequest(pr));
     const [color, title, users, role] = expected;
     assert.equal(outputs.channel, "reviews", name);
@@ -296,12 +292,13 @@ test("notify-pr folds the changes of a pull request's first ready minute into it
     ...reviewer,
     pull_request: { number: 7, updated_at: settling, user: { login: "kushuh", type: "User" } },
   };
-  for (const [name, action, event, at, posts] of [
+  const timings = [
     ["reviewer requested within the minute", "review_requested", reviewer, settling, false],
     ["reviewer requested after it, stale updated_at", "review_requested", stale, settled, true],
     ["reviewer requested after it", "review_requested", reviewer, settled, true],
     ["reviewer removed within the minute", "review_request_removed", reviewer, settling, false],
-  ]) {
+  ];
+  for (const [name, action, event, at, posts] of timings) {
     const { outputs } = notify(t, "pull_request_target", prEvent(action, event), pullRequest(), { at });
     assert.equal(Boolean(outputs.color), posts, name);
   }
@@ -329,11 +326,12 @@ test("notify-pr describes status, reviews, links and dates beyond the headline",
   assert.equal(outputs.title, "a-novel/service-authentication#7 · feat(session): rotate refresh tokens");
   assert.equal(outputs.url, "https://github.com/a-novel/service-authentication/pull/7");
   // The Target date wins over the milestone's, read at noon UTC so every time zone shows its day.
-  assert.deepEqual(outputs.description.split("\n").slice(1), [
+  const details = [
     "Status: in the merge queue · Review: approved by EmperorDada · waiting on core",
     "Closes [a-novel/.github#3](https://github.com/a-novel/.github/issues/3) · Milestone [Sessions](https://github.com/a-novel/m/1)",
     "Due <t:1792843200:D> (<t:1792843200:R>) · Opened <t:1791799200:R> by kushuh",
-  ]);
+  ];
+  assert.deepEqual(outputs.description.split("\n").slice(1), details);
   const merged = notify(t, "pull_request_target", prEvent("closed"), { ...pr, state: "MERGED", mergeQueueEntry: null });
   assert.equal(
     merged.outputs.description.split("\n")[1],
@@ -341,10 +339,8 @@ test("notify-pr describes status, reviews, links and dates beyond the headline",
     "a merged pull request waits on nobody"
   );
   const plain = notify(t, "pull_request_target", prEvent("opened"), pullRequest()).outputs;
-  assert.deepEqual(plain.description.split("\n").slice(1), [
-    "Status: open · Review: no reviewer",
-    "Opened <t:1791799200:R> by kushuh",
-  ]);
+  const plainDetails = ["Status: open · Review: no reviewer", "Opened <t:1791799200:R> by kushuh"];
+  assert.deepEqual(plain.description.split("\n").slice(1), plainDetails);
 });
 
 test("notify-pr flags a bot's failing pull request once, then its refails, merge or close", (t) => {
@@ -354,7 +350,7 @@ test("notify-pr flags a bot's failing pull request once, then its refails, merge
   // Renovate's opened and labeled events each start a run of the same commit.
   const twin = (updated_at) => run(899, "renovate/golib", "failure", { head_sha: "c0ffee", updated_at });
   const other = [run(700, "renovate/other", "failure"), run(701, "gh-readonly-queue/master/pr-17-abcd", "failure")];
-  for (const [name, eventName, event, pr, runs, expected] of [
+  const cases = [
     ["first failure", "workflow_run", runEvent("renovate/golib"), bot(), other, ["failed", "**CI failed**", "true"]],
     [
       "failed again",
@@ -430,7 +426,8 @@ test("notify-pr flags a bot's failing pull request once, then its refails, merge
       ["cancelled", "**Closed** after failing CI", "false"],
     ],
     ["merged clean", "pull_request_target", prEvent("closed"), bot({ state: "MERGED" }), other, [""]],
-  ]) {
+  ];
+  for (const [name, eventName, event, pr, runs, expected] of cases) {
     const { outputs, calls } = notify(t, eventName, event, pr, { runs, jobs: ["test-go", "lint-go"] });
     const [color, title, role] = expected;
     assert.equal(outputs.color, color, name);
@@ -478,7 +475,7 @@ test("notify-pr reads a relayed review back from the pull request instead of tru
   });
   const older = reviewed("COMMENTED", "2026-10-12T10:00:00Z");
   const link = " · [read the review](https://github.com/a-novel/service-authentication/pull/7#r9)";
-  for (const [name, event, pull, reviews, expected] of [
+  const cases = [
     [
       "approval",
       relayed(),
@@ -516,7 +513,8 @@ test("notify-pr reads a relayed review back from the pull request instead of tru
       [reviewed("APPROVED", "2026-10-12T11:00:00Z")],
       [undefined],
     ],
-  ]) {
+  ];
+  for (const [name, event, pull, reviews, expected] of cases) {
     const { outputs } = notify(t, "workflow_run", event, pullRequest(), { pull, reviews });
     const [color, title, users] = expected;
     assert.equal(outputs.color, color, name);

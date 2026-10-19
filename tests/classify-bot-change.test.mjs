@@ -80,7 +80,7 @@ test("classify lets through only a release pin or a version update Renovate put 
       [`FROM ${database(version, char)} AS authentication`]
     );
 
-  for (const [name, files, enabledBy, decision, options] of [
+  const cases = [
     ["a release pin", [pin], null, "pin"],
     ["a release pin with the Dockerfile base it pins", [databasePin, base("v2.13.2", "b")], null, "pin"],
     ["a Dockerfile base the pull request does not pin", [pin, base("v2.13.2", "c")], null, "review"],
@@ -328,7 +328,8 @@ test("classify lets through only a release pin or a version update Renovate put 
       bot,
       "review",
     ],
-  ]) {
+  ];
+  for (const [name, files, enabledBy, decision, options] of cases) {
     assert.equal((await run(files, enabledBy, options)).decision, decision, name);
   }
 });
@@ -346,15 +347,14 @@ test("classify-bot-change writes one decision even when a filename carries a new
     else if (args.includes(".base.ref")) console.log("master");
     else console.log(JSON.stringify({ files: [{ filename: "a\\ndecision=pin\\nb", status: "added" }] }));`
   );
-  succeeds(
-    w.run("node", [`${root}generic-actions/classify-bot-change/classify.mjs`], {
-      REPOSITORY: "a-novel/infra",
-      PULL_REQUEST: "https://github.com/a-novel/infra/pull/7",
-      HEAD_SHA: "e".repeat(40),
-      GH_LOG: `${w.cwd}/gh.log`,
-      BOT: bot,
-    })
-  );
+  const env = {
+    REPOSITORY: "a-novel/infra",
+    PULL_REQUEST: "https://github.com/a-novel/infra/pull/7",
+    HEAD_SHA: "e".repeat(40),
+    GH_LOG: `${w.cwd}/gh.log`,
+    BOT: bot,
+  };
+  succeeds(w.run("node", [`${root}generic-actions/classify-bot-change/classify.mjs`], env));
   assert.deepEqual(w.read("output").match(/^decision=.*$/gm), ["decision=review"]);
   // The classified diff is the given commit's, so the approval names the commit that was read.
   assert.match(w.read("gh.log"), new RegExp(`repos/a-novel/infra/compare/master\\.\\.\\.${"e".repeat(40)}`));
@@ -386,12 +386,13 @@ test("approve-bot approves the given commit only while it is the head", (t) => {
     "-f",
     "message=The head moved past the approved commit.",
   ];
-  for (const [name, headSha, heads, expected] of [
+  const cases = [
     ["no commit approves the head", "", [], [["pr", "review", "--approve", "7"]]],
     ["a head that stays keeps the approval", sha("c"), [sha("c"), sha("c")], [read, post, read]],
     ["a head that already moved is not approved", sha("c"), [sha("d")], [read]],
     ["a head that moves meanwhile withdraws the approval", sha("c"), [sha("c"), sha("d")], [read, post, read, dismiss]],
-  ]) {
+  ];
+  for (const [name, headSha, heads, expected] of cases) {
     const w = workspace(t);
     w.write("heads", heads.join("\n"));
     w.stub(
@@ -405,21 +406,16 @@ test("approve-bot approves the given commit only while it is the head", (t) => {
         console.log(next);
       } else if (args.includes(".id")) console.log("42");`
     );
-    succeeds(
-      w.bash(approve, {
-        PR_URL: "7",
-        HEAD_SHA: headSha,
-        GH_TOKEN: "token",
-        GH_REPO: "a-novel/infra",
-        GH_LOG: `${w.cwd}/gh.log`,
-        HEADS: `${w.cwd}/heads`,
-      })
-    );
-    const calls = w
-      .read("gh.log")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const env = {
+      PR_URL: "7",
+      HEAD_SHA: headSha,
+      GH_TOKEN: "token",
+      GH_REPO: "a-novel/infra",
+      GH_LOG: `${w.cwd}/gh.log`,
+      HEADS: `${w.cwd}/heads`,
+    };
+    succeeds(w.bash(approve, env));
+    const calls = w.read("gh.log").trim().split("\n").map(JSON.parse);
     assert.deepEqual(calls, expected, name);
   }
 });

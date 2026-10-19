@@ -20,6 +20,17 @@ export class Policy {
     return this.post(`statuses/${sha}`, { context, state, description, target_url: target });
   }
 
+  /** Whether the user holds write access or more on this repository. */
+  async canWrite(login) {
+    const { permission } = await this.github.request(`collaborators/${encodeURIComponent(login)}/permission`);
+    return ["admin", "maintain", "write"].includes(permission);
+  }
+
+  /** Whether a pull request targets master from a branch of this repository. */
+  ownPullRequest(pr) {
+    return pr.base.ref === "master" && pr.head.repo?.full_name === this.github.repository;
+  }
+
   async latestStatus(sha, context, before) {
     for (const status of await this.github.pages(`commits/${sha}/statuses`)) {
       if (status.context === context && (!before || status.created_at <= before)) {
@@ -52,8 +63,7 @@ export class Policy {
     const latest = await this.latestLabel(pr, before);
     if (!latest || latest.event !== "labeled" || latest.actor?.type !== "User" || latest.performed_via_github_app)
       return false;
-    const permission = await this.github.request(`collaborators/${encodeURIComponent(latest.actor.login)}/permission`);
-    if (!["admin", "maintain", "write"].includes(permission.permission)) return false;
+    if (!(await this.canWrite(latest.actor.login))) return false;
     const receipt = await this.latestStatus(pr.head.sha, APPROVAL, before);
     if (
       !receipt ||
@@ -74,7 +84,7 @@ export class Policy {
   }
 
   runTarget(status) {
-    const repository = this.github.repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const repository = RegExp.escape(this.github.repository);
     return status.target_url?.match(
       new RegExp(`^https://github\\.com/${repository}/actions/runs/(\\d+)/attempts/(\\d+)$`)
     );
@@ -141,7 +151,7 @@ export class Policy {
         continue;
       }
       for (const pr of await this.github.pages(`commits/${commit.sha}/pulls`)) {
-        if (pr.base.ref !== "master" || pr.head.repo?.full_name !== this.github.repository) continue;
+        if (!this.ownPullRequest(pr)) continue;
         if (
           (merged && pr.merged_at && commitIds.has(pr.merge_commit_sha)) ||
           (!merged && pr.state === "open" && commitIds.has(pr.head.sha))
@@ -178,15 +188,10 @@ export class Policy {
         : await this.github.pages(
             `pulls?state=open&head=${this.github.repository.split("/")[0]}:${encodeURIComponent(ref.replace(/^refs\/heads\//, ""))}`
           );
-    for (const pr of pulls)
-      if (
-        pr.state === "open" &&
-        pr.head.sha === sha &&
-        pr.base.ref === "master" &&
-        pr.head.repo?.full_name === this.github.repository &&
-        (await this.approved(pr))
-      )
+    for (const pr of pulls) {
+      if (pr.state === "open" && pr.head.sha === sha && this.ownPullRequest(pr) && (await this.approved(pr)))
         return true;
+    }
     return false;
   }
 
@@ -196,13 +201,7 @@ export class Policy {
     if (["labeled", "unlabeled"].includes(action) && event.label?.name !== LABEL) return;
     const pr = await this.github.request(`pulls/${Number(event.number)}`);
     if (pr.head.repo?.full_name !== this.github.repository || pr.head.sha !== event.pull_request.head.sha) return;
-    let approved = false;
-    if (action === "labeled" && event.sender.type === "User") {
-      const permission = await this.github.request(
-        `collaborators/${encodeURIComponent(event.sender.login)}/permission`
-      );
-      approved = ["admin", "maintain", "write"].includes(permission.permission);
-    }
+    const approved = action === "labeled" && event.sender.type === "User" && (await this.canWrite(event.sender.login));
     // Browser comparisons block unapproved changes; this receipt only records approval state.
     const receipt = await this.status(
       pr.head.sha,
@@ -228,12 +227,8 @@ export class Policy {
   async completed(run) {
     if (!HEAD_EVENTS.includes(run.event)) return null;
     const owner = this.github.repository.split("/")[0];
-    const pr = (await this.github.pages(`pulls?state=open&head=${owner}:${encodeURIComponent(run.head_branch)}`)).find(
-      (candidate) =>
-        candidate.head.sha === run.head_sha &&
-        candidate.base.ref === "master" &&
-        candidate.head.repo?.full_name === this.github.repository
-    );
+    const pulls = await this.github.pages(`pulls?state=open&head=${owner}:${encodeURIComponent(run.head_branch)}`);
+    const pr = pulls.find((candidate) => candidate.head.sha === run.head_sha && this.ownPullRequest(candidate));
     if (!pr) return null;
     const label = await this.latestLabel(pr);
     const receipt = await this.latestStatus(pr.head.sha, APPROVAL);
@@ -270,54 +265,62 @@ export class Policy {
   }
 }
 
+/** Record a label change, or refresh after a completed run, and summarize the head's approval. */
+async function summarizeApproval(env, policy, event) {
+  const review =
+    env.GITHUB_EVENT_NAME === "workflow_run"
+      ? { rerun: await policy.completed(event.workflow_run) }
+      : await policy.labelEvent(event);
+  const lines = [];
+  if (review?.approved !== undefined)
+    lines.push(
+      review.approved
+        ? "Screenshot changes are approved for this commit."
+        : "No screenshot approval is recorded for this commit. The `visual-comparison` check links any drift review."
+    );
+  if (review?.revoked)
+    lines.push(
+      `Removed the \`${LABEL}\` label, which approved an earlier commit. Add it again once this commit's screenshots are reviewed.`
+    );
+  if (review?.rerun)
+    lines.push(
+      `[Main CI](https://github.com/${env.GITHUB_REPOSITORY}/actions/runs/${review.rerun.id}) reruns its browser check for the label change.`
+    );
+  if (lines.length) await appendFile(env.GITHUB_STEP_SUMMARY, `## Screenshot approval\n\n${lines.join("\n\n")}\n`);
+}
+
+/** Tell the runner whether this tested head may regenerate its screenshots. */
+async function allowRegeneration(env, policy, event) {
+  const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
+  const allowed =
+    Boolean(baseline) && (await policy.allows(event, env.GITHUB_EVENT_NAME, testedHead(env), env.GITHUB_REF, baseline));
+  await appendFile(env.GITHUB_ENV, `VISUAL_APPROVED=${allowed}\n`);
+}
+
+/** Post the visual-comparison status: the proof a merge reads, or what the head still needs. */
+async function recordComparison(env, policy) {
+  const success = env.VISUAL_OUTCOME === "success";
+  const pending = !success && env.APPROVAL === "required";
+  const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
+  let description = "Visual tests or evidence upload failed";
+  if (success) {
+    const { changed } = JSON.parse(await readFile(".visual/verdict.json", "utf8"));
+    description = changed ? "approved" : `matched:${baseline}`;
+  } else if (pending) description = `Screenshots changed: review the drift, then add the ${LABEL} label`;
+  // Only a successful comparison's run link serves as proof, so a pending one links its review.
+  const target = pending && env.DRIFT_URL ? env.DRIFT_URL : policy.target();
+  await policy.status(testedHead(env), COMPARISON, success ? "success" : "failure", description, target);
+}
+
 async function main() {
   const env = process.env;
   const policy = new Policy(new GitHub(env.GITHUB_REPOSITORY, env.GH_TOKEN));
   const event = JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8"));
   const mode = process.argv[2];
-  if (mode === "label") {
-    const review =
-      env.GITHUB_EVENT_NAME === "workflow_run"
-        ? { rerun: await policy.completed(event.workflow_run) }
-        : await policy.labelEvent(event);
-    const lines = [];
-    if (review?.approved !== undefined)
-      lines.push(
-        review.approved
-          ? "Screenshot changes are approved for this commit."
-          : "No screenshot approval is recorded for this commit. The `visual-comparison` check links any drift review."
-      );
-    if (review?.revoked)
-      lines.push(
-        `Removed the \`${LABEL}\` label, which approved an earlier commit. Add it again once this commit's screenshots are reviewed.`
-      );
-    if (review?.rerun)
-      lines.push(
-        `[Main CI](https://github.com/${env.GITHUB_REPOSITORY}/actions/runs/${review.rerun.id}) reruns its browser check for the label change.`
-      );
-    if (lines.length) await appendFile(env.GITHUB_STEP_SUMMARY, `## Screenshot approval\n\n${lines.join("\n\n")}\n`);
-  } else if (mode === "allow") {
-    const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
-    const allowed =
-      Boolean(baseline) &&
-      (await policy.allows(event, env.GITHUB_EVENT_NAME, testedHead(env), env.GITHUB_REF, baseline));
-    await appendFile(env.GITHUB_ENV, `VISUAL_APPROVED=${allowed}\n`);
-  } else if (mode === "record") {
-    const success = env.VISUAL_OUTCOME === "success";
-    const pending = !success && env.APPROVAL === "required";
-    const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
-    const verdict = success ? JSON.parse(await readFile(".visual/verdict.json", "utf8")) : {};
-    const description = success
-      ? verdict.changed
-        ? "approved"
-        : `matched:${baseline}`
-      : pending
-        ? `Screenshots changed: review the drift, then add the ${LABEL} label`
-        : "Visual tests or evidence upload failed";
-    // Only a successful comparison's run link serves as proof, so a pending one links its review.
-    const target = pending && env.DRIFT_URL ? env.DRIFT_URL : policy.target();
-    await policy.status(testedHead(env), COMPARISON, success ? "success" : "failure", description, target);
-  } else throw new Failure("Unknown approval operation");
+  if (mode === "label") await summarizeApproval(env, policy, event);
+  else if (mode === "allow") await allowRegeneration(env, policy, event);
+  else if (mode === "record") await recordComparison(env, policy);
+  else throw new Failure("Unknown approval operation");
 }
 
 runCli(import.meta.url, main, "Screenshot approval verification failed");

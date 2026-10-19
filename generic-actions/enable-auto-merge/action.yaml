@@ -1,32 +1,32 @@
 name: enable-auto-merge
 description: >
-  Enable native auto-merge on a pull request as the [Agent] App, so GitHub lands it once
-  every required check and approval is satisfied — the caller enables it once and walks
-  away instead of polling for green.
+  Enable native auto-merge on a pull request as a GitHub App, so GitHub lands it once every required
+  check and approval is satisfied. The caller enables it once and moves on.
 
-  Enabling is safe while a required check is still RED: GitHub parks the request and
-  merges when the branch goes green (verified — enablePullRequestAutoMerge does not 422
-  on an unmet required check on our merge-queue repos). So a landing coordinator can
-  enable auto-merge once per sibling at ready-time and let the gate hold it.
+  GitHub accepts the request while a required check is still failing or pending, and merges once the
+  branch goes green. A landing coordinator therefore enables auto-merge on each sibling once the
+  sibling is ready, and lets the gate hold it.
 
-  Idempotent: if auto-merge is already enabled it is a no-op (decided by querying the
-  PR, not by parsing an error string). `--squash` is the only method the require-approval
-  ruleset allows; on a merge-queue repo the queue's own config takes over regardless, so
-  passing it is safe and explicit rather than a real method choice.
+  The action is idempotent. It reads the pull request's auto-merge state and does nothing when
+  auto-merge is already on. It passes `--squash`, the only method the require-approval ruleset
+  allows. On a merge-queue repository the queue's own configuration decides the method.
 
 inputs:
   repo:
     required: false
     default: ${{ github.event.repository.name }}
     description: >
-      Repository of the PR (name only; the owner is the workflow's org). Defaults to the
-      triggering repo; a cross-repo caller passes each sibling's repo.
+      Name of the pull request's repository, without the owner, which is the workflow's
+      organization. Defaults to the triggering repository. A cross-repo caller passes each
+      sibling's name.
   pull_request_number:
     required: true
-    description: Number of the PR to enable auto-merge on.
+    description: Number of the pull request to enable auto-merge on.
   client_id:
     required: true
-    description: Client ID of the [Agent] App (pull-requests + contents write on the target repo).
+    description: >
+      Client ID of a GitHub App installed on the target repository, with pull requests and contents
+      write.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -34,26 +34,23 @@ inputs:
     required: false
     default: "true"
     description: >
-      When "true" (the default), log the intended enable without calling GitHub — the
-      read-only-first mode. Set "false" to actually enable auto-merge.
+      Any value but "false", in any case, logs the intended change and leaves the pull request
+      alone. "false" enables auto-merge.
   kill_switch:
     required: false
     default: ""
     description: >
-      Org-level HALT, threaded from the caller as `kill_switch: vars.AGENT_KILL_SWITCH`
-      (a composite action cannot read the `vars` context itself). FAIL-SAFE: RUNNING only when the
-      value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset, 0, off, false,
-      no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) engages the halt. When engaged
-      this writer no-ops (never arms auto-merge) and exits 0 — read FIRST, before enabling anything.
-      Engaging the switch does NOT retroactively disarm native auto-merge ALREADY armed on an idle
-      ready PR (merge-gate's red HOLD still blocks the merge, but there is a brief latency window
-      before the next event / reconcile sweep re-posts that hold).
+      Org-wide halt switch. The action runs only when the value, lowercased and stripped of
+      whitespace, is empty, 0, off, false, no or disabled. Any other value halts it, so a mistyped
+      value fails safe. A halt arms nothing and exits 0. Auto-merge already armed on a pull request
+      stays armed, and merge-gate's failing check blocks that merge once the next event or reconcile
+      sweep posts it.
 
 runs:
   using: composite
   steps:
-    # Scope the token to the target repo. The [Agent] App is installed org-wide, so a
-    # cross-repo caller reaches any sibling by passing its name here.
+    # The token covers the target repository alone. A cross-repo caller reaches a sibling by its
+    # name, wherever the App is installed.
     - name: Mint token
       id: token
       uses: actions/create-github-app-token@v3
@@ -83,25 +80,18 @@ runs:
         fi
         target="${REPO_FULL}#${PR}"
 
-        # Org-level halt, read before anything is armed. Fail-safe: running only for an explicit
-        # off-token (empty/unset, 0, off, false, no, disabled); any other value engages the halt and
-        # this step exits 0 having armed nothing. A halt does not disarm auto-merge already armed on
-        # an idle ready PR — merge-gate's red check still blocks the merge, with a latency window
-        # until the next event or reconcile sweep re-posts that hold.
+        # The org-wide halt is read before anything is armed.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "AGENT_KILL_SWITCH engaged — not enabling auto-merge on ${target} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
             ;;
         esac
 
-        # Idempotency is decided by querying the PR: is auto-merge already on?
         already=$(gh pr view "$PR" --repo "$REPO_FULL" --json autoMergeRequest \
           -q '.autoMergeRequest != null')
 
-        # DRY_RUN defaults on; only the literal "false" (any case) enables. `tr` lowercases
-        # because ${VAR,,} is a Bash 4+ expansion and macOS runners ship Bash 3.x.
         dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
         if [ "$dry" != "false" ]; then
           if [ "$already" = "true" ]; then

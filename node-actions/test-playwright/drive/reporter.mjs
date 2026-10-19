@@ -1,6 +1,11 @@
 import { writeFileSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
 
+/** Append a value to the list a WeakMap holds for the key. */
+function append(map, key, value) {
+  map.set(key, [...(map.get(key) ?? []), value]);
+}
+
 /** Records public Playwright events so visual approval cannot hide another assertion failure. */
 export default class VisualReporter {
   expected = 0;
@@ -28,28 +33,16 @@ export default class VisualReporter {
     }
     const message = stripVTControlCharacters(step.error?.message ?? "").replace(/^Error: /, "");
     const missing = message.startsWith("A snapshot doesn't exist at ") && /\.png(?:, writing actual)?\.$/.test(message);
+    const attached = (suffix) =>
+      step.attachments.some((attachment) => attachment.contentType === "image/png" && attachment.name.endsWith(suffix));
     // Stable mismatch evidence distinguishes a reviewable diff from capture/timeout failures.
     const stableDifference =
-      message.includes("captured a stable screenshot") &&
-      ["-actual.png", "-expected.png"].every((suffix) =>
-        step.attachments.some(
-          (attachment) => attachment.contentType === "image/png" && attachment.name.endsWith(suffix)
-        )
-      );
-    if (name) {
-      const comparisons = this.comparisons.get(result) ?? [];
-      comparisons.push({ name, images, drift: stableDifference });
-      this.comparisons.set(result, comparisons);
-    }
-    if (step.error && (missing || stableDifference)) {
-      const errors = this.visualErrors.get(result) ?? [];
-      errors.push(step.error.message);
-      this.visualErrors.set(result, errors);
-    } else if (!step.error && images.expected && images.actual && !images.diff) {
+      message.includes("captured a stable screenshot") && attached("-actual.png") && attached("-expected.png");
+    if (name) append(this.comparisons, result, { name, images, drift: stableDifference });
+    if (step.error && (missing || stableDifference)) append(this.visualErrors, result, step.error.message);
+    else if (!step.error && images.expected && images.actual && !images.diff) {
       // Missing-mode soft errors belong to the test; Playwright leaves the step error empty.
-      const errors = this.visualErrors.get(result) ?? [];
-      errors.push(`Error: A snapshot doesn't exist at ${images.expected}, writing actual.`);
-      this.visualErrors.set(result, errors);
+      append(this.visualErrors, result, `Error: A snapshot doesn't exist at ${images.expected}, writing actual.`);
     }
   }
 

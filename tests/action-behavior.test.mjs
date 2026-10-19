@@ -13,11 +13,12 @@ test("generation retries transient failures and propagates exhaustion", (t) => {
     fs.writeFileSync('attempts', String(n)); process.exit(n <= Number(process.env.FAILURES) ? 1 : 0);`
   );
   w.stub("sleep", `import * as fs from 'node:fs'; fs.appendFileSync('delays', process.argv[2] + '\\n');`);
-  for (const [failures, status, attempts, delays] of [
+  const outcomes = [
     [0, 0, 1, ""],
     [1, 0, 2, "5\n"],
     [3, 1, 3, "5\n10\n"],
-  ]) {
+  ];
+  for (const [failures, status, attempts, delays] of outcomes) {
     w.write("attempts", "0");
     w.write("delays", "");
     assert.equal(w.bash(`${script}\ngenerate`, { FAILURES: String(failures) }).status, status);
@@ -26,11 +27,20 @@ test("generation retries transient failures and propagates exhaustion", (t) => {
   }
 });
 
-for (const [action, name, tool, env, findings] of [
+/** A scanner finding fails the step unless advisory mode waives it. */
+function findingOutcomes(code) {
+  return [
+    [code, false, code],
+    [code, true, 0],
+  ];
+}
+
+const scanners = [
   ["lint-semgrep", "semgrep", "docker", { RULESET: "service", SEMGREP_VERSION: "test" }, [1]],
   ["scan-secrets", "scan working tree", "gitleaks", { CONFIG: "" }, [10]],
   ["lint-workflows", "zizmor", "docker", { CONFIG: "", ZIZMOR_VERSION: "test" }, [11, 12, 13, 14]],
-])
+];
+for (const [action, name, tool, env, findings] of scanners)
   test(`${action}: advisory waives findings, never a failed scanner`, (t) => {
     const w = workspace(t);
     w.write(".github/workflows/main.yaml", "name: fixture\n");
@@ -44,23 +54,15 @@ for (const [action, name, tool, env, findings] of [
     );
     const script = step(`security-actions/${action}/action.yaml`, name);
     const vars = { ...env, ACTION_PATH: join(root, "security-actions", action) };
-    for (const [code, advisory, expected] of [
+    const outcomes = [
       [0, false, 0],
-      ...findings.flatMap((code) => [
-        [code, false, code],
-        [code, true, 0],
-      ]),
+      ...findings.flatMap(findingOutcomes),
       ...[1, 2, 3].filter((code) => !findings.includes(code)).map((code) => [code, true, code]),
-    ]) {
+    ];
+    for (const [code, advisory, expected] of outcomes) {
       w.write("summary", "");
-      assert.equal(
-        w.bash(script, {
-          ...vars,
-          ADVISORY: String(advisory),
-          SCANNER_EXIT: tool === "gitleaks" && code === 10 ? "findings" : String(code),
-        }).status,
-        expected
-      );
+      const exit = tool === "gitleaks" && code === 10 ? "findings" : String(code);
+      assert.equal(w.bash(script, { ...vars, ADVISORY: String(advisory), SCANNER_EXIT: exit }).status, expected);
       assert.match(w.read("summary"), code === 0 ? /clean/ : /scanner diagnostic/);
       if (code !== 0) assert.match(w.read("summary"), findings.includes(code) ? / findings/ : / did not run/);
     }
@@ -80,12 +82,13 @@ test("scanner retries only container launch failures and never masks a missing e
   `
   );
   const runner = join(root, "security-actions/run-scan.mjs");
-  for (const [exits, expected] of [
+  const outcomes = [
     [[125, 0], 0],
     [[125, 125, 125], 125],
     [[1], 1],
     [[2], 2],
-  ]) {
+  ];
+  for (const [exits, expected] of outcomes) {
     w.write("exits", JSON.stringify(exits));
     w.write("attempts", "");
     assert.equal(w.run(process.execPath, [runner, "scanner", "docker"], { SCAN_RETRY_DELAY_MS: "0" }).status, expected);
@@ -124,14 +127,8 @@ test("browser action passes script names as data and preserves failures and coll
   assert.equal(w.read("integration-services.log"), "already collected\n");
   const cleanup = step("node-actions/test-playwright/action.yaml", "cleanup");
   succeeds(w.bash(cleanup, env));
-  assert.deepEqual(JSON.parse(w.read("calls")), [
-    "compose",
-    "--file",
-    env.COMPOSE_FILE,
-    "down",
-    "--volumes",
-    "--remove-orphans",
-  ]);
+  const down = ["compose", "--file", env.COMPOSE_FILE, "down", "--volumes", "--remove-orphans"];
+  assert.deepEqual(JSON.parse(w.read("calls")), down);
   assert.equal(w.bash(cleanup, { ...env, TOOL_EXIT: "23" }).status, 23);
 });
 
@@ -163,11 +160,12 @@ test("append-only gate checks real history, validates the base and honors only t
   const base = git("rev-parse", "HEAD");
   const script = step("generic-actions/check-append-only/action.yaml", "Check append-only path");
   const env = { BASE: base, PATH_TO_CHECK: "frozen", OVERRIDE_LABEL: "override", EVENT_LABELS: "null" };
-  for (const [path, content, expected] of [
+  const edits = [
     ["frozen/new file\n.txt", "new", 0],
     ["frozen/locked.txt", "changed", 1],
     ["outside/file.txt", "changed", 0],
-  ]) {
+  ];
+  for (const [path, content, expected] of edits) {
     git("reset", "--hard", "-q", base);
     w.write(path, content);
     git("add", "frozen", "outside");
@@ -183,7 +181,7 @@ test("append-only gate checks real history, validates the base and honors only t
   assert.equal(w.bash(script, { ...env, BASE: "--output=injected" }).status, 1);
   assert.equal(w.bash(script, { ...env, BASE: "a".repeat(40) }).status, 1);
 
-  // A push's payload still carries the label added for the previous head, so it no longer bypasses.
+  // A push's payload still carries the label added for the previous head. That stale label does not bypass.
   const push = { ...env, EVENT_ACTION: "synchronize", EVENT_LABELS: '["override"]' };
   assert.equal(w.bash(script, push).status, 1);
 });
@@ -221,13 +219,14 @@ test("append-only gate removes an override that a push made stale", (t) => {
   assert.equal(existsSync(join(w.cwd, "gh-calls")), false);
 
   succeeds(w.bash(script, { ...push, GH_TOKEN: "token" }));
-  assert.deepEqual(JSON.parse(w.read("gh-calls")), [
+  const removal = [
     "api",
     "--method",
     "DELETE",
     "repos/a-novel/service/issues/7/labels/append-only-override",
     "--silent",
-  ]);
+  ];
+  assert.deepEqual(JSON.parse(w.read("gh-calls")), removal);
 
   succeeds(w.bash(script, { ...push, GH_TOKEN: "token", GH_FAIL: "gh: Not Found (HTTP 404)" }));
   const denied = w.bash(script, { ...push, GH_TOKEN: "token", GH_FAIL: "gh: Forbidden (HTTP 403)" });
@@ -246,11 +245,8 @@ test("change detection preserves literal pathspecs and fails on unreadable repos
   w.write("space dir/file", "changed");
   succeeds(w.bash(script, { PATHSPEC: "space dir" }));
   assert.equal(w.read("output"), "diff=1\n");
-  assert.equal(
-    w.bash(step("generic-actions/check-changes/action.yaml", "fail if changes"), { MESSAGE: "$(touch injected)" })
-      .status,
-    1
-  );
+  const failIfChanges = step("generic-actions/check-changes/action.yaml", "fail if changes");
+  assert.equal(w.bash(failIfChanges, { MESSAGE: "$(touch injected)" }).status, 1);
   assert.equal(existsSync(join(w.cwd, "injected")), false);
 });
 
@@ -276,7 +272,7 @@ test("refresh-apko-locks summarizes each lock's package changes and stays quiet 
   succeeds(w.run("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "locks"]));
 
   const refresh = step("generic-actions/refresh-apko-locks/action.yaml", "refresh");
-  for (const [name, newLock, expected] of [
+  const cases = [
     [
       "changed",
       lock({ busybox: "1.0-r0", openssl: "3.1-r0", libfoo: "2.0-r0" }),
@@ -284,7 +280,8 @@ test("refresh-apko-locks summarizes each lock's package changes and stays quiet 
         "- `libfoo`: added → 2.0-r0\n- `openssl`: 3.0-r0 → 3.1-r0\n- `zlib`: 1.2-r0 → removed\n",
     ],
     ["unchanged", lock({ busybox: "1.0-r0", openssl: "3.0-r0", zlib: "1.2-r0" }), ""],
-  ]) {
+  ];
+  for (const [name, newLock, expected] of cases) {
     w.write("output", "");
     succeeds(w.bash(refresh, { CONFIGS: "builds/db.apko.yaml", ARCH: "x86_64", NEW_LOCK: newLock }));
     assert.equal(w.read("output"), expected && `summary<<SUMMARY_END\n${expected}\nSUMMARY_END\n`, name);
@@ -316,19 +313,18 @@ test("refresh-apko-locks commits through the API, which signs it, and moves the 
 
   const publish = step("generic-actions/refresh-apko-locks/action.yaml", "Open or update the pull request");
   const ref = "repos/a-novel/example/git/refs";
-  for (const [exists, move] of [
+  const moves = [
     ["true", ["api", "-X", "PATCH", `${ref}/heads/chore/deps/apko-locks`, "-f", "sha=commit-sha", "-F", "force=true"]],
     ["false", ["api", ref, "-f", "ref=refs/heads/chore/deps/apko-locks", "-f", "sha=commit-sha"]],
-  ]) {
+  ];
+  for (const [exists, move] of moves) {
     w.write("calls", "");
     const env = { GITHUB_REPOSITORY: "a-novel/example", BRANCH: "chore/deps/apko-locks", BRANCH_EXISTS: exists };
     succeeds(w.bash(publish, { ...env, CONFIGS: "builds/db.apko.yaml", SUMMARY: "\n- `zlib`: 1 → 2\n" }));
     const [tree, commit, , update] = w.read("calls").trim().split("\n").map(JSON.parse);
-    assert.deepEqual(tree.input, {
-      base_tree: baseTree,
-      tree: [{ path: "builds/db.apko.lock.json", mode: "100644", type: "blob", content: "new" }],
-    });
-    assert.deepEqual(commit.args.slice(0, 8), [
+    const blob = { path: "builds/db.apko.lock.json", mode: "100644", type: "blob", content: "new" };
+    assert.deepEqual(tree.input, { base_tree: baseTree, tree: [blob] });
+    const commitArgs = [
       "api",
       "repos/a-novel/example/git/commits",
       "-f",
@@ -337,10 +333,23 @@ test("refresh-apko-locks commits through the API, which signs it, and moves the 
       "tree=tree-sha",
       "-f",
       `parents[]=${head}`,
-    ]);
+    ];
+    assert.deepEqual(commit.args.slice(0, 8), commitArgs);
     assert.deepEqual(update.args.slice(0, move.length), move, `branch exists: ${exists}`);
   }
 });
+
+/**
+ * Binds the env of step `id` from the manifest, so a test covers which input reaches which step. Any
+ * expression other than an input or a `resolve` output binds empty.
+ */
+function bind(steps, id, inputs, outputs = {}) {
+  const value = (_, scope, name) => (scope === "inputs" ? inputs : outputs)[name] ?? "";
+  const expand = (text) =>
+    text.replace(/\$\{\{ (inputs|steps\.resolve\.outputs)\.(\w+) \}\}/g, value).replace(/\$\{\{[^}]*\}\}/g, "");
+  const { env } = steps.find((entry) => entry.id === id);
+  return Object.fromEntries(Object.entries(env).map(([key, text]) => [key, expand(text)]));
+}
 
 test("escalate pages Discord with push_mention and keeps the GitHub mention on the ticket", (t) => {
   const w = workspace(t);
@@ -356,20 +365,7 @@ test("escalate pages Discord with push_mention and keeps the GitHub mention on t
     push_webhook: "https://discord.invalid/webhook",
     dry_run: "true",
   };
-  // Bind each step's env from the manifest, so the test covers which input reaches which step.
-  const bind = (id, outputs = {}) =>
-    Object.fromEntries(
-      Object.entries(steps.find((entry) => entry.id === id).env).map(([key, value]) => [
-        key,
-        value
-          .replace(
-            /\$\{\{ (inputs|steps\.resolve\.outputs)\.(\w+) \}\}/g,
-            (_, scope, name) => (scope === "inputs" ? inputs : outputs)[name] ?? ""
-          )
-          .replace(/\$\{\{[^}]*\}\}/g, ""),
-      ])
-    );
-  succeeds(w.bash(step(path, "resolve"), bind("resolve")));
+  succeeds(w.bash(step(path, "resolve"), bind(steps, "resolve", inputs)));
   const outputs = Object.fromEntries(
     w
       .read("output")
@@ -377,7 +373,7 @@ test("escalate pages Discord with push_mention and keeps the GitHub mention on t
       .split("\n")
       .map((line) => line.split(/=(.*)/s).slice(0, 2))
   );
-  succeeds(w.bash(step(path, "push"), bind("push", outputs)));
+  succeeds(w.bash(step(path, "push"), bind(steps, "push", inputs, outputs)));
   const page = w.read("summary");
   assert.match(page, /^cc <@&42>$/m);
   assert.doesNotMatch(page, /@octocat/);
@@ -385,7 +381,7 @@ test("escalate pages Discord with push_mention and keeps the GitHub mention on t
 
 test("Node actions check out with the workflow token and only audit mints an App token", () => {
   // Every pull request's own workflow can read a key its jobs are handed, so CI holds none.
-  for (const path of [
+  const ciActions = [
     "node-actions/setup-node/action.yaml",
     "node-actions/lint-node/action.yaml",
     "node-actions/test-node/action.yaml",
@@ -394,7 +390,8 @@ test("Node actions check out with the workflow token and only audit mints an App
     "node-actions/test-playwright/action.yaml",
     "github-pages-actions/publish-storybook/action.yaml",
     "publish-actions/npm/action.yaml",
-  ]) {
+  ];
+  for (const path of ciActions) {
     const action = manifest(path);
     assert.equal(action.inputs?.app_private_key, undefined, path);
     const uses = action.runs.steps.map((s) => s.uses ?? "");

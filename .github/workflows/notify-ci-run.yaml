@@ -1,14 +1,14 @@
 name: notify-ci (reusable)
 
-# Tells a repository's owners in Discord when its default branch breaks, and when it is green again.
-# Every governed repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on the
-# `workflow_run` completion of `main` and `release`, so a release that fails after tagging reports
-# here too. A failure pings the repository's Discord role; the recovery posts without a ping.
+# Tells a repository's owners in Discord when its default branch breaks, and when it turns green
+# again. Each governed repository calls this engine from the `notify.yaml` that repocfg renders, on
+# the `workflow_run` completion of `main` and `release`, so a release that fails after tagging
+# reports too. A failure pings the repository's Discord role, and the recovery posts without a ping.
 on:
   workflow_call:
     inputs:
       roles:
-        description: JSON map from "<org>/<repo>" to the Discord role id pinged on a failure (vars.DISCORD_REPO_ROLES).
+        description: JSON map from "<org>/<repo>" to the Discord role id that a failure pings.
         required: false
         type: string
         default: "{}"
@@ -19,20 +19,20 @@ on:
         default: "false"
     secrets:
       webhook:
-        description: Discord webhook of the org's CI channel (CI_WEBHOOK). Empty skips the post.
+        description: Discord webhook of the CI channel. Empty skips the post.
         required: false
 
 jobs:
   notify:
     runs-on: ubuntu-latest
-    # Only runs of the default branch itself: a fork can name its branch after it, and a merge-queue
-    # or pull-request run is not the branch's state.
+    # The job reports only runs of the default branch itself. A fork can name its branch after it,
+    # and a merge-queue or pull request run is not the branch's state.
     if: >-
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success') &&
       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
-    # Reads the workflow's previous run; never checks out or runs the code under report.
+    # The job reads the workflow's previous run and never checks out the code under report.
     permissions:
       actions: read
     steps:
@@ -52,8 +52,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # A success is news only when it ends a failure: the previous decided run of this workflow
-          # on the branch failed. Cancelled and skipped runs say nothing about the code.
+          # A success is news only when the previous decided run of this workflow on the branch
+          # failed. Cancelled and skipped runs say nothing about the code.
           if [ "$CONCLUSION" = failure ]; then
             post=failed
           else
@@ -64,8 +64,8 @@ jobs:
             post=succeeded
           fi
 
-          # GitHub writes a squash merge under the profile name; the account that authored it reads
-          # better. Public commits need no extra token permission; the name stays as a fallback.
+          # GitHub writes a squash merge under the author's profile name, and the account login reads
+          # better. Reading a public commit needs no extra token permission. The name stays the fallback.
           login="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA" --jq '.author.login // empty' 2>/dev/null)" || login=""
           delimiter="EOF_$(openssl rand -hex 8)"
           {

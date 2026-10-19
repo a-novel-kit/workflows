@@ -1,13 +1,10 @@
-# Structural conventions for the clean-architecture services: a call that must be
-# present, a pairing that must hold.
+# Structural conventions for the clean-architecture services, such as a call that
+# must be present or a pairing that must hold. golangci-lint owns span lifecycle
+# and error reporting (spancheck), layer import direction (depguard) and contexts
+# held in structs (containedctx).
 #
-# Not duplicated here — golangci-lint owns them: span lifecycle and error
-# reporting (spancheck), layer import direction (depguard), context in a struct
-# (containedctx).
-#
-# Two Semgrep limits to know before adding a rule: Go has no return-arity
-# wildcard, so signature matches repeat per arity; and *_test.go is skipped by
-# its built-in ignore list, so no rule can target tests.
+# Semgrep has no return-arity wildcard for Go, so a signature match repeats per
+# arity. Its built-in ignore list skips *_test.go, so no rule can target tests.
 rules:
   # An unspanned method folds its latency into the caller and surfaces errors
   # with no operation name.
@@ -16,13 +13,13 @@ rules:
     severity: ERROR
     message: >-
       $M takes a context but never opens an otel span. Every function in the
-      internal layers that receives an explicit context is a step in the trace;
-      one that skips the span makes its work invisible and folds its latency
-      into the caller. Open one with
+      internal layers that receives an explicit context is a step in the trace.
+      A function that skips the span hides its work and folds its latency into
+      the caller. Open one with
       `ctx, span := otel.Tracer().Start(ctx, "<layer>.<Operation>")`.
     paths:
-      # internal/ only: pkg/go is a generated client and its mocks are not ours
-      # to instrument.
+      # pkg/go holds a generated client and its mocks, which are not ours to
+      # instrument.
       include:
         - "**/internal/"
       exclude:
@@ -30,10 +27,9 @@ rules:
         - "**/mocks/"
         - "**/protogen/"
     patterns:
-      # Taking a context as the first parameter IS the criterion. There are no
-      # exemptions: not unexported helpers, not delegators, not context
-      # wrappers. A function that should not be traced is one that does not
-      # take a context, and that is the only way to opt out.
+      # Taking a context as the first parameter is the whole criterion, with no
+      # exemption for unexported helpers, delegators or context wrappers. A
+      # function stays untraced only by taking no context.
       - pattern-either:
           - pattern: "func ($R $T) $M(ctx context.Context, ...) { ... }"
           - pattern: "func ($R $T) $M(ctx context.Context, ...) $RET { ... }"
@@ -78,16 +74,15 @@ rules:
             ...
           }
 
-  # write-go: "Contexts flow downward only — caller to callee. Never return one."
-  # Scoped to the layers that carry request flow. internal/lib is exempt by
-  # design: a context helper (TransferMasterKeyContext, any WithX wrapper) must
-  # return the derived context — that is the whole pattern.
+  # A context flows downward only, from caller to callee. The rule covers the
+  # layers that carry request flow. internal/lib stays out, because a context
+  # helper there, such as a WithX wrapper, returns the context it derives.
   - id: a-novel-no-context-return
     languages: [go]
     severity: ERROR
     message: >-
       $F returns a context.Context. In the request layers a context flows
-      downward only — take one as the first parameter instead of handing one up.
+      downward only. Take one as the first parameter instead of handing one up.
     paths:
       include:
         - "**/internal/core/"
@@ -101,22 +96,19 @@ rules:
       - pattern-either:
           - pattern: "func $F(...) context.Context { ... }"
           - pattern: "func ($R $T) $F(...) context.Context { ... }"
-      # A context.WithValue wrapper has to hand back the context it derived —
-      # that is the whole pattern. Keyed on the body rather than on a directory,
-      # so it holds whether the helper lives in lib/ or handlers/middlewares/.
+      # A context.WithValue wrapper hands back the context it derived. The
+      # exemption keys on the body, so it holds wherever the helper lives, such
+      # as handlers/middlewares/.
       - pattern-not: |
           func $F(...) context.Context {
             ...
             return context.WithValue(...)
           }
 
-  # write-go-service: "One method per interface, named Exec." A dependency
-  # interface is the contract the consumer owns; a differently-named method means
-  # the boundary was drawn by hand instead of by the pattern.
-  #
-  # The compliant case is excluded with pattern-not rather than a negated regex:
-  # semgrep's regex engine has no lookahead. Return arity is enumerated because
-  # Go patterns have no wildcard for it.
+  # A dependency interface is the contract its consumer owns, with one method
+  # named Exec. Another method name means the boundary was drawn by hand. The
+  # compliant case is excluded with pattern-not, because semgrep's regex engine
+  # has no lookahead.
   - id: a-novel-dep-interface-method-must-be-exec
     languages: [go]
     severity: ERROR
@@ -152,18 +144,18 @@ rules:
           type $NAME interface {
             Exec(ctx context.Context, ...) $RET
           }
-      # A protoc-generated client method is named by the proto, not by us. The
-      # `opts ...grpc.CallOption` tail is the shape that identifies one, which
-      # holds wherever the interface lives — unlike a path exemption.
+      # The proto names a protoc-generated client method. The
+      # `opts ...grpc.CallOption` tail identifies one wherever the interface
+      # lives.
       - pattern-not: |
           type $NAME interface {
             $ANY(ctx context.Context, ..., $OPTS ...grpc.CallOption) ($O1, $O2)
           }
 
-  # write-go-service: the Exec signature is
-  # `(ctx context.Context, request *XxxRequest)` so the request can gain a field
-  # without breaking callers. This catches the non-pointer case; a pointer to a
-  # badly-named struct needs the lookahead semgrep does not have.
+  # The Exec signature is `(ctx context.Context, request *XxxRequest)`, so the
+  # request can gain a field without breaking callers. The rule catches a request
+  # taken by value. A pointer to a badly named struct needs the lookahead that
+  # semgrep lacks.
   - id: a-novel-exec-takes-request-pointer
     languages: [go]
     severity: ERROR
@@ -195,15 +187,15 @@ rules:
           metavariable: $PARAM
           regex: ^[^*]
 
-  # write-go, Secrets: "Never log, trace, or put in span attributes: passwords,
-  # tokens, API keys, private keys ... Record identifiers only." A span attribute
-  # is the easiest of these to add by reflex and the hardest to notice later.
+  # Logs, traces and span attributes record identifiers, never credential
+  # material. A span attribute is the easiest place to add one by reflex and the
+  # hardest to notice later.
   - id: a-novel-no-secret-in-span-attribute
     languages: [go]
     severity: ERROR
     message: >-
       Span attribute "$KEY" names credential material. Traces are retained and
-      widely readable — record an identifier (`user.id`, `key.id`) instead.
+      widely readable. Record an identifier (`user.id`, `key.id`) instead.
     paths:
       exclude:
         - "*_test.go"
@@ -215,20 +207,17 @@ rules:
           metavariable: $KEY
           regex: (?i)"?([a-z0-9_.]*\.)?(password|passwd|secret|token|apikey|api_key|privatekey|private_key|ciphertext|signature|bearer)"?$
 
-  # write-go-service: service and DAO types are "stateless after construction —
-  # every field is set by New* and never mutated, so every type is safe for
-  # concurrent use without synchronization. This is a requirement."
-  #
-  # Constructors are plain functions, not methods, so matching the receiver form
-  # targets exactly the mutation this forbids.
-  # NOTE: exempts a field written under a mutex — the rule's premise is that
-  # these types carry no synchronisation, which a sync.Mutex field disproves.
+  # Service and DAO types are stateless after construction. Their constructor
+  # sets every field, so every type is safe for concurrent use without
+  # synchronization. Constructors are plain functions, so the receiver form
+  # matches exactly the mutation this rule forbids.
   - id: a-novel-no-receiver-mutation
     languages: [go]
     severity: ERROR
     message: >-
       $M assigns to $R.$FIELD after construction. These types are shared across
-      concurrent requests unsynchronised; every field must be set by New$T only.
+      concurrent requests without synchronization. Only the constructor sets
+      their fields.
     paths:
       include:
         - "**/internal/core/"
@@ -258,10 +247,10 @@ rules:
                 $R.$FIELD = $VAL
                 ...
               }
-      # A method that takes a lock is synchronising deliberately, which is the
-      # premise this rule denies. pattern-not-inside cannot express "the
-      # assignment sits between Lock and Unlock" because the match is the whole
-      # function, so key on the method locking at all.
+      # A method that locks a receiver field synchronizes, so the rule exempts
+      # it. The match is the whole function, so pattern-not-inside cannot place
+      # the assignment between Lock and Unlock. The exemption keys on the method
+      # locking at all.
       - pattern-not: |
           func ($R $T) $M(...) {
             ...
@@ -281,10 +270,10 @@ rules:
             ...
           }
 
-  # golib httpf: a tag is part of the public error response, so only the HTTP
+  # A golib httpf tag is part of the public error response, so only the HTTP
   # handler answering the request chooses one. WithTag also extends a tagged
-  # error in place, which is safe only because a handler never shares the
-  # error it tags.
+  # error in place, which is safe because a handler never shares the error it
+  # tags.
   - id: a-novel-error-tag-in-handler
     languages: [go]
     severity: ERROR

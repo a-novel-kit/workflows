@@ -7,6 +7,22 @@ import { isDeepStrictEqual } from "node:util";
 import { Failure, runCli, testedHead } from "./common.mjs";
 import { captureReview } from "./review.mjs";
 
+/** Report folders and files a batch archives beside its screenshots, when a run produced them. */
+const EVIDENCE_FOLDERS = [
+  "playwright-report",
+  "test-results",
+  ".visual/comparison-report",
+  ".visual/comparison-results",
+  ".visual/review",
+];
+const EVIDENCE_FILES = ["integration-services.log", ".visual/results.json", ".visual/comparison.json"];
+/** Where an approved regeneration keeps the failing comparison's evidence. */
+const COMPARISON_EVIDENCE = [
+  ["playwright-report", ".visual/comparison-report"],
+  ["test-results", ".visual/comparison-results"],
+  [".visual/results.json", ".visual/comparison.json"],
+];
+
 /** Require a complete, unique inventory and distinguish visual failures from functional errors. */
 export function inspectReport(report) {
   const cases = report.tests ?? [];
@@ -55,13 +71,7 @@ async function runTests(script, mode) {
 /** Package only declared evidence and prevent symlinks from exposing workspace secrets. */
 export async function archiveBatch(paths, target) {
   const sources = [...paths].sort().map((path) => `.visual/snapshots/${path}`);
-  for (const folder of [
-    "playwright-report",
-    "test-results",
-    ".visual/comparison-report",
-    ".visual/comparison-results",
-    ".visual/review",
-  ]) {
+  for (const folder of EVIDENCE_FOLDERS) {
     if (existsSync(folder) && (await lstat(folder)).isSymbolicLink())
       throw new Failure("Evidence contains an unsafe file path");
     for await (const path of glob(`${folder}/**/*`)) {
@@ -70,8 +80,7 @@ export async function archiveBatch(paths, target) {
       if (info.isFile()) sources.push(path);
     }
   }
-  for (const path of ["integration-services.log", ".visual/results.json", ".visual/comparison.json"])
-    if (existsSync(path)) sources.push(path);
+  for (const path of EVIDENCE_FILES) if (existsSync(path)) sources.push(path);
   const workspace = await realpath(process.cwd());
   for (const path of sources) {
     if (!existsSync(path) || !(await lstat(path)).isFile())
@@ -106,7 +115,7 @@ export async function compare(script, { approved = false, seed = false } = {}) {
   let inspection;
   try {
     inspection = inspectReport(report);
-    const added = [...inspection.paths].some((path) => !previous.has(path));
+    const added = !inspection.paths.isSubsetOf(previous);
     const existingDrift = report.tests.some((test) => test.comparisons?.some((comparison) => comparison.drift));
     if (!seed && added && inspection.visualOnly && !existingDrift) {
       const inventory = inspection.paths;
@@ -117,15 +126,13 @@ export async function compare(script, { approved = false, seed = false } = {}) {
         throw new Failure("New screenshot capture changed the test inventory");
     }
   } finally {
-    const drift = await captureReview(
-      report,
-      inspection?.visualOnly ? [...previous].filter((path) => !inspection.paths.has(path)) : [],
-      [...(inspection?.paths ?? [])].filter((path) => !previous.has(path))
-    );
+    const captured = inspection?.paths ?? new Set();
+    const removed = inspection?.visualOnly ? [...previous.difference(captured)] : [];
+    const drift = await captureReview(report, removed, [...captured.difference(previous)]);
     if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, `drift=${drift}\n`);
   }
   const { paths, visualOnly } = inspection;
-  const changed = code !== 0 || [...previous].some((path) => !paths.has(path));
+  const changed = code !== 0 || !previous.isSubsetOf(paths);
   if (!visualOnly || (code && report.tests.every((test) => test.status === "passed")))
     throw new Failure("Test execution or screenshot capture failed; approval cannot waive it");
   if (seed) {
@@ -136,13 +143,7 @@ export async function compare(script, { approved = false, seed = false } = {}) {
       if (process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT, "approval=required\n");
       throw new Failure("Screenshot changes require approval for the current PR head");
     }
-    for (const [source, target] of [
-      ["playwright-report", ".visual/comparison-report"],
-      ["test-results", ".visual/comparison-results"],
-      [".visual/results.json", ".visual/comparison.json"],
-    ]) {
-      if (existsSync(source)) await rename(source, target);
-    }
+    for (const [source, target] of COMPARISON_EVIDENCE) if (existsSync(source)) await rename(source, target);
     await rm(snapshots, { recursive: true, force: true });
     const [updatedCode, updatedReport] = await runTests(script, "all");
     const updated = inspectReport(updatedReport);

@@ -101,6 +101,38 @@ function versionOnly(filename, before, after) {
 const pairsUp = (filename, { removed, added }) =>
   removed.length === added.length && removed.every((line, index) => versionOnly(filename, line, added[index]));
 
+/** The commit pins of a line, joined, so two lines compare by the commits they name. */
+const commitPins = (text) => text.match(/@[0-9a-f]{40}\b/g)?.join();
+
+/** The release references added to terraform.tfvars, which deploy verifies against each tag's attestation. */
+function tfvarsPins(files) {
+  const references = files
+    .filter((file) => tfvars.test(file.filename) && file.patch !== undefined)
+    .flatMap((file) =>
+      changes(file.patch).flatMap(({ added }) => added.flatMap(({ text }) => text.match(releaseRef) ?? []))
+    );
+  return new Set(references);
+}
+
+/**
+ * A file changes nothing but release pins: terraform.tfvars pins, or a Dockerfile's release base whose
+ * digest the same pull request pins in terraform.tfvars.
+ */
+function pinsOnly(file, pinned) {
+  const isTfvars = tfvars.test(file.filename);
+  if (!(isTfvars || dockerfile.test(file.filename)) || file.status !== "modified" || file.patch === undefined) {
+    return false;
+  }
+  const pinLine = ({ text }) => (isTfvars ? releasePin.test(text) : releaseBase.test(text));
+  const pinnedBase = ({ text }) => pinned.has(text.match(releaseBase)[1]);
+  for (const change of changes(file.patch)) {
+    if (![...change.removed, ...change.added].every(pinLine)) return false;
+    if (!isTfvars && !change.added.every(pinnedBase)) return false;
+    if (!pairsUp(file.filename, change)) return false;
+  }
+  return true;
+}
+
 const review = (reason) => ({ decision: "review", reason });
 
 /**
@@ -115,29 +147,9 @@ export async function classify({ files, bot, autoMergeEnabledBy, autoMergeArmed,
   if (files.length === 0) return review("it changes no file");
   if (files.length >= 300) return review("its comparison may stop at 300 files");
 
-  // A Dockerfile's release base counts as a pin only when the same pull request pins its digest in
-  // terraform.tfvars, which deploy verifies against the release tag's attestation.
-  const pinned = new Set(
-    files
-      .filter((file) => tfvars.test(file.filename) && file.patch !== undefined)
-      .flatMap((file) =>
-        changes(file.patch).flatMap(({ added }) => added.flatMap(({ text }) => text.match(releaseRef) ?? []))
-      )
-  );
-  const pinLine = (filename, text) => (tfvars.test(filename) ? releasePin.test(text) : releaseBase.test(text));
-  const pinOnly = files.every(
-    (file) =>
-      (tfvars.test(file.filename) || dockerfile.test(file.filename)) &&
-      file.status === "modified" &&
-      file.patch !== undefined &&
-      changes(file.patch).every(
-        (change) =>
-          [...change.removed, ...change.added].every(({ text }) => pinLine(file.filename, text)) &&
-          (tfvars.test(file.filename) || change.added.every(({ text }) => pinned.has(text.match(releaseBase)[1]))) &&
-          pairsUp(file.filename, change)
-      )
-  );
-  if (pinOnly) return { decision: "pin", reason: "it changes nothing but release pins" };
+  const pinned = tfvarsPins(files);
+  if (files.every((file) => pinsOnly(file, pinned)))
+    return { decision: "pin", reason: "it changes nothing but release pins" };
 
   const login = (name) => (name ?? "").replace(/\[bot\]$/, "");
   if (login(autoMergeEnabledBy) !== login(bot)) return review("Renovate did not put it on auto-merge");
@@ -147,15 +159,14 @@ export async function classify({ files, bot, autoMergeEnabledBy, autoMergeArmed,
   for (const file of files) {
     if (integrity.test(file.filename) && file.status === "modified") continue;
     if (file.status !== "modified" || file.patch === undefined) return review(`${file.filename} is ${file.status}`);
+    // A module update adds and drops indirect requirements, which name only a module and its version.
+    const kept = ({ text }) => !modfile.test(file.filename) || !indirectRequirement.test(text);
     for (const change of changes(file.patch)) {
-      // A module update adds and drops indirect requirements, which name only a module and its version.
-      const keep = ({ text }) => !modfile.test(file.filename) || !indirectRequirement.test(text);
-      const removed = change.removed.filter(keep);
-      const added = change.added.filter(keep);
+      const removed = change.removed.filter(kept);
+      const added = change.added.filter(kept);
       if (!pairsUp(file.filename, { removed, added })) return review(`${file.filename} changes more than versions`);
       for (const [index, { text }] of added.entries()) {
-        const commits = (line) => line.match(/@[0-9a-f]{40}\b/g)?.join();
-        if (commits(text) === commits(removed[index].text)) continue;
+        if (commitPins(text) === commitPins(removed[index].text)) continue;
         const pin = text.match(actionPin);
         if (!pin) return review(`${file.filename} moves a commit pin it cannot verify`);
         movedPins.push(pin);

@@ -22,7 +22,7 @@ function gate(
     else if (path.endsWith("/commits")) console.log(process.env.COMMITS);
     else if (path.endsWith("/labels")) console.log(process.env.LABELS);`
   );
-  const result = w.bash(check, {
+  const env = {
     GH_TOKEN: "token",
     GITHUB_REPOSITORY: "a-novel/service-authentication",
     GH_LOG: `${w.cwd}/gh.log`,
@@ -34,13 +34,9 @@ function gate(
     FILES: files.join("\n"),
     COMMITS: commits.join("\n"),
     LABELS: labels.join("\n"),
-  });
-  const calls = w
-    .read("gh.log")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
+  };
+  const result = w.bash(check, env);
+  const calls = w.read("gh.log").trim().split("\n").filter(Boolean).map(JSON.parse);
   return { status: result.status, output: result.stdout + result.stderr, calls, summary: w.read("summary") };
 }
 
@@ -49,7 +45,7 @@ const removed = (calls) =>
 
 test("check-dependencies holds a person's manifest change until a reviewer acknowledges it", (t) => {
   const label = ["allow-dependency-change"];
-  for (const [name, input, passes] of [
+  const cases = [
     ["merge-queue group", { event: "merge_group", files: ["go.mod"] }, true],
     ["code only", { files: ["internal/core/session.go", "README.md"] }, true],
     ["lockfiles only", { files: ["go.sum", "pnpm-lock.yaml", "golangci-lint.sum"] }, true],
@@ -65,7 +61,8 @@ test("check-dependencies holds a person's manifest change until a reviewer ackno
     ["a person's commit on a bot's branch", { author: "Bot", files: ["go.mod"], commits: ["Bot", "User"] }, false],
     ["an unlinked commit author on a bot's branch", { author: "Bot", files: ["go.mod"], commits: ["none"] }, false],
     ["bot commits, a person's pull request", { files: ["go.mod"], commits: ["Bot"] }, false],
-  ]) {
+  ];
+  for (const [name, input, passes] of cases) {
     const { status, output } = gate(t, input);
     assert.equal(status === 0, passes, `${name}: ${output}`);
     if (!passes) assert.match(output, /::error::This pull request changes dependency manifests: /, name);

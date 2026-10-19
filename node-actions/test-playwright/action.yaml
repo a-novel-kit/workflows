@@ -1,10 +1,16 @@
 name: test playwright
-description: Run browser component and Playwright tests with coverage and optional private Drive screenshot comparisons.
+description: >
+  Run a platform's browser component tests with coverage, then its Playwright journeys. With Drive
+  configured, the journeys compare their screenshots against the master reference kept in a private
+  Shared Drive, and the run posts the result as the `visual-comparison` commit status. A screenshot
+  change passes only on a head approved through `approve-playwright`.
 
 inputs:
   github_token:
     required: true
-    description: The GitHub token used to install packages.
+    description: >
+      Token that installs packages. With Drive configured, it also reads the provenance of runs,
+      pull requests and labels, and posts the `visual-comparison` commit status (statuses write).
   component_test_action:
     required: false
     default: test:browser
@@ -12,7 +18,7 @@ inputs:
   test_action:
     required: false
     default: test:e2e
-    description: Package script for Playwright journeys; owns application and service startup.
+    description: Package script that runs the Playwright journeys. It starts the application and services itself.
   coverage_artifact:
     required: false
     default: browsercover
@@ -24,40 +30,50 @@ inputs:
   report_artifact:
     required: false
     default: playwright-report
-    description: Name of the seven-day artifact containing reports, traces, screenshots and service logs.
+    description: >
+      Name of the artifact that holds the reports, traces, screenshots and service logs for seven
+      days. It is uploaded only without Drive, which otherwise keeps that evidence.
   compose_file:
     required: false
     default: ""
-    description: Optional Docker Compose file for disposable test services; logs and volume cleanup always run when supplied.
+    description: >
+      Docker Compose file of disposable test services. When set, the action always collects their
+      logs and removes them with their volumes.
 
   drive_ci_provider:
     required: false
     default: ""
-    description: Candidate Workload Identity provider. Empty keeps the existing GitHub report storage path.
+    description: >
+      Workload Identity provider of the tested run's Drive access. Empty turns the Drive comparison
+      off, and the report goes to the report_artifact artifact.
   drive_ci_account:
     required: false
     default: ""
-    description: Candidate service account, with read-only references and contributor results access.
+    description: >
+      Service account of the tested run. It reads the references folder and adds to the results
+      folder. An account that can add to or delete from the references folder is refused.
   drive_maintenance_provider:
     required: false
     default: ""
-    description: Master-only provider used to stage the validated local reference batch.
+    description: Workload Identity provider that stages the new reference, used only on a push to master.
   drive_maintenance_account:
     required: false
     default: ""
-    description: Trusted service account allowed to stage references on master.
+    description: Service account that stages the reference on master. It can add and delete in both folders.
   references_folder:
     required: false
     default: ""
-    description: Platform references folder ID inside a Shared Drive.
+    description: ID of the platform's references folder inside a Shared Drive.
   results_folder:
     required: false
     default: ""
-    description: Sibling platform results folder ID inside a Shared Drive.
+    description: ID of the platform's results folder, a sibling of the references folder.
   seed_sha:
     required: false
     default: ""
-    description: Exact reviewed master commit allowed to create the first reference when none exists.
+    description: >
+      Reviewed master commit allowed to create the first reference. While no reference exists, every
+      other Drive run fails.
 
 outputs:
   artifact-id:

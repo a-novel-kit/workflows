@@ -1,31 +1,37 @@
 name: notify-pr (reusable)
 
-# Tells people in Discord where each pull request stands, without the dependency bots' noise. Every
-# governed repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on pull request,
-# review and failed CI events. A person's pull request posts to the reviews channel when it waits on
-# a review, gets one, merges or drops out of the merge queue: the repository's own channel, or the
-# org's when it has none. A review request pings its reviewers; a review or a drop pings the owner:
-# the assignees, else the assignees of the issues it closes, else the repository's role. A bot's
-# pull request posts only when a commit of it fails CI, pinging the repository's role the first
-# time, and when it merges or closes after a failure. Drafts post nothing, and a post never pings
-# the person who caused it.
+# Tells people in Discord where each pull request stands, without the dependency bots' noise. Each
+# governed repository calls this engine on pull request, review and failed CI events, from the
+# `notify.yaml` and `notify-reviews.yaml` that repocfg renders. Drafts post nothing, and a post
+# never pings the person who caused it.
+#
+# A person's pull request posts to its repository's reviews channel, or the org's when there is none.
+# It posts when it waits on a review, gets one, merges or drops out of the merge queue. A review
+# request pings the reviewers. A review or a drop pings the owners: the assignees, else the
+# assignees of the issues it closes, else the repository's role. A bot's pull request posts to the
+# dependencies channel when a commit fails CI, pinging the role the first time, and when it merges
+# or closes after a failure.
 on:
   workflow_call:
     inputs:
       client_id:
         required: true
         type: string
-        description: The org's [Agent] bot App client id; the default token cannot read the board's Target date.
+        description: >-
+          Client id of the GitHub App that reads the pull request, the issues it closes and their org
+          board Target date. The default token cannot read an org board.
       roles:
         required: false
         type: string
         default: "{}"
-        description: JSON map from "<org>/<repo>" to the Discord role pinged when nobody owns or reviews (vars.DISCORD_REPO_ROLES).
+        description: >-
+          JSON map from "<org>/<repo>" to the Discord role id pinged when a pull request has no owner
+          or reviewer, and on a bot's first CI failure.
       bws_server_url:
         required: false
         type: string
         default: ""
-        description: Bitwarden server holding the GitHub-to-Discord map (vars.BWS_SERVER_URL). Empty means the US cloud.
+        description: Bitwarden server holding the GitHub-to-Discord map. Empty means the US cloud.
       dry_run:
         required: false
         type: string
@@ -34,29 +40,32 @@ on:
     secrets:
       private_key:
         required: true
-        description: The [Agent] bot App private key (PEM).
+        description: Private key (PEM) of the App that client_id names.
       reviews_webhook:
         required: false
-        description: Discord webhook of the org's reviews channel (REVIEWS_WEBHOOK), for repositories missing from reviews_webhooks. Empty skips their posts.
+        description: >-
+          Discord webhook of the org's reviews channel, for repositories missing from
+          reviews_webhooks. Empty skips their posts.
       reviews_webhooks:
         required: false
-        description: JSON map from "<org>/<repo>" to the webhook of that repository's reviews channel (REVIEWS_WEBHOOKS).
+        description: JSON map from "<org>/<repo>" to the webhook of that repository's reviews channel.
       dependencies_webhook:
         required: false
-        description: Discord webhook of the org's dependencies channel (DEPENDENCIES_WEBHOOK). Empty skips those posts.
+        description: Discord webhook of the dependencies channel, where bots' pull requests post. Empty skips those posts.
       bws_access_token:
         required: false
-        description: Read-only token for the GitHub-to-Discord map (BWS_READ_TOKEN). Empty posts without user pings.
+        description: Bitwarden token that reads the GitHub-to-Discord map. Empty posts without user pings.
 
 jobs:
   notify:
     runs-on: ubuntu-latest
-    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    # The App key and the Bitwarden token are secrets of the caller's governance environment, which no
+    # feature branch opens.
     environment:
       name: governance
       deployment: false
-    # A bot's pull request reaches the job only through a failed CI run or its close. Repos run `main`
-    # on pull_request, merge_group or a push to every branch, so the branch is what tells a pull
+    # A bot's pull request reaches the job only through a failed CI run or its close. Repositories run
+    # `main` on pull_request, merge_group or a push to every branch, so the branch tells a pull
     # request's run from the default branch's.
     if: >-
       github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' &&
@@ -67,7 +76,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request_review' ||
       github.event_name != 'workflow_run' && !github.event.pull_request.draft &&
       (github.event.pull_request.user.type != 'Bot' || github.event.action == 'closed')
-    # Lists the CI runs of a bot's pull request; the pull request itself goes through the App.
+    # The default token lists the CI runs of a bot's pull request. The pull request goes through the App.
     permissions:
       actions: read
     # One pull request's events post in the order they happened.
@@ -97,8 +106,8 @@ jobs:
           owner="${GITHUB_REPOSITORY%/*}"
 
           # A review reaches this job through pr-relay, which a pull request's own workflow can
-          # rewrite, so its run names nothing trusted: the pull request and its latest review are
-          # read back, and the review stands in for the event GitHub would have sent.
+          # rewrite, so the relay run names nothing trusted. The step reads the pull request and its
+          # latest review back, and builds from them the payload of a direct review event.
           if [ "$GITHUB_EVENT_NAME" = workflow_run ] && [ "$(jq -r .workflow_run.name <<<"$event")" = pr-relay ]; then
             [ "$(jq -r .workflow_run.event <<<"$event")" = pull_request_review ] || exit 0
             number="$(jq -r '.workflow_run.pull_requests[0].number // empty' <<<"$event")"
@@ -108,7 +117,8 @@ jobs:
             fi
             [ -n "$number" ] || exit 0
             pull="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number")"
-            # The job skips drafts and bots' pull requests for a review GitHub delivers directly.
+            # The job's condition skips drafts and bots' pull requests on a direct event. A relayed
+            # review skips them here.
             if [ "$(jq -r .draft <<<"$pull")" = true ] || [ "$(jq -r .user.type <<<"$pull")" = Bot ]; then
               exit 0
             fi
@@ -121,7 +131,7 @@ jobs:
               pull_request: {number: $pull.number, draft: $pull.draft, user: $pull.user},
               sender: {id: $review.user.id, login: $review.user.login}
             }')"
-          # A failed run names its pull request by branch; the merge queue's branch carries the number.
+          # A failed run names its pull request by branch. A merge queue branch carries the number.
           elif [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
             kind=failed
             branch="$(jq -r .workflow_run.head_branch <<<"$event")"
@@ -139,8 +149,8 @@ jobs:
           fi
 
           # A ready pull request is read a minute later, so the reviewers automation requests meanwhile
-          # join its post; a request from that minute posts nothing, dated by its run's creation. A
-          # dequeue's reason reaches the timeline just after the event.
+          # join its post. A review request from that minute, dated by its run's creation, posts
+          # nothing. A dequeue's reason reaches the timeline just after the event.
           at=""
           case "$kind" in
             opened | ready_for_review) sleep 60 ;;
@@ -179,9 +189,10 @@ jobs:
           pr="$(GH_TOKEN="$APP_TOKEN" gh api graphql -F owner="$owner" -F name="${GITHUB_REPOSITORY#*/}" \
             -F number="$number" -f query="$query" --jq .data.repository.pullRequest)"
 
-          # A bot's history decides its posts: every CI run since it opened, on its branch or in the
-          # queue, ordered by completion. A rerun counts as a failure, since a green run is rarely rerun.
-          # A repository without a main workflow answers 404 and has no history.
+          # A bot's history decides its posts. The history holds every CI run since the pull request
+          # opened, on its branch or in the queue, ordered by completion. A rerun counts as a failure,
+          # since a green run is rarely rerun. A repository without a main workflow answers 404 and has
+          # no history.
           runs='[]'
           jobs='[]'
           if [ "$(jq -r .author.__typename <<<"$pr")" = Bot ] && { [ "$kind" = failed ] || [ "$kind" = closed ]; }; then
@@ -221,14 +232,15 @@ jobs:
             | ($event.workflow_run // {}) as $run
             | [$runs[] | select(.head_branch == $pr.headRefName or
                 (.head_branch | startswith("gh-readonly-queue/\($pr.baseRefName)/pr-\($pr.number)-")))] as $history
-            # The failures finished before this run. A commit posts once, from its first failed run.
+            # $failed_before holds the failures that finished before this run. A commit posts only from
+            # its first failed run, once per failing attempt.
             | ([$history[] | select((.conclusion == "failure" or .run_attempt > 1) and .id != $run.id and
                  ($run == {} or [.updated_at, .id] < [$run.updated_at, $run.id]))]
                + if ($run.run_attempt // 1) > 1 then [$run] else [] end) as $failed_before
             | any($failed_before[]; .head_sha == $run.head_sha and .id != $run.id) as $reported
             | [$pr.dropped.nodes[].reason | ascii_downcase] as $drops
 
-            # At most one post by event: a color, a headline, and who to ping.
+            # Each event makes at most one post, with a color, a headline and who to ping.
             | (if $bot then
                 if $kind == "failed" and $open and ($reported | not) then
                   {color: "failed"}
@@ -272,7 +284,7 @@ jobs:
                 + $to_owners
               else null end) as $post
 
-            # What every post says beyond its headline.
+            # $details holds what every post says beyond its headline.
             | (([$pr.closingIssuesReferences.nodes[].projectItems.nodes[].target.date // empty] | first
                 | if . then "\(.)T12:00:00Z" else null end) // $pr.milestone.dueOn) as $due
             | [
