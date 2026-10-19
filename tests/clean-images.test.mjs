@@ -115,16 +115,12 @@ test("old untagged builds of the default branch, open pull requests or unreadabl
   };
   const read = [];
   const cache = { [digest("f")]: "pr-9" };
-  const kept = await protectedDigests(
-    versions,
-    new Date("2026-05-01T00:00:00Z"),
-    (o) => ["master", "pr-8", "pr-9"].includes(o),
-    async (d) => {
-      read.push(d);
-      return origins[d];
-    },
-    cache
-  );
+  const live = (o) => ["master", "pr-8", "pr-9"].includes(o);
+  async function lookup(d) {
+    read.push(d);
+    return origins[d];
+  }
+  const kept = await protectedDigests(versions, new Date("2026-05-01T00:00:00Z"), live, lookup, cache);
   assert.deepEqual(kept, [digest("a"), digest("c"), digest("f"), digest("g")]);
   // Tagged and recent versions are never read, a cached origin is reused, and an unreadable one is retried.
   assert.deepEqual(read.sort(), [digest("a"), digest("b"), digest("c"), digest("g")]);
@@ -182,13 +178,11 @@ test("the sweep pages every version, keeps open pull requests' builds and prunes
       CACHE_FILE: `${w.cwd}/cache.json`,
     })
   );
-  assert.equal(
-    w.read("output"),
-    `pattern=^(master|pr-5)$|^sha256:(${[master, open]
-      .map((d) => d.slice(7, 23))
-      .sort()
-      .join("|")})\n`
-  );
+  const prefixes = [master, open]
+    .map((d) => d.slice(7, 23))
+    .sort()
+    .join("|");
+  assert.equal(w.read("output"), `pattern=^(master|pr-5)$|^sha256:(${prefixes})\n`);
   const cache = JSON.parse(w.read("cache.json"));
   assert.equal(Object.keys(cache).length, 100);
   assert.equal(cache["sha256:gone"], undefined);
@@ -205,12 +199,13 @@ test("closing a pull request deletes only its single-tagged image, unless rehear
       metadata: { container: { tags: ["pr-10", "v1.0.0"] } },
     },
   ];
-  for (const [pull, dryRun, deleted] of [
+  const cases = [
     ["9", "false", ["DELETE https://api.github.com/orgs/a-novel/packages/container/service%2Frest/versions/41"]],
     ["9", "true", []],
     ["10", "false", []],
     ["11", "false", []],
-  ]) {
+  ];
+  for (const [pull, dryRun, deleted] of cases) {
     const w = workspace(t);
     const fetchStub = stub(w, { versions, tagged: ["pr-9", "pr-10"] });
     succeeds(

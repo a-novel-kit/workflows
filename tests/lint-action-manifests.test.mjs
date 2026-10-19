@@ -6,7 +6,7 @@ import { command, succeeds } from "./helpers.mjs";
 const composite = (body) => `runs:\n  using: 'composite'\n  steps:\n    - shell: bash\n      run: |\n        ${body}\n`;
 
 test("composite contexts respect expression boundaries, quoting and access syntax", () => {
-  for (const expression of [
+  const violating = [
     "vars.FLAG",
     "inputs.flag || vars.FLAG",
     "format('{0}', secrets.TOKEN)",
@@ -19,9 +19,10 @@ test("composite contexts respect expression boundaries, quoting and access synta
     "VARS.FLAG",
     "toJSON(vars)",
     "needs",
-  ])
+  ];
+  for (const expression of violating)
     assert.equal(violations(composite(`\u0024{{ ${expression} }}`)).length, 1, expression);
-  for (const body of [
+  const allowed = [
     "# Caller passes vars.FLAG",
     "${{ inputs.flag }} ${{ github.repository }}",
     "${{ inputs.myvars.thing }}",
@@ -30,8 +31,8 @@ test("composite contexts respect expression boundaries, quoting and access synta
     "${{ format('vars.FLAG', inputs.flag) }}",
     "${{ 'it''s secrets.TOKEN' }}",
     "${{ 'example ${{ secrets.TOKEN }}' }}",
-  ])
-    assert.deepEqual(violations(composite(body)), [], body);
+  ];
+  for (const body of allowed) assert.deepEqual(violations(composite(body)), [], body);
   assert.deepEqual(violations("runs:\n  using: node24\n  main: index.js\n# ${{ vars.FLAG }}"), []);
 });
 

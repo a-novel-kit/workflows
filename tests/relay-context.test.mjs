@@ -17,17 +17,16 @@ function relay(t, { event, sha = "b".repeat(40), branch = "feature", runPulls = 
     if (path.endsWith("/pulls") && path.includes("/commits/")) console.log(process.env.COMMIT_PULLS);
     else { const n = path.split("/").pop(); if (n in heads) console.log(heads[n]); }`
   );
-  succeeds(
-    w.bash(resolve, {
-      GITHUB_REPOSITORY: "a-novel/service-authentication",
-      EVENT: event,
-      RUN_HEAD_SHA: sha,
-      RUN_HEAD_BRANCH: branch,
-      RUN_PULL_REQUESTS: JSON.stringify(runPulls),
-      COMMIT_PULLS: commitPulls,
-      HEADS: JSON.stringify(heads),
-    })
-  );
+  const env = {
+    GITHUB_REPOSITORY: "a-novel/service-authentication",
+    EVENT: event,
+    RUN_HEAD_SHA: sha,
+    RUN_HEAD_BRANCH: branch,
+    RUN_PULL_REQUESTS: JSON.stringify(runPulls),
+    COMMIT_PULLS: commitPulls,
+    HEADS: JSON.stringify(heads),
+  };
+  succeeds(w.bash(resolve, env));
   return Object.fromEntries(
     w
       .read("output")
@@ -38,28 +37,22 @@ function relay(t, { event, sha = "b".repeat(40), branch = "feature", runPulls = 
 }
 
 test("relay-context accepts a merge group only on a merge-queue branch", (t) => {
-  assert.deepEqual(relay(t, { event: "merge_group", sha: "c".repeat(40), branch: queued }), {
-    event: "merge_group",
-    head_sha: "c".repeat(40),
-    merge_group_head_ref: "refs/heads/" + queued,
-  });
+  const group = { event: "merge_group", head_sha: "c".repeat(40), merge_group_head_ref: "refs/heads/" + queued };
+  assert.deepEqual(relay(t, { event: "merge_group", sha: "c".repeat(40), branch: queued }), group);
   assert.deepEqual(relay(t, { event: "merge_group", branch: "gh-readonly-queue-lookalike" }), {});
   assert.deepEqual(relay(t, { event: "merge_group", sha: "not-a-sha", branch: queued }), {});
 });
 
 test("relay-context posts a review on the pull request's current head, not the run's", (t) => {
   const current = "d".repeat(40);
-  assert.deepEqual(relay(t, { event: "pull_request_review", runPulls: [{ number: 7 }], heads: { 7: current } }), {
-    event: "pull_request_review",
-    pull_request_number: "7",
-    head_sha: current,
-  });
+  const runPull = { event: "pull_request_review", pull_request_number: "7", head_sha: current };
+  assert.deepEqual(
+    relay(t, { event: "pull_request_review", runPulls: [{ number: 7 }], heads: { 7: current } }),
+    runPull
+  );
   // The run lists no pull request: the commit's open pull request stands in.
-  assert.deepEqual(relay(t, { event: "pull_request_review", commitPulls: "9", heads: { 9: current } }), {
-    event: "pull_request_review",
-    pull_request_number: "9",
-    head_sha: current,
-  });
+  const commitPull = { event: "pull_request_review", pull_request_number: "9", head_sha: current };
+  assert.deepEqual(relay(t, { event: "pull_request_review", commitPulls: "9", heads: { 9: current } }), commitPull);
   // A closed pull request, or none, is not gated.
   assert.deepEqual(relay(t, { event: "pull_request_review", runPulls: [{ number: 7 }], heads: {} }), {});
   assert.deepEqual(relay(t, { event: "pull_request_review" }), {});
@@ -67,10 +60,8 @@ test("relay-context posts a review on the pull request's current head, not the r
 
 test("relay-context ignores a run of any other event", (t) => {
   // A branch can add a push trigger to the relay; its run wakes nothing.
-  assert.deepEqual(
-    relay(t, { event: "push", branch: queued, runPulls: [{ number: 7 }], heads: { 7: "e".repeat(40) } }),
-    {}
-  );
+  const push = { event: "push", branch: queued, runPulls: [{ number: 7 }], heads: { 7: "e".repeat(40) } };
+  assert.deepEqual(relay(t, push), {});
 });
 
 test("the gates take their queue context from inputs a relayed run can supply", () => {

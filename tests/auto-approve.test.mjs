@@ -23,31 +23,31 @@ function skips(t, { authors = bot, commits = [commit()], age = "success" } = {})
     else if (args.includes("--slurp")) console.log(JSON.stringify([JSON.parse(process.env.COMMITS)]));
     else if (args.some((arg) => arg.endsWith("/status"))) console.log(process.env.AGE);`
   );
-  succeeds(
-    w.bash(guard, {
-      GITHUB_REPOSITORY: "a-novel/infra",
-      GH_TOKEN: "app-token",
-      STATUS_TOKEN: "workflow-token",
-      PR: "https://github.com/a-novel/infra/pull/7",
-      BOT: bot,
-      SHA: "c0ffee",
-      AUTHORS: authors,
-      COMMITS: JSON.stringify(commits),
-      AGE: age,
-    })
-  );
+  const env = {
+    GITHUB_REPOSITORY: "a-novel/infra",
+    GH_TOKEN: "app-token",
+    STATUS_TOKEN: "workflow-token",
+    PR: "https://github.com/a-novel/infra/pull/7",
+    BOT: bot,
+    SHA: "c0ffee",
+    AUTHORS: authors,
+    COMMITS: JSON.stringify(commits),
+    AGE: age,
+  };
+  succeeds(w.bash(guard, env));
   return w.read("output").includes("skip=true");
 }
 
 test("auto-approve trusts only commits GitHub signed for the bot", (t) => {
-  for (const [name, options, skipped] of [
+  const cases = [
     ["the bot's own commits", {}, false],
     ["a person's commit", { authors: `${bot},kushuh` }, true],
     // A push can claim the bot's email and sign as its pusher; only GitHub signs as web-flow.
     ["a pushed commit claiming the bot", { commits: [commit(), commit({ committer: "kushuh" })] }, true],
     ["an unverified commit", { commits: [commit({ verified: false })] }, true],
     ["an update still aging", { age: "pending" }, true],
-  ]) {
+  ];
+  for (const [name, options, skipped] of cases) {
     assert.equal(skips(t, options), skipped, name);
   }
 });

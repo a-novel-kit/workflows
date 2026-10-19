@@ -51,7 +51,7 @@ function evaluate(
     else if (path.endsWith("/labels")) console.log(data.labels.join("\\n"));
     else if (path.endsWith("/events")) console.log(tsv(data.applied));`
   );
-  const result = w.bash(gate, {
+  const env = {
     GITHUB_REPOSITORY: "a-novel/service-authentication",
     AGENT: "anovelbot-agent",
     PRIVILEGED: "allow-dependency-change, with-feature-env",
@@ -62,7 +62,8 @@ function evaluate(
     FAIL: fail,
     POST_FAILS: postFails ? "1" : "",
     DATA: JSON.stringify({ roles, owner, commits, reviews, labels, applied }),
-  });
+  };
+  const result = w.bash(gate, env);
   if (postFails) return { status: result.status };
   succeeds(result);
   const check = JSON.parse(w.read("check.json"));
@@ -77,7 +78,7 @@ const signed = ({ type = "Bot", committer = "web-flow", verified = true } = {}) 
 });
 
 test("review-gate counts only a current approval from a maintainer, an admin or the Agent App", (t) => {
-  for (const [reviews, conclusion] of [
+  const approvals = [
     [[approve("lead")], "success"],
     [[approve("owner")], "success"],
     [[approve("anovelbot-agent[bot]", "head", "Bot")], "success"],
@@ -88,7 +89,8 @@ test("review-gate counts only a current approval from a maintainer, an admin or 
     [[["lead", "User", "CHANGES_REQUESTED", "old"], approve("lead")], "success"],
     [[approve("stranger")], "failure"],
     [[], "failure"],
-  ]) {
+  ];
+  for (const [reviews, conclusion] of approvals) {
     const check = evaluate(t, { reviews });
     assert.equal(check.conclusion, conclusion, JSON.stringify(reviews));
     if (conclusion === "failure") assert.match(check.summary, /No approval of this head/);
@@ -97,7 +99,7 @@ test("review-gate counts only a current approval from a maintainer, an admin or 
 
 test("a privileged label counts only when a maintainer, an admin or the Agent App applied it last", (t) => {
   const reviews = [approve("lead")];
-  for (const [labels, applied, conclusion] of [
+  const histories = [
     [["allow-dependency-change"], [["allow-dependency-change", "lead", "User"]], "success"],
     [["allow-dependency-change"], [["allow-dependency-change", "dev", "User"]], "failure"],
     [
@@ -120,7 +122,8 @@ test("a privileged label counts only when a maintainer, an admin or the Agent Ap
     [["with-feature-env"], [["with-feature-env", "github-actions[bot]", "Bot"]], "failure"],
     [["with-feature-env"], [], "failure"],
     [["documentation"], [["documentation", "dev", "User"]], "success"],
-  ]) {
+  ];
+  for (const [labels, applied, conclusion] of histories) {
     const check = evaluate(t, { reviews, labels, applied });
     assert.equal(check.conclusion, conclusion, JSON.stringify(applied));
     if (conclusion === "failure") assert.match(check.summary, new RegExp(`\`${labels[0]}\` was last applied`));
@@ -158,14 +161,15 @@ test("merge groups pass without a review", (t) => {
 });
 
 test("an unread list or role holds the pull request", (t) => {
-  for (const [options, unread] of [
+  const holds = [
     [{ reviews: [approve("lead")], fail: "/reviews" }, "the reviews"],
     [{ reviews: [approve("lead")], fail: "/labels" }, "the labels"],
     [{ reviews: [approve("lead")], fail: "/events" }, "the label history"],
     [{ author: "Bot", fail: "/commits" }, "the commits"],
     [{ author: "", fail: "/pulls/7" }, "the pull request"],
     [{ reviews: [approve("flaky")] }, "@flaky's role"],
-  ]) {
+  ];
+  for (const [options, unread] of holds) {
     const check = evaluate(t, options);
     assert.equal(check.conclusion, "failure", unread);
     assert.match(check.summary, new RegExp(`Couldn't read ${unread}\\.`));

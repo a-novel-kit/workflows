@@ -21,13 +21,13 @@ export function step(path, name) {
 
 /** Lift named shell functions from a parsed run body; assertions stay in Node. */
 export function functions(script, names) {
-  return names
-    .map((name) => {
-      const match = script.match(new RegExp(`^${name}\\(\\) \\{[^]*?^\\}`, "m"));
-      assert(match, `Missing shell function ${name}`);
-      return match[0];
-    })
-    .join("\n");
+  return names.map((name) => shellFunction(script, name)).join("\n");
+}
+
+function shellFunction(script, name) {
+  const match = script.match(new RegExp(`^${name}\\(\\) \\{[^]*?^\\}`, "m"));
+  assert(match, `Missing shell function ${name}`);
+  return match[0];
 }
 
 export function command(program, args = [], options = {}) {

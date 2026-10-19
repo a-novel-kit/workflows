@@ -54,11 +54,12 @@ test("a pull request run tests its head, since GITHUB_SHA is then GitHub's merge
   t.after(() => rm(dir, { recursive: true, force: true }));
   const path = join(dir, "event.json");
   await writeFile(path, JSON.stringify({ pull_request: { head: { sha: "head" } } }));
-  for (const [name, expected] of [
+  const cases = [
     ["pull_request", "head"],
     ["push", "merge"],
     ["merge_group", "merge"],
-  ])
+  ];
+  for (const [name, expected] of cases)
     assert.equal(testedHead({ GITHUB_EVENT_NAME: name, GITHUB_SHA: "merge", GITHUB_EVENT_PATH: path }), expected);
 });
 
@@ -73,9 +74,10 @@ test("pull request batches keep their provenance, and only master pushes stage r
     status: "completed",
   };
   const github = new GitHub("example/studio", "token");
-  const answer = (event, overrides = {}) =>
-    (github.request = async (path) =>
-      path.startsWith("git/ref/") ? { object: { sha: "head" } } : { ...run, event, ...overrides });
+  function answer(event, overrides = {}) {
+    github.request = async (path) =>
+      path.startsWith("git/ref/") ? { object: { sha: "head" } } : { ...run, event, ...overrides };
+  }
   github.pages = async () => [];
   const props = { properties: { run_id: "40", attempt: "1", run_number: "4", sha: "head" } };
   for (const event of ["push", "pull_request"]) {
@@ -86,10 +88,11 @@ test("pull request batches keep their provenance, and only master pushes stage r
   await assert.rejects(github.branch(props), Failure);
   answer("pull_request", { head_sha: "merge" });
   await assert.rejects(github.branch(props), Failure);
-  for (const [event, expected] of [
+  const cases = [
     ["push", true],
     ["pull_request", false],
-  ]) {
+  ];
+  for (const [event, expected] of cases) {
     answer(event, { head_branch: "master" });
     assert.equal(await github.current("head", "40", "1"), expected);
   }
@@ -154,19 +157,12 @@ test("branch deletion between listing and publication cannot revive it", async (
 });
 test("API failure never means branch deletion", async () => {
   const store = new Store([], [batch("branch", 2)]);
-  await assert.rejects(
-    cleanup(
-      store,
-      {
-        branch: async () => {
-          throw new Failure("rate limited");
-        },
-      },
-      "results",
-      "references"
-    ),
-    Failure
-  );
+  const github = {
+    branch: async () => {
+      throw new Failure("rate limited");
+    },
+  };
+  await assert.rejects(cleanup(store, github, "results", "references"), Failure);
   assert.deepEqual(store.removed, []);
 });
 test("master results deduplicate while newer failures remain", async () => {
@@ -194,10 +190,8 @@ test("archive round-trip includes declared PNGs and rejects symlink evidence", a
   await writeFile("playwright-report/index.html", "report");
   await writeFile("secret.env", "private");
   await archiveBatch(new Set(["desktop/home.png"]), "batch.tar");
-  assert.deepEqual(execFileSync("tar", ["--list", "--file=batch.tar"], { encoding: "utf8" }).trim().split("\n"), [
-    "snapshots/desktop/home.png",
-    "playwright-report/index.html",
-  ]);
+  const listed = execFileSync("tar", ["--list", "--file=batch.tar"], { encoding: "utf8" }).trim().split("\n");
+  assert.deepEqual(listed, ["snapshots/desktop/home.png", "playwright-report/index.html"]);
   await extractSnapshots("batch.tar", "out");
   assert.equal(await readFile("out/desktop/home.png", "utf8"), "png");
   assert.deepEqual((await readdir("out", { recursive: true })).sort(), ["desktop", "desktop/home.png"]);
@@ -211,11 +205,12 @@ test("archive extraction rejects traversal and links", async (t) => {
   await writeFile(join(directory, "snapshots/image.png"), "png");
   await symlink("../escape", join(directory, "snapshots/link.png"));
   await link(join(directory, "snapshots/image.png"), join(directory, "snapshots/hard.png"));
-  for (const [index, members] of [
+  const unsafeMembers = [
     ["--transform=s,image,../escape,", "snapshots/image.png"],
     ["snapshots/link.png"],
     ["snapshots/image.png", "snapshots/hard.png"],
-  ].entries()) {
+  ];
+  for (const [index, members] of unsafeMembers.entries()) {
     const archive = join(directory, `batch-${index}.tar`);
     execFileSync("tar", ["--create", "--absolute-names", `--file=${archive}`, `--directory=${directory}`, ...members]);
     await assert.rejects(extractSnapshots(archive, join(directory, `out-${index}`)), /Unsafe/);

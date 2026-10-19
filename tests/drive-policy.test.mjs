@@ -4,6 +4,23 @@ import { test } from "node:test";
 import { APPROVAL, COMPARISON, LABEL, Policy } from "../node-actions/test-playwright/drive/policy.mjs";
 import { root, succeeds, workspace } from "./helpers.mjs";
 
+/** Answers REST reads with write access, the approval run 41, or else the main run. */
+async function respond(path) {
+  if (path.startsWith("collaborators/")) return { permission: "write" };
+  if (path.includes("/41/"))
+    return {
+      event: "pull_request_target",
+      path: ".github/workflows/visual-tests.yaml",
+      display_title: "Visual approval 1 head master labeled",
+    };
+  return {
+    head_sha: "head",
+    head_repository: { full_name: "example/studio" },
+    path: ".github/workflows/main.yaml",
+    event: "pull_request",
+  };
+}
+
 function fixture() {
   const pr = {
     number: 1,
@@ -38,21 +55,7 @@ function fixture() {
   const github = {
     repository: "example/studio",
     pages: async (path) => (path.startsWith("issues/") ? events : statuses),
-    request: async (path) =>
-      path.startsWith("collaborators/")
-        ? { permission: "write" }
-        : path.includes("/41/")
-          ? {
-              event: "pull_request_target",
-              path: ".github/workflows/visual-tests.yaml",
-              display_title: "Visual approval 1 head master labeled",
-            }
-          : {
-              head_sha: "head",
-              head_repository: { full_name: "example/studio" },
-              path: ".github/workflows/main.yaml",
-              event: "pull_request",
-            },
+    request: respond,
     graphql: async () => ({ repository: { mergeQueue: { entries: { nodes: [] } } } }),
     successfulJob: async () => true,
     successfulBrowserRun: async () => true,
@@ -62,7 +65,7 @@ function fixture() {
 test("approval requires human write access and a current-head receipt", async () => {
   let value = fixture();
   assert.equal(await value.policy.approved(value.pr), true);
-  for (const mutate of [
+  const mutations = [
     (f) => (f.event.actor.type = "Bot"),
     (f) => (f.event.performed_via_github_app = {}),
     (f) => (f.receipt.state = "failure"),
@@ -71,7 +74,8 @@ test("approval requires human write access and a current-head receipt", async ()
     (f) => (f.receipt.target_url = "another-pr"),
     (f) => (f.receipt.created_at = "2026-09-01T09:00:00Z"),
     (f) => (f.github.request = async () => ({ permission: "read" })),
-  ]) {
+  ];
+  for (const mutate of mutations) {
     value = fixture();
     mutate(value);
     assert.equal(await value.policy.approved(value.pr), false);
@@ -116,7 +120,7 @@ test("proof requires a successful browser job and matching baseline", async () =
 });
 
 test("a branch run is allowed only for an approved, open, same-repository PR still at the tested head", async () => {
-  for (const [eventName, mutate, allowed] of [
+  const cases = [
     ["pull_request", () => {}, true],
     ["push", () => {}, true],
     ["pull_request", (f) => (f.pr.head.sha = "newer"), false],
@@ -125,7 +129,8 @@ test("a branch run is allowed only for an approved, open, same-repository PR sti
     ["pull_request", (f) => (f.pr.head.repo.full_name = "fork/studio"), false],
     ["pull_request", (f) => (f.event.actor.type = "Bot"), false],
     ["workflow_dispatch", () => {}, false],
-  ]) {
+  ];
+  for (const [eventName, mutate, allowed] of cases) {
     const f = fixture();
     mutate(f);
     const request = f.github.request;
@@ -140,11 +145,12 @@ test("queue requires proof for every PR", async () => {
   const f = fixture(),
     group = { merge_group: { base_sha: "base", head_sha: "group" } };
   f.policy.associated = async () => [f.pr, { ...f.pr, number: 2 }];
-  for (const [proofs, expected] of [
+  const outcomes = [
     [["approved", "matched"], true],
     [["approved", null], false],
     [["matched", "matched"], false],
-  ]) {
+  ];
+  for (const [proofs, expected] of outcomes) {
     f.policy.proof = async () => proofs.shift();
     assert.equal(await f.policy.allows(group, "merge_group", "group", "queue", "base"), expected);
   }
@@ -189,12 +195,12 @@ test("squash queue commits are attributed through their queue entries, never by 
       [2, "head-2"],
     ]
   );
-  for (nodes of [
+  const unattributable = [
     [entry("squash-1", 1)],
     [entry("squash-1", 1), entry("squash-2", 2, { isCrossRepository: true })],
     [entry("squash-1", 1), entry("squash-2", 2, { baseRefName: "release" })],
-  ])
-    assert.deepEqual(await f.policy.associated("base", "squash-2", false), []);
+  ];
+  for (nodes of unattributable) assert.deepEqual(await f.policy.associated("base", "squash-2", false), []);
   f.github.graphql = async () => {
     throw new Error("Resource not accessible by integration");
   };
@@ -274,10 +280,11 @@ test("PR pushes record the receipt without waiting on main", async () => {
 });
 
 test("a push removes the label that approved an earlier head", async () => {
-  for (const [labels, revoked] of [
+  const cases = [
     [[{ name: LABEL }], true],
     [[{ name: "good first issue" }], false],
-  ]) {
+  ];
+  for (const [labels, revoked] of cases) {
     const f = refreshFixture();
     f.pr.labels = labels;
     const deletes = [];
@@ -294,7 +301,7 @@ test("a push removes the label that approved an earlier head", async () => {
 });
 
 test("refresh reruns only a finished browser job that began before the receipt", async () => {
-  for (const [mutate, rerun] of [
+  const cases = [
     [() => {}, true],
     // A label change starts a pull request run alongside its approval run.
     [(f) => (f.run.run_started_at = "2026-09-01T10:00:00Z"), true],
@@ -306,7 +313,8 @@ test("refresh reruns only a finished browser job that began before the receipt",
     [(f) => (f.run.head_sha = "other"), false],
     [(f) => (f.browser.conclusion = "skipped"), false],
     [(f) => (f.browser.name = "test-unit"), false],
-  ]) {
+  ];
+  for (const [mutate, rerun] of cases) {
     const f = refreshFixture();
     mutate(f);
     assert.equal(Boolean(await f.policy.refresh(f.pr, f.receipt.created_at)), rerun);
@@ -316,7 +324,7 @@ test("refresh reruns only a finished browser job that began before the receipt",
 });
 
 test("main's completion refreshes once the label change has its receipt", async () => {
-  for (const [mutate, rerun] of [
+  const cases = [
     [() => {}, true],
     [(f) => (f.receipt.created_at = "2026-09-01T09:59:59Z"), false],
     [(f) => f.events.pop(), false],
@@ -324,7 +332,8 @@ test("main's completion refreshes once the label change has its receipt", async 
     [(f) => (f.run.event = "merge_group"), false],
     [(f) => (f.pr.head.sha = "newer"), false],
     [(f) => (f.pr.base.ref = "release"), false],
-  ]) {
+  ];
+  for (const [mutate, rerun] of cases) {
     const f = refreshFixture();
     mutate(f);
     assert.equal(Boolean(await f.policy.completed(f.run)), rerun);
@@ -349,10 +358,11 @@ test("green approval receipts cannot authorize screenshot regeneration", async (
 
 test("approval CLI links the browser rerun from either trigger", (t) => {
   const f = refreshFixture();
-  for (const [name, payload] of [
+  const triggers = [
     ["pull_request_target", labeled(f.pr)],
     ["workflow_run", { workflow_run: f.run }],
-  ]) {
+  ];
+  for (const [name, payload] of triggers) {
     const ws = workspace(t);
     ws.write("event.json", JSON.stringify(payload));
     const stub = ws.write(
@@ -386,10 +396,11 @@ test("approval CLI links the browser rerun from either trigger", (t) => {
 });
 
 test("a pull request comparison is recorded on its head, not GitHub's merge commit", (t) => {
-  for (const [name, payload, target] of [
+  const cases = [
     ["pull_request", { pull_request: { head: { sha: "head" } } }, "head"],
     ["push", {}, "merge"],
-  ]) {
+  ];
+  for (const [name, payload, target] of cases) {
     const ws = workspace(t);
     ws.write(".visual/context.json", JSON.stringify({ baseline: "base" }));
     ws.write("event.json", JSON.stringify(payload));
@@ -421,10 +432,11 @@ test("a pull request comparison is recorded on its head, not GitHub's merge comm
 test("a comparison awaiting approval links its drift review and names the label", (t) => {
   const run = "https://github.com/example/studio/actions/runs/42/attempts/1";
   const review = "https://github.com/example/studio/actions/runs/42/artifacts/7";
-  for (const [approval, description, target] of [
+  const cases = [
     ["required", `Screenshots changed: review the drift, then add the ${LABEL} label`, review],
     ["", "Visual tests or evidence upload failed", run],
-  ]) {
+  ];
+  for (const [approval, description, target] of cases) {
     const ws = workspace(t);
     ws.write(".visual/context.json", JSON.stringify({ baseline: "base" }));
     ws.write("event.json", "{}");

@@ -7,6 +7,20 @@ import { step, succeeds, workspace } from "./helpers.mjs";
 const post = step("generic-actions/discord-post/action.yaml", "post");
 
 const webhook = "https://discord.invalid/api/webhooks/1/token";
+const defaults = {
+  WEBHOOK: webhook,
+  WEBHOOKS: "",
+  REPOSITORY: "a-novel/infra",
+  TITLE: "master CI failed in a-novel/infra",
+  URL: "https://github.com/a-novel/infra/actions/runs/1",
+  DESCRIPTION: "",
+  COLOR: "failed",
+  FOOTER: "",
+  MENTION_ROLES: "",
+  MENTION_USERS: "",
+  DRY_RUN: "false",
+  CODES: "204",
+};
 
 /** A workspace whose curl answers each call with the next status in CODES and logs the payload and URL. */
 function discord(t) {
@@ -23,22 +37,7 @@ function discord(t) {
   `
   );
   w.stub("sleep", "");
-  const run = (env) =>
-    w.bash(post, {
-      WEBHOOK: webhook,
-      WEBHOOKS: "",
-      REPOSITORY: "a-novel/infra",
-      TITLE: "master CI failed in a-novel/infra",
-      URL: "https://github.com/a-novel/infra/actions/runs/1",
-      DESCRIPTION: "",
-      COLOR: "failed",
-      FOOTER: "",
-      MENTION_ROLES: "",
-      MENTION_USERS: "",
-      DRY_RUN: "false",
-      CODES: "204",
-      ...env,
-    });
+  const run = (env) => w.bash(post, { ...defaults, ...env });
   const posts = () => (existsSync(join(w.cwd, "posts")) ? w.read("posts").trimEnd().split("\n").map(JSON.parse) : []);
   const delivered = () =>
     w
@@ -51,29 +50,27 @@ function discord(t) {
 
 test("discord-post pings exactly the ids it is given and repeats the title for push notifications", (t) => {
   const { run, posts, delivered } = discord(t);
-  succeeds(
-    run({
-      MENTION_ROLES: "11, 22",
-      MENTION_USERS: "33",
-      DESCRIPTION: "fix by <@&99> @everyone",
-      FOOTER: "a-novel/infra",
-    })
-  );
-  assert.deepEqual(posts(), [
-    {
-      embeds: [
-        {
-          title: "master CI failed in a-novel/infra",
-          color: 15158332,
-          url: "https://github.com/a-novel/infra/actions/runs/1",
-          description: "fix by <@&99> @everyone",
-          footer: { text: "a-novel/infra" },
-        },
-      ],
-      allowed_mentions: { parse: [], roles: ["11", "22"], users: ["33"] },
-      content: "<@&11> <@&22> <@33> master CI failed in a-novel/infra",
-    },
-  ]);
+  const mentions = {
+    MENTION_ROLES: "11, 22",
+    MENTION_USERS: "33",
+    DESCRIPTION: "fix by <@&99> @everyone",
+    FOOTER: "a-novel/infra",
+  };
+  succeeds(run(mentions));
+  const payload = {
+    embeds: [
+      {
+        title: "master CI failed in a-novel/infra",
+        color: 15158332,
+        url: "https://github.com/a-novel/infra/actions/runs/1",
+        description: "fix by <@&99> @everyone",
+        footer: { text: "a-novel/infra" },
+      },
+    ],
+    allowed_mentions: { parse: [], roles: ["11", "22"], users: ["33"] },
+    content: "<@&11> <@&22> <@33> master CI failed in a-novel/infra",
+  };
+  assert.deepEqual(posts(), [payload]);
   assert.equal(delivered(), "delivered=true");
 });
 
@@ -89,10 +86,11 @@ test("discord-post cuts a long description by character and links to the full te
 });
 
 test("discord-post retries, then warns without failing the job", (t) => {
-  for (const [codes, calls, outcome] of [
+  const outcomes = [
     ["500,429,204", 3, "delivered=true"],
     ["500,500,500", 3, "delivered=false"],
-  ]) {
+  ];
+  for (const [codes, calls, outcome] of outcomes) {
     const { run, posts, delivered } = discord(t);
     const result = run({ CODES: codes });
     succeeds(result);
@@ -116,10 +114,8 @@ test("discord-post skips without a webhook or on a dry run, and rejects caller m
 
 test("discord-post posts to its repository's entry in the webhook map, masked, and falls back to webhook", (t) => {
   const mapped = "https://discord.invalid/api/webhooks/2/infra";
-  const webhooks = JSON.stringify({
-    "a-novel/infra": mapped,
-    "a-novel/.github": "https://discord.invalid/api/webhooks/3/meta",
-  });
+  const routes = { "a-novel/infra": mapped, "a-novel/.github": "https://discord.invalid/api/webhooks/3/meta" };
+  const webhooks = JSON.stringify(routes);
   const route = (env) => {
     const { run, urls } = discord(t);
     return { stdout: succeeds(run(env)), urls: urls() };

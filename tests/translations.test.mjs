@@ -73,17 +73,8 @@ test("approval labels come from the branch's open PR", (t) => {
     })
   );
   assert.equal(w.read("output"), 'names=["allow-translation-drift"]\n');
-  assert.deepEqual(calls(w)[0].slice(0, 9), [
-    "gh",
-    "pr",
-    "list",
-    "--repo",
-    "a-novel/platform",
-    "--head",
-    "feat/copy",
-    "--state",
-    "open",
-  ]);
+  const lookup = ["gh", "pr", "list", "--repo", "a-novel/platform", "--head", "feat/copy", "--state", "open"];
+  assert.deepEqual(calls(w)[0].slice(0, 9), lookup);
 });
 
 test("a pull request push reads no approval label, since each approved an earlier head", (t) => {
@@ -102,15 +93,20 @@ test("a pull request push reads no approval label, since each approved an earlie
 
 test("gaps and drift receive the merge base reference", (t) => {
   const w = translations(t);
-  for (const [id, variable, name] of [
+  const checks = [
     ["gaps", "GAPS_ACTION", "i18n:gaps"],
     ["drift", "DRIFT_ACTION", "i18n:drift"],
-  ]) {
+  ];
+  for (const [id, variable, name] of checks) {
     w.write("calls", "");
     succeeds(w.bash(step(lint, id), { [variable]: name, BASE_REF: "origin/master" }));
     assert.deepEqual(calls(w), [["pnpm", "run", name, "--base", "origin/master"]]);
   }
 });
+
+function removal(label) {
+  return ["gh", "pr", "edit", "12", "--repo", "a-novel/platform", "--remove-label", label];
+}
 
 test("a push revokes every held approval label and leaves the others alone", (t) => {
   const w = translations(t);
@@ -123,19 +119,7 @@ test("a push revokes every held approval label and leaves the others alone", (t)
     })
   );
   assert.equal(w.read("output"), "revoked=true\n");
-  assert.deepEqual(
-    calls(w),
-    ["allow-incomplete-translations", "allow-translation-drift"].map((label) => [
-      "gh",
-      "pr",
-      "edit",
-      "12",
-      "--repo",
-      "a-novel/platform",
-      "--remove-label",
-      label,
-    ])
-  );
+  assert.deepEqual(calls(w), ["allow-incomplete-translations", "allow-translation-drift"].map(removal));
 
   w.write("calls", "");
   w.write("output", "");

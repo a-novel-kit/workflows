@@ -16,7 +16,8 @@ test("require-role admits only the listed roles of the actor who started the att
     if (!args.includes("repos/owner/repo/collaborators/invoker/permission") || !args.includes(".role_name")) process.exit(2);
     console.log(process.env.ROLE);`
   );
-  for (const [roles, role, failed, expected] of [
+  const script = step(gate, "Require role");
+  const cases = [
     ["admin", "admin", "0", 0],
     ["admin", "maintain", "0", 1],
     ["admin,maintain", "maintain", "0", 0],
@@ -24,29 +25,22 @@ test("require-role admits only the listed roles of the actor who started the att
     ["admin,maintain", "write", "0", 1],
     ["admin", "admin", "1", 1],
     ["admin,", "", "0", 1],
-  ]) {
-    assert.equal(
-      w.bash(step(gate, "Require role"), {
-        REPO_FULL: "owner/repo",
-        ACTOR: "invoker",
-        ROLES: roles,
-        ROLE: role,
-        API_FAIL: failed,
-      }).status,
-      expected,
-      `roles=${roles} role=${role} failed=${failed}`
-    );
+  ];
+  for (const [roles, role, failed, expected] of cases) {
+    const vars = { REPO_FULL: "owner/repo", ACTOR: "invoker", ROLES: roles, ROLE: role, API_FAIL: failed };
+    assert.equal(w.bash(script, vars).status, expected, `roles=${roles} role=${role} failed=${failed}`);
   }
 });
 
-for (const [path, roles] of [
+const gated = [
   ["generic-actions/approve-pr/action.yaml", "admin,maintain"],
   ["generic-actions/epic-rollback/action.yaml", "admin"],
   ["generic-actions/release-train/action.yaml", "admin"],
   [".github/workflows/epic-rollback-run.yaml", "admin"],
   [".github/workflows/release-train-run.yaml", "admin"],
   [".github/workflows/backport-run.yaml", "admin"],
-]) {
+];
+for (const [path, roles] of gated) {
   test(`${path} gates on require-role before minting a token`, () => {
     const action = manifest(path);
     const steps = action.runs?.steps ?? Object.values(action.jobs).flatMap((job) => job.steps ?? []);

@@ -32,16 +32,16 @@ function report(images, drift = true) {
 
 test("drift review embeds native PNGs and escapes untrusted test labels", async (t) => {
   await setup(t);
-  assert.equal(
-    await captureReview(
-      report({ expected: "test-results/old.png", actual: "test-results/new.png", diff: "test-results/new.png" })
-    ),
-    true
-  );
+  const screenshots = {
+    expected: "test-results/old.png",
+    actual: "test-results/new.png",
+    diff: "test-results/new.png",
+  };
+  assert.equal(await captureReview(report(screenshots)), true);
   const html = await readFile(REVIEW_FILE, "utf8");
-  assert.equal([...html.matchAll(/src="data:image\/png;base64,([^"]+)"/g)].length, 3);
-  for (const match of html.matchAll(/src="data:image\/png;base64,([^"]+)"/g))
-    assert.deepEqual(Buffer.from(match[1], "base64"), png);
+  const images = [...html.matchAll(/src="data:image\/png;base64,([^"]+)"/g)];
+  assert.equal(images.length, 3);
+  for (const [, data] of images) assert.deepEqual(Buffer.from(data, "base64"), png);
   assert.ok(!html.includes("<img src=x"));
   assert.match(html, /&#60;img src=x onerror=&#34;alert\(1\)&#34;&#62;/);
   assert.match(html, /login &#38; form/);
@@ -52,11 +52,12 @@ test("new screenshots, unchanged runs and capture failures remove stale drift ar
   await setup(t);
   await mkdir(".visual/snapshots", { recursive: true });
   await writeFile(".visual/snapshots/added.png", png);
-  for (const [results, additions] of [
+  const runs = [
     [{ tests: [] }, []],
     [report({ expected: ".visual/snapshots/added.png", actual: "test-results/new.png" }, false), ["added.png"]],
     [report({ actual: "test-results/new.png" }, false), []],
-  ]) {
+  ];
+  for (const [results, additions] of runs) {
     await captureReview(report({ expected: "test-results/old.png", actual: "test-results/new.png" }));
     assert.equal(await captureReview(results, [], additions), false);
     assert.equal(existsSync(REVIEW_FILE), false);
@@ -80,11 +81,12 @@ test("review paths reject symlinks, traversal, foreign files and disguised non-P
   await writeFile("test-results/disguised.png", "private token");
   await symlink(join(work.cwd, "secret.png"), "test-results/link.png");
   await symlink(join(work.cwd, "test-results/old.png"), "test-results/internal-link.png");
-  for (const path of [
+  const unsafe = [
     "test-results/../secret.png",
     "test-results/link.png",
     "test-results/internal-link.png",
     "test-results/disguised.png",
-  ])
+  ];
+  for (const path of unsafe)
     await assert.rejects(captureReview(report({ expected: path, actual: "test-results/new.png" })), Failure);
 });

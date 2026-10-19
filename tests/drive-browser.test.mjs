@@ -59,30 +59,19 @@ test("native comparison, additions, approval and functional failure boundaries",
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
+    const loaded = (images) => images.every((image) => image.complete && image.naturalWidth === 80);
+    const columns = () =>
+      page
+        .locator(".images")
+        .first()
+        .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
     await page.goto(pathToFileURL(reviewPath).href);
     assert.equal(await page.title(), "Screenshot drift");
     assert.equal(await page.locator("img").count(), 6);
-    assert.equal(
-      await page
-        .locator("img")
-        .evaluateAll((images) => images.every((image) => image.complete && image.naturalWidth === 80)),
-      true
-    );
-    assert.equal(
-      await page
-        .locator(".images")
-        .first()
-        .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length),
-      3
-    );
+    assert.equal(await page.locator("img").evaluateAll(loaded), true);
+    assert.equal(await columns(), 3);
     await page.setViewportSize({ width: 375, height: 812 });
-    assert.equal(
-      await page
-        .locator(".images")
-        .first()
-        .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length),
-      1
-    );
+    assert.equal(await columns(), 1);
   } finally {
     await browser.close();
   }

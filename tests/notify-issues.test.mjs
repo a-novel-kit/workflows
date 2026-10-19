@@ -19,7 +19,13 @@ test("notify-issues posts issues entering Ready and assignee changes outside Bac
   const scan = step(".github/workflows/notify-issues-run.yaml", "scan");
   const before = "2026-10-12T09:00:00Z";
   const after = "2026-10-12T10:05:00Z";
-  for (const [name, items, expected] of [
+  const env = {
+    GITHUB_REPOSITORY: "a-novel/.github",
+    PROJECT_ID: "PVT_x",
+    BOARD_TOKEN: "token",
+    CALLER: "a-novel/.github/.github/workflows/notify-issues.yaml@refs/heads/master",
+  };
+  const cases = [
     ["entered Ready", [item("Ready", after, [[1, "kushuh"]])], "Ready for pickup · assigned to kushuh"],
     ["Ready before the watermark", [item("Ready", before, [[1, "kushuh"]])], undefined],
     [
@@ -31,7 +37,8 @@ test("notify-issues posts issues entering Ready and assignee changes outside Bac
     ["bot assignee", [item("Ready", after, [[2, "renovate[bot]"]])], "Ready for pickup · nobody assigned"],
     ["closed issue", [item("Ready", after, [], null, "CLOSED")], undefined],
     ["off the board status", [item(null, null, [], after)], undefined],
-  ]) {
+  ];
+  for (const [name, items, expected] of cases) {
     const w = workspace(t);
     const pages = [{ data: { node: { items: { nodes: items } } } }];
     w.stub(
@@ -40,14 +47,7 @@ test("notify-issues posts issues entering Ready and assignee changes outside Bac
       if (args[0] === 'run') console.log('2026-10-12T10:00:00Z');
       else console.log(${JSON.stringify(pages.map((page) => JSON.stringify(page)).join("\n"))});`
     );
-    succeeds(
-      w.bash(scan, {
-        GITHUB_REPOSITORY: "a-novel/.github",
-        PROJECT_ID: "PVT_x",
-        BOARD_TOKEN: "token",
-        CALLER: "a-novel/.github/.github/workflows/notify-issues.yaml@refs/heads/master",
-      })
-    );
+    succeeds(w.bash(scan, env));
     const events = JSON.parse(w.read("output").match(/^events=(.*)$/m)[1]);
     assert.equal(events[0]?.description, expected, name);
     if (expected) {
@@ -63,7 +63,7 @@ test("discord-users resolves mapped ids, masks them, and resolves nobody when Bi
     { key: "1", value: "111111111111111111", note: "kushuh" },
     { key: "2", value: "222222222222222222", note: "EmperorDada" },
   ];
-  for (const [name, bws, env, expected] of [
+  const cases = [
     [
       "mapped and unmapped",
       `console.log(${JSON.stringify(JSON.stringify(map))})`,
@@ -72,7 +72,8 @@ test("discord-users resolves mapped ids, masks them, and resolves nobody when Bi
     ],
     ["Bitwarden down", "process.exit(1)", { IDS: "1" }, ""],
     ["no token", `console.log(${JSON.stringify(JSON.stringify(map))})`, { IDS: "1", BWS_ACCESS_TOKEN: "" }, ""],
-  ]) {
+  ];
+  for (const [name, bws, env, expected] of cases) {
     const w = workspace(t);
     w.stub("bws", bws);
     const result = w.bash(resolve, { BWS: "bws", BWS_ACCESS_TOKEN: "token", SERVER_URL: "", ...env });
