@@ -1027,7 +1027,7 @@ runs:
           local epic="$1"
           echo "epic #$epic: PARTIAL LANDING confirmed ($EV_REASON) — freezing $EV_OPEN_COUNT open sibling(s) + queue heads." | tee -a "$GITHUB_STEP_SUMMARY"
           local summary
-          summary="Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding every remaining sibling to prevent further partial landing. This does NOT roll back merged PRs — human rollback is a-novel-kit/workflows#235."
+          summary="Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding every remaining sibling to prevent further partial landing. This does NOT roll back merged PRs — a human rolls them back with the epic-rollback workflow."
           local targets
           targets=$(jq -cn --argjson open "$EV_OPEN" --argjson queue "$EV_QUEUE" '
             ( [ $open[]  | {repo: .repository.nameWithOwner, sha: .headRefOid} ]
@@ -1223,7 +1223,7 @@ runs:
             return 0
           fi
 
-          echo "PR #${classify_pr} carries epic:${epic} — evaluating the Epic for a partial landing." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PR #${classify_pr} belongs to Epic #${epic} — evaluating the Epic for a partial landing." | tee -a "$GITHUB_STEP_SUMMARY"
           evaluate_epic "$epic"
           case "$EV_DECISION" in
             clear)
@@ -1231,7 +1231,7 @@ runs:
                 "Epic #${epic}: no partial landing (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}). epic-freeze clear." ;;
             frozen)
               freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
-                "Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding this sibling to prevent further partial landing. Does NOT roll back merged PRs — human rollback is a-novel-kit/workflows#235." ;;
+                "Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding this sibling to prevent further partial landing. Does NOT roll back merged PRs — a human rolls them back with the epic-rollback workflow." ;;
             *)
               # Uncertainty fails open. The next sweep re-derives from scratch and freezes the true heads
               # if the partial landing is real.

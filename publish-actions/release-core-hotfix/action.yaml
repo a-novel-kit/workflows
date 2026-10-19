@@ -144,7 +144,7 @@ runs:
           exit 1
         fi
         if ! git merge-base --is-ancestor "refs/tags/v${baseline}" HEAD; then
-          echo "::error::HEAD does not descend from baseline v${baseline} — the ephemeral branch was not cut from that release tag."
+          echo "::error::HEAD does not descend from baseline v${baseline} — the release line was not cut from that release tag."
           exit 1
         fi
 

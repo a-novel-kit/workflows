@@ -524,7 +524,7 @@ runs:
           {
             echo ""
             echo "### Rollback ABORTED mid-generation — ${n} revert PR(s) already opened under rollback-Epic #${M}"
-            echo "They are labeled \`epic:${M}\` and held by the merge-gate (no auto-merge armed, no approval) — nothing lands. Clean up (close them + close #${M}) or finish the rollback by hand:"
+            echo "None has auto-merge armed or an approval, so nothing lands. Clean up (close them + close #${M}) or finish the rollback by hand:"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$n" -gt 0 ]; then
             printf '%s' "$produced" | jq -r '.[] | "- \(.repo) PR #\(.number)\(if .draft then " (HELD draft)" else "" end)"' | tee -a "$GITHUB_STEP_SUMMARY"
@@ -810,7 +810,7 @@ runs:
 
         # ---- Final status ----------------------------------------------------------------------
         if [ "$had_failure" = true ]; then
-          echo "::error::Rollback epic:#${M} assembled (${prod_count} revert PR(s)), but one or more were opened as HELD drafts (conflict / integrity mismatch). A human must finish the draft(s) AND approve the wave; the merge-gate holds everything until then — nothing lands partially. See #${M} and the step summary for the PR list."
+          echo "::error::Rollback epic:#${M} assembled (${prod_count} revert PR(s)), but at least one is a HELD draft (conflict / integrity mismatch) or has no auto-merge armed. Finish every draft and arm auto-merge on every revert before approving the wave, or it lands partially. See #${M} and the step summary for the PR list."
           exit 1
         fi
         echo "Rollback epic:#${M} assembled: ${prod_count} revert PR(s) labeled epic:${M} + auto-merge-armed, PARKED pending human approval (the App can't approve its own PRs). A human reviews + approves the wave, then the merge-gate greens and lands it atomically in reverse. Board: ${reset_task_n} Task(s) reset to \"Ready\"." | tee -a "$GITHUB_STEP_SUMMARY"

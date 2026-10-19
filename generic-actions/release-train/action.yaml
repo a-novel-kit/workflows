@@ -496,7 +496,7 @@ runs:
           if [ "$concl" = "blocked" ]; then
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
             had_failure=true
-            echo "- ⏸️  **${repo}** — rehearsal parked at the release environment; its release.yaml predates the plan/cut split." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            echo "- ⏸️  **${repo}** — rehearsal parked at the release environment; its release.yaml runs the rehearsal inside that environment." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ "$concl" != "success" ]; then
             had_failure=true
@@ -545,7 +545,7 @@ runs:
           else
             had_failure=true
             receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg c "$concl" '$a + [{repo:$r, tag:null, status:("failed:"+$c)}]')
-            echo "::error::${repo} — live release ${bump} did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A botched tag-only cut is re-cut on the next re-dispatch (resume re-cuts a repo with no published Release)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::${repo} — live release ${bump} did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A tag it left without a published Release blocks a re-dispatch until someone publishes that Release or deletes the tag." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
         done
 
