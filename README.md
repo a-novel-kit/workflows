@@ -1,6 +1,6 @@
 # Workflows
 
-Reusable composite GitHub Actions powering A-Novel CI/CD.
+Shared GitHub Actions building blocks for every A-Novel repository.
 
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/agorastoryverse)](https://twitter.com/agorastoryverse)
 [![Discord](https://img.shields.io/discord/1315240114691248138?logo=discord)](https://discord.gg/rp4Qr8cA)
@@ -14,25 +14,33 @@ Reusable composite GitHub Actions powering A-Novel CI/CD.
 
 ## What this is
 
-The shared CI/CD building blocks for every **a-novel** and **a-novel-kit** repo. Each is a **composite action**: rather than copy CI logic between repos, a project pulls these composite actions in with `uses:`, pinned to a release tag.
+Every repository of the `a-novel` and `a-novel-kit` organizations builds its CI from this one.
+Composite actions package the steps of a job, reusable workflows package whole jobs, and
+[Renovate presets](./docs/renovate-presets.md) carry the shared dependency policy. A repository
+references them by path, pinned to a release tag, instead of copying CI logic.
 
-Each composite action lives at `<group>/<name>/action.yaml`, grouped by the kind of work it does. The [Action catalog](#action-catalog) lists them all.
+The governance workflows that the stack's `a-novel repo update` renders into each repository, such as
+`merge-gate.yaml` and `review-gate.yaml`, are thin callers of the reusable workflows and actions here.
 
 ## Using an action
 
-Reference an action from a job step as `a-novel-kit/workflows/<group>/<action>@<tag>`:
+Reference an action from a job step as `a-novel-kit/workflows/<group>/<action>@<tag>`, and a reusable
+workflow from a job as `a-novel-kit/workflows/.github/workflows/<file>@<tag>`:
 
 ```yaml
 jobs:
-  lint:
+  lint-go:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.0.3
-        with:
-          working-directory: . # optional; defaults to the repo root
+      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.63.0
 ```
 
-Pin to a release tag, never `@master`. The actions ship as one unit, so bump every reference together on upgrade — Renovate groups them under `a-novel-kit workflows` to do this for you.
+Pin every reference to a release tag. The repository ships as one unit, so every reference in a
+repository sits at the same tag, and Renovate moves them together in one `a-novel-kit workflows`
+update. A release that asks callers to change something comes with a
+[migration guide](./docs/migrations/README.md).
 
 ## Action catalog
 
@@ -40,20 +48,20 @@ Pin to a release tag, never `@master`. The actions ship as one unit, so bump eve
 
 | Action            | Purpose                                                                                                           |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `docker`          | Build an image, verify it runs **healthy**, push it, and attest its provenance.                                   |
-| `docker-job`      | Build an image, verify it **exits 0**, push it, and attest its provenance.                                        |
 | `clean-images`    | Delete a package's images once their branch or pull request is gone; keep releases, `master` builds and open PRs. |
 | `clean-pr-images` | Delete a closed pull request's `pr-<N>` image from each package that has one.                                     |
+| `docker`          | Build an image, verify that it runs **healthy**, push it and attest its provenance.                               |
+| `docker-job`      | Build an image, verify that its run **exits 0**, push it and attest its provenance.                               |
 
-Both actions tag only the builds a deployment can name: pushes to the default branch, releases, and
-a pull request while it carries the `with-feature-env` label. The label tags the head it was added on,
-so the next push builds untagged; add it again to tag the new head. Every other build is pushed by
-digest alone, for the jobs of the same run that pull it, and its attestation stays out of the
+`docker` and `docker-job` tag only the builds a deployment can name: pushes to the default branch,
+releases, and a pull request while it carries the `with-feature-env` label. The label tags the head it
+was added on, so the next push builds untagged until someone adds the label again. Every other build is
+pushed by digest alone, for the jobs of the same run that pull it, and its attestation stays out of the
 registry.
 
-Both actions fail the caller after a successful push unless GitHub can sign and publish provenance
-for the exact output digest. Every calling job therefore grants only the permissions the official
-GitHub attestation flow requires:
+Both actions fail the job after a push unless GitHub signs and publishes SLSA provenance for the exact
+output digest. Each calling job grants the permissions of GitHub's attestation flow, and no
+`artifact-metadata: write`, since the actions create no linked-artifact record:
 
 ```yaml
 permissions:
@@ -63,10 +71,7 @@ permissions:
   packages: write
 ```
 
-The actions use GitHub's first-party `actions/attest`, versioned with a full SemVer tag, and publish its
-Sigstore-signed SLSA provenance beside the GHCR image. They do not create the optional linked-artifact
-storage record, so callers do not need `artifact-metadata: write`. Consumers verify an immutable
-digest against the producer repository without registry write access:
+Anyone can verify an image digest against its producer repository, without registry write access:
 
 ```bash
 gh attestation verify \
@@ -74,49 +79,52 @@ gh attestation verify \
   --repo a-novel/service-json-keys
 ```
 
-An image is releasable only after this command succeeds for its expected source repository. Do not
-backfill a missing build attestation or move an existing tag; fix the build path and publish a fresh
-SemVer release.
+An image is releasable only once this command succeeds for its source repository. When an attestation
+is missing, fix the build path and publish a fresh SemVer release. Never backfill an attestation or
+move a tag.
 
 ### `generic-actions`
 
-| Action                   | Purpose                                                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                               |
-| `approve-pr`             | Admin or maintainer escape hatch: approve a PR as the [Agent] App (self-approval).                                |
-| `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                 |
-| `archive-board-items`    | Archive the repo's "Awaiting release" board items on release.                                                     |
-| `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                           |
-| `board-write`            | Set one single-select/date board field as [Agent] — the single write path.                                        |
-| `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                       |
-| `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.            |
-| `check-changes`          | Detect uncommitted changes in a pathspec; optionally fail.                                                        |
-| `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.      |
-| `codecov`                | Upload the coverage artifact to Codecov.                                                                          |
-| `derive-status`          | Derive a Task's board Status from its PR's current state (single writer).                                         |
-| `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given, never fails the job.  |
-| `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked, fail-soft.                              |
-| `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.               |
-| `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.            |
-| `detect-partial-landing` | Freeze an epic's remaining siblings when a sibling drops out mid-landing (writer behind the `epic-freeze` check). |
-| `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App (queue-when-green).                                           |
-| `epic-membership`        | Resolve an Epic's authorized member set — open PRs labeled `epic:<N>`.                                            |
-| `escalate`               | File/update a deduped escalation ticket (+ drive its board Status); page SEV1 via a push webhook.                 |
-| `lint-dockerfile`        | Run hadolint over the repo's Dockerfiles (advisory or gating; a no-Dockerfile repo passes).                       |
-| `lint-shell`             | Run shellcheck over the repo's tracked shell scripts (advisory or gating; a no-shell repo passes).                |
-| `merge-gate`             | Required "may this PR merge?" check (epic-atomicity + draft/review).                                              |
-| `pull-bot`               | Mint a bot App token and check out the repo authenticated as it.                                                  |
-| `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.              |
-| `relay-context`          | Resolve a relayed review or merge group for a privileged `workflow_run` gate; any other run wakes nothing.        |
-| `renovate`               | Run self-hosted Renovate as the bot.                                                                              |
-| `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                            |
-| `review-gate`            | Required check: a maintainer or admin approved the head, and applied every privileged label last.                 |
-| `rollup-board`           | Roll an epic's Status + Start date up from its children.                                                          |
+| Action                   | Purpose                                                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                              |
+| `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.              |
+| `approve-pr`             | Admin or maintainer escape hatch: approve a PR as the [Agent] App.                                               |
+| `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                |
+| `archive-board-items`    | Archive the repository's "Awaiting release" board items on release.                                              |
+| `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                          |
+| `board-write`            | Set one single-select or date board field as [Agent], the single write path.                                     |
+| `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                      |
+| `check-changes`          | Detect uncommitted changes in a pathspec, and optionally fail.                                                   |
+| `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.           |
+| `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.     |
+| `codecov`                | Upload the coverage artifact to Codecov.                                                                         |
+| `derive-status`          | Derive a Task's board Status from its PR's current state, as the single writer.                                  |
+| `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
+| `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given, never fails the job. |
+| `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked and fail-soft.                          |
+| `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App, so it queues once green.                                    |
+| `epic-membership`        | Resolve an Epic's authorized member set: the open PRs labeled `epic:<N>`.                                        |
+| `epic-rollback`          | Revert a landed Epic's merged PRs through a new rollback Epic that lands the reverts together.                   |
+| `escalate`               | File or update a deduplicated escalation ticket, drive its board Status, and page a SEV1 through a webhook.      |
+| `lint-dockerfile`        | Run hadolint over the repository's Dockerfiles, advisory or gating; a repository without one passes.             |
+| `lint-shell`             | Run shellcheck over the repository's tracked shell scripts, advisory or gating; a repository without one passes. |
+| `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.           |
+| `merge-gate`             | Required "may this PR merge?" check: Epic atomicity, draft state and review.                                     |
+| `pull-bot`               | Mint a bot App token and check out the repository authenticated as it.                                           |
+| `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.             |
+| `relay-context`          | Resolve a relayed review or merge group for a privileged `workflow_run` gate; any other run wakes nothing.       |
+| `release-train`          | Release every repository a landed Epic merged into, by dispatching each one's own `release.yaml`.                |
+| `render-epic-status`     | Rewrite each active Epic's display-only status table in its issue body, from live state.                         |
+| `renovate`               | Run self-hosted Renovate as the bot.                                                                             |
+| `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                           |
+| `review-gate`            | Required check: a maintainer or admin approved the head and applied every privileged label last.                 |
+| `rollup-board`           | Roll an Epic's Status and Start date up from its children.                                                       |
 
-`check-append-only` needs the full base history. It rejects every change except additions under
-the configured path; the `append-only-override` PR label is the reviewed escape hatch. The label
-approves the head it was added on: a push is checked without it, and removes it when the step gets a
-token, so a reviewer adds it again for the new head. See the [upgrade guide](./docs/migrations/v1.46.0.md).
+`check-append-only` needs the full base history. It rejects every change except additions under the
+configured path, and the `append-only-override` PR label is the reviewed exception. The label approves
+the head it was added on. A push is checked without it, and removes it when the step gets a token, so
+a reviewer adds it again for the new head.
 
 ```yaml
 check-migration-snapshots:
@@ -124,11 +132,12 @@ check-migration-snapshots:
     contents: read
     pull-requests: write
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
+        persist-credentials: false
 
-    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.46.0
+    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.63.0
       with:
         path: internal/models/migrations
         base: ${{ github.event.pull_request.base.sha }}
@@ -145,9 +154,9 @@ check-migration-snapshots:
 
 | Action        | Purpose                                                                    |
 | ------------- | -------------------------------------------------------------------------- |
-| `lint-go`     | Run `golangci-lint` (supports a non-root module dir).                      |
-| `test-go`     | Run the workspace's Go tests with coverage via `gotestsum`.                |
 | `generate-go` | Generate Go code with retries and fail when the committed output is stale. |
+| `lint-go`     | Run `golangci-lint`, from a non-root module directory if needed.           |
+| `test-go`     | Run the workspace's Go tests with coverage through `gotestsum`.            |
 
 ### `node-actions`
 
@@ -157,87 +166,82 @@ check-migration-snapshots:
 | `build-node`        | Run the package's build script (default `build`).                                                           |
 | `lint-node`         | Run the package's lint script (default `lint`).                                                             |
 | `lint-translations` | Check catalog structure, and the translation gaps and drift a branch introduces, with label approvals.      |
-| `setup-node`        | Set up Node + pnpm (GitHub registry) and install.                                                           |
+| `setup-node`        | Set up Node and pnpm against the GitHub registry, and install.                                              |
 | `test-node`         | Run the package's tests and upload coverage.                                                                |
 | `test-playwright`   | Run browser component and Playwright tests with coverage and optional private Drive screenshot comparisons. |
 
-`test-playwright` runs on an Ubuntu host with Docker Compose available. Its default scripts are
-`test:browser` and `test:e2e`; the latter owns application and service startup. The action uploads
-`coverage/browser/lcov.info` and exposes its `artifact-id` for Codecov. It retains `playwright-report/`,
-`test-results/` and `integration-services.log` for seven days, including when tests fail. With Drive
-configured, browser evidence instead stays in each platform's private reference and results folders in a
-Shared Drive: the latest successful
-master reference and one completed batch per live branch. Coverage continues using GitHub artifacts.
-Only existing screenshots that change or disappear produce an additional GitHub artifact:
-`playwright-drift.html`, a self-contained **Old / New / Diff** review page linked from the run summary.
-It uses an [unzipped artifact](https://github.com/actions/upload-artifact#upload-an-individual-file-unzipped) for direct
-browser viewing and expires after three days. New screenshots pass without visual approval or a
-drift artifact; unchanged runs also produce no drift artifact. Approved regeneration preserves the
-original drift evidence. This small artifact still counts toward GitHub storage usage.
+#### `test-playwright`
 
-The complete Playwright report, including drift, stays in the Drive archive. After extracting it,
-open `playwright-report/` with `pnpm exec playwright show-report`; an approved regeneration also keeps
-the original failing report under `.visual/comparison-report/`. Drive previews files but does not host
-the interactive HTML report. Existing Drive configuration and batch cleanup need no changes.
-`generic-actions/approve-playwright` records label approval for the reviewed PR head without waiting
-on main. A push removes the label, since it approved an earlier head; add it again after reviewing
-the new one. When the head's latest `test-browser` job began before that receipt, it reruns the job
-once its run completes: at once if it already has, otherwise from the caller's `workflow_run` trigger
-on main. A main that runs on pull requests tests the PR head and records its comparison there, and a
-label change also starts a new run. While screenshot changes await approval, the failing
-`visual-comparison` check names the `allow-screenshot-change` label and links the drift review
-directly; rerun `test-browser` once the page expires. Any other failure links main's run. See the
-[upgrade guides](./docs/migrations/v1.44.0.md), [v1.45.3](./docs/migrations/v1.45.3.md) and
-[v1.53.0](./docs/migrations/v1.53.0.md).
-Use `generic-actions/approve-playwright` for exact-head label approval and
-`generic-actions/maintain-playwright` for trusted publication and cleanup; see the
-[Drive adoption guide](./docs/migrations/v1.33.0.md).
+`test-playwright` runs the package scripts `test:browser`, for component tests, and `test:e2e`, for
+journeys that start the application and its services themselves. It uploads
+`coverage/browser/lcov.info` and exposes the artifact's `artifact-id` for Codecov. Pass `compose_file`
+for disposable integration services, with a unique `COMPOSE_PROJECT_NAME` set in the calling job. The
+action collects their logs and always removes the Compose project's services and volumes. The
+[adoption guide](./docs/migrations/v1.32.0.md) covers the caller's job.
 
-Pass `compose_file` for disposable integration services and set a unique `COMPOSE_PROJECT_NAME` in
-the calling job. The action preserves logs already collected by the runner and always removes that
-Compose project's services and volumes. See the [adoption guide](./docs/migrations/v1.32.0.md).
+Without Drive, the action keeps `playwright-report/`, `test-results/` and `integration-services.log`
+for seven days, failed runs included. With Drive, set up through the
+[Drive adoption guide](./docs/migrations/v1.33.0.md), the evidence lives in each platform's private
+references and results folders of a Shared Drive: the latest successful master reference and one
+completed batch per live branch. Coverage stays a GitHub artifact.
 
-`lint-translations` runs a platform's `i18n:structure`, `i18n:gaps` and `i18n:drift` scripts, the
-last two against the merge base with the default branch. The `allow-incomplete-translations` and
-`allow-translation-drift` labels accept gaps and drift, except on the run for a pull request push;
-a merge group checks structure only. Skip the job on the default branch. A trusted
+A screenshot comparison passes new screenshots without approval. An existing screenshot that changes
+or disappears adds one small GitHub artifact, `playwright-drift.html`: a self-contained **Old / New /
+Diff** page, [unzipped](https://github.com/actions/upload-artifact#upload-an-individual-file-unzipped)
+for direct viewing, linked from the run summary and kept three days. The failing `visual-comparison`
+check names the `allow-screenshot-change` label and links that page. Rerun `test-browser` once the
+page expires. Any other failure links the run of `main`.
+
+The label approves the head it was added on. `generic-actions/approve-playwright` records that
+approval without waiting on `main`, removes the label on a push, and reruns the head's `test-browser`
+job when it began before the approval. `generic-actions/maintain-playwright` publishes master
+references and cleans up branch evidence from a trusted workflow.
+
+The Drive archive holds the complete Playwright report. Extract it and open `playwright-report/` with
+`pnpm exec playwright show-report`. An approved regeneration also keeps the original failing report
+under `.visual/comparison-report/`.
+
+#### `lint-translations`
+
+`lint-translations` runs a platform's `i18n:structure`, `i18n:gaps` and `i18n:drift` scripts, the last
+two against the merge base with the default branch. The `allow-incomplete-translations` and
+`allow-translation-drift` labels accept gaps and drift, except on the run for a pull request push. A
+merge group checks structure only. Skip the job on the default branch. A trusted
 `pull_request_target` caller runs `generic-actions/approve-translations`, which removes both labels
-when a push reaches the PR and, for a main that runs on branch pushes, reruns the check when a label
-changes. See the [adoption guide](./docs/migrations/v1.40.0.md).
+when a push reaches the PR and reruns the check when a label changes. The
+[adoption guide](./docs/migrations/v1.40.0.md) covers the caller's jobs.
 
 ### `security-actions`
-
-Each ships its own config, so a consuming repo carries none. All three run offline: nothing
-off-repo can stall them, which is the property a required check needs.
 
 | Action           | Purpose                                                                  |
 | ---------------- | ------------------------------------------------------------------------ |
 | `lint-semgrep`   | Enforce the A-Novel structural conventions golangci-lint cannot express. |
-| `scan-secrets`   | Scan the working tree for committed credentials (gitleaks).              |
 | `lint-workflows` | Audit GitHub Actions workflows for security defects (zizmor).            |
+| `scan-secrets`   | Scan the working tree for committed credentials (gitleaks).              |
 
-Each takes `advisory: "true"` to report without failing, for a repo adopting the check over an
-existing backlog.
+Each ships its own config, so a calling repository carries none. All three run offline, so nothing
+outside the repository can stall them, which a required check needs. Each takes `advisory: "true"` to
+report without failing, for a repository adopting the check over an existing backlog.
 
-`version` is **required** on all three, and on `generic-actions/lint-shell` and
-`generic-actions/lint-dockerfile`. The pin lives in the calling repo so Renovate sees it there
-and bumps each repo on its own cadence, instead of every tool upgrade waiting on a workflows
-release. Annotate it so Renovate can resolve the datasource:
+`version` is required on all three, and on `generic-actions/lint-shell` and
+`generic-actions/lint-dockerfile`. The pin lives in the calling repository, so Renovate bumps each
+repository on its own cadence without waiting on a workflows release. Annotate it so Renovate can
+resolve the datasource:
 
 ```yaml
-- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.25.1
+- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.63.0
   with:
     # renovate: datasource=github-releases depName=gitleaks/gitleaks
     version: "8.30.1"
 ```
 
-A repo needing its own gitleaks allowlist passes `config`, which **replaces** the shipped baseline:
-gitleaks replaces a base config's allowlists when another config extends it, so the repo copies
-`security-actions/scan-secrets/gitleaks.toml` and adds its entries.
+A repository that needs its own gitleaks allowlist passes `config`, which replaces the shipped
+baseline. gitleaks drops a base config's allowlists when another config extends it, so the repository
+copies `security-actions/scan-secrets/gitleaks.toml` and adds its entries.
 
-Call the three as separate jobs, not through one reusable workflow. A reusable-workflow caller's
-checks are named `<caller-job>/<inner-job>`, but required-check discovery reads the caller's job id
-verbatim — so the required context would be one GitHub never posts, and the PR could never merge.
+Call the three as separate jobs. A reusable workflow's checks are named `<caller-job>/<inner-job>`,
+while required-check discovery reads the caller's job id, so a required check behind a reusable
+workflow never reports and the PR never merges.
 
 ### `publish-actions`
 
@@ -246,23 +250,29 @@ verbatim — so the required context would be one GitHub never posts, and the PR
 | `deploy-release`      | Ask infra to deploy a release once all its images are published. |
 | `npm`                 | Publish the workspace packages to the GitHub registry.           |
 | `release-core`        | Cut a release in CI: bump the version, tag, push, release.       |
-| `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line (patch, not-latest). |
+| `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line, not marked latest.  |
 
 ### Reusable workflows
 
-Called from another repo's workflow with `uses: a-novel-kit/workflows/.github/workflows/<file>@<tag>` (not `<group>/<action>` — these are whole workflows, in `.github/workflows/`).
+A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<tag>`.
 
-| Workflow             | Purpose                                                                                                           |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `reconcile-board`    | Per-org board fail-safe sweep: epic rollup + Status drift re-derive + merge-gate re-post.                         |
-| `backport-run`       | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.           |
-| `release-line-run`   | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
-| `notify-ci-run`      | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
-| `notify-release-run` | Announce a published release in Discord with its notes, colored by its bump, gold for a hotfix.                   |
-| `notify-issues-run`  | Post board issues entering Ready, or changing assignees outside Backlog, to Discord, pinging the assignees.       |
-| `notify-pr-run`      | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
-| `notify-stuck-run`   | Post bots' pull requests that stay green but out of the merge queue to Discord, pinging the repo role.            |
+| Workflow                      | Purpose                                                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `auto-approve-dependabot-run` | Approve and queue a repository's trusted dependency-bot PRs once their update has aged.                           |
+| `backport-run`                | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.           |
+| `epic-rollback-run`           | Admin-gated dispatch of `epic-rollback`, behind a typed confirmation.                                             |
+| `merge-gate-run`              | Post the required `merge-gate` check, and arm auto-merge on ready Epic members so they land together.             |
+| `notify-ci-run`               | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
+| `notify-issues-run`           | Post board issues entering Ready, or changing assignees outside Backlog, to Discord, pinging the assignees.       |
+| `notify-pr-run`               | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
+| `notify-release-run`          | Announce a published release in Discord with its notes, colored by its bump, gold for a hotfix.                   |
+| `notify-stuck-run`            | Post bots' pull requests that stay green but out of the merge queue to Discord, pinging the repo role.            |
+| `reconcile-board`             | Per-org fail-safe sweep that repairs the board, the `merge-gate` and `epic-freeze` checks and Epic status tables. |
+| `release-line-run`            | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
+| `release-train-run`           | Admin-gated dispatch of `release-train` for one landed Epic.                                                      |
+| `token-expiry`                | Post an organization's fine-grained personal access tokens to Discord as they near expiry.                        |
 
 ## Contributing
 
-Setup and day-to-day commands are in the [developer guide](https://a-novel-kit.github.io/stack/); workflows-specific notes are in [CONTRIBUTING.md](./CONTRIBUTING.md).
+Setup and day-to-day commands are in the [developer guide](https://a-novel-kit.github.io/stack/);
+workflows-specific notes are in [CONTRIBUTING.md](./CONTRIBUTING.md).

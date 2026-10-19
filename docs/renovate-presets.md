@@ -1,34 +1,30 @@
 # Repository-class Renovate configuration
 
-Choose the same class as `a-novel repo`: `service`, `platform`, `library`, `infra`,
-`workflows` or `meta`. Each class inherits `base`, which owns the common update policy.
+Choose the same class as `a-novel repo`: `service`, `platform`, `library`, `infra`, `workflows` or
+`meta`. Each class inherits `base`, which owns the common update policy.
 
 ```json
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>a-novel-kit/workflows//renovate/service#v1.31.0"]
+  "extends": ["github>a-novel-kit/workflows//renovate/service#v1.63.0"]
 }
 ```
 
-Pin the preset to the same workflows release as the repository's actions. Renovate's
-native config manager updates the preset reference in the existing workflows update group.
-Relative references inside presets inherit that release tag.
+Pin the preset to the same workflows release as the repository's actions. Renovate's config manager
+moves the preset reference in the same workflows update group, and relative references inside a preset
+inherit its release tag.
 
-The base preset rebases branches whenever they fall behind the target branch. This brings
-fixes already merged into the target into failing update PRs, including repositories with a
-merge queue, where Renovate otherwise defaults to rebasing only conflicts. It may trigger
-additional CI runs when the target branch changes.
+The base preset rebases an update branch whenever it falls behind the target branch, merge queue or
+not. A failing update then picks up the fixes the target branch already merged, at the cost of extra
+CI runs when the target moves.
 
-The base preset enables native lockfile maintenance before 05:00 each day in Renovate's
-configured timezone (UTC by default). Supported lockfiles are refreshed within their
-manifest constraints, so transitive fixes do not have to wait for a direct dependency bump.
-Existing CI checks and repository-specific review rules still apply. This uses the existing
-Renovate schedule; it does not add a workflow or dependency-specific overrides.
+The base preset also runs lockfile maintenance before 05:00 each day, in Renovate's configured
+timezone, UTC by default. It refreshes supported lockfiles within their manifest constraints, so a
+transitive fix lands without waiting for a direct dependency bump.
 
-Updates from GitHub releases wait at least one hour after publication before Renovate selects
-them. This gives binary assets and checksums time to finish uploading; the default strict
-release-age filter keeps premature versions out of update branches. The delay applies to all
-`github-releases` dependencies and inherits Renovate's release-age buffer.
+Renovate selects a GitHub release no sooner than one hour after publication, which gives its binary
+assets and checksums time to finish uploading. The delay applies to every `github-releases`
+dependency, on top of Renovate's release-age buffer.
 
 Each service's Go module, npm client and images update in one PR, because a module must ship with
 its matching images. Renovate runs every artifact update in a grouped branch with the configuration
@@ -49,9 +45,9 @@ The registry publishes no release dates, so the preset disables Renovate's docke
 image, and an unannotated tag never updates. An annotated tag clears the same npm release-age gate
 as the package and lands in the same commit.
 
-For npm lockfiles, the package manager performs the refresh. Enforce transitive-package
-release cooldowns in the package manager (for example, pnpm's `minimumReleaseAge`);
-Renovate's `minimumReleaseAge` alone does not cover lockfile maintenance.
+The package manager refreshes an npm lockfile, so a cooldown on transitive packages belongs in the
+package manager, such as pnpm's `minimumReleaseAge`. Renovate's own `minimumReleaseAge` does not cover
+lockfile maintenance.
 
 | Class       | Additional configuration                                                                                                            |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -70,25 +66,25 @@ beside its class, pinned to the same release:
 ```json
 {
   "extends": [
-    "github>a-novel-kit/workflows//renovate/service#v1.38.0",
-    "github>a-novel-kit/workflows//renovate/protobuf#v1.38.0"
+    "github>a-novel-kit/workflows//renovate/service#v1.63.0",
+    "github>a-novel-kit/workflows//renovate/protobuf#v1.63.0"
   ]
 }
 ```
 
 When a root `go.mod` update moves `google.golang.org/protobuf`, the preset runs
-`go tool -modfile=buf.mod buf generate` in the update branch, so generated headers and code stay in
-step with the generator. The repository's `allowed_commands` must permit it. The preset is opt-in
-because a class does not say whether a repository generates protobuf code, and the command fails
-in one without `buf.mod`.
+`go tool -modfile=buf.mod buf generate` in the update branch, so the generated code stays in step with
+the generator. The repository's `allowed_commands` must permit it. The preset is opt-in, because a
+class does not say whether a repository generates protobuf code, and the command fails without
+`buf.mod`.
 
 ## Runner configuration
 
-The shared action loads its operator settings from `generic-actions/renovate/config.json`.
-Set `repository_config` when adopting a class preset:
+The shared action loads its operator settings from `generic-actions/renovate/config.json`. Set
+`repository_config` when adopting a class preset:
 
 ```yaml
-- uses: a-novel-kit/workflows/generic-actions/renovate@v1.31.0
+- uses: a-novel-kit/workflows/generic-actions/renovate@v1.63.0
   with:
     repository_config: "true"
     github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -96,43 +92,43 @@ Set `repository_config` when adopting a class preset:
     client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
 ```
 
-Existing callers retain the base policy through the runner's `globalExtends` default.
-`repository_config: "true"` disables that compatibility default: the repository's class
-preset becomes the single source of update policy. Adopt the preset and input together.
+A caller without the input keeps the base policy through the runner's `globalExtends` default.
+`repository_config: "true"` drops that default, so the repository's class preset becomes its only
+update policy. Adopt the preset and the input together.
 
-The environment supplies credentials, the current repository, logging and explicit caller
-overrides. Static install behavior, credential-forwarding templates and default command
-permissions live in the runner JSON. `allowed_commands` still overrides the default
-allowlist; an empty input preserves the default and `[]` disables post-upgrade commands.
+The environment supplies credentials, the current repository, logging and the caller's overrides.
+The runner JSON holds the install behavior, the credential-forwarding templates and the default
+command allowlist. `allowed_commands` replaces that allowlist: an empty input keeps the default, and
+`[]` disables post-upgrade commands.
 
 ## Local configuration
 
 Keep nonstandard architecture or registry choices, compatibility exceptions and repository-specific
-generation paths in the consumer. Matching package rules merge in order, with repository
-rules applied after presets. Remove the rules and managers transferred to the class preset;
-retaining them would apply the same configuration twice.
+generation paths in the consumer. Matching package rules merge in order, repository rules after
+presets. Remove local rules and managers that the class preset carries, since they would apply twice.
 
-The service and library classes share `go-tools`, which isolates each Go tool module in its own branch. The service class includes `database`, which updates apko and pinned APK packages and
-groups PostgreSQL runtime packages. Its pgBackRest and apko managers update a version and its
+The service and library classes share `go-tools`, which isolates each Go tool module in its own
+branch. The service class includes `database`, which updates apko and pinned APK packages and groups
+PostgreSQL runtime packages. Its pgBackRest and apko managers update a version and its
 SHA-256 together: pgBackRest's source archive, and apko's `checksums.txt`, which covers the
 release binary of every architecture. Both accept only stable releases with a matching asset and
 valid digest. The custom datasources use Renovate's experimental custom datasource support.
 
-The database preset defaults APK lookups in `builds/database.apko.yaml` to
-`https://packages.wolfi.dev/os?arch=x86_64`. Standard Wolfi services need only the class
-preset. Services adopt the Wolfi image separately; the rule is inactive without matching
-dependencies. Other APK files and Debian registry rules are unaffected. A consumer using
-another registry or architecture overrides `registryUrls` for that file and datasource;
-use `arch=aarch64` for ARM64.
+The database preset points APK lookups in `builds/database.apko.yaml` at
+`https://packages.wolfi.dev/os?arch=x86_64`, so a standard Wolfi service needs only the class preset.
+The rule stays inactive until a service adopts the Wolfi image, and other APK files keep their own
+registries. A consumer on another registry or architecture overrides `registryUrls` for that file and
+datasource, with `arch=aarch64` for ARM64.
 
 Presets request regeneration tasks; the runner's allowlist grants permission to execute them.
 
 ## Validation
 
-Run `node --test tests/renovate.test.mjs` for the shipped manager and policy fixtures.
-The `test-actions` CI job also runs Renovate's strict configuration validator on every preset
-and the runner configuration, using the same Renovate action version as production. It resolves
-each preset's full inheritance from the exact tested commit, including all six repository classes.
-Before release, also check consumer-specific overrides when they interact with the changed policy.
-Check group precedence, local exceptions, command permissions, duplicate managers and preset-tag
-updates. The runner's compatibility base reference is stamped by the release workflow.
+`tests/renovate.test.mjs` covers the shipped managers and policy. The `lint-renovate` CI job runs
+Renovate's strict configuration validator on every preset and on the runner configuration, with the
+Renovate action version production uses. It resolves each preset's full inheritance from the tested
+commit.
+
+Before a release, check the consumer overrides that meet a changed policy: group precedence, local
+exceptions, command permissions, duplicate managers and preset-tag updates. The release stamps the
+runner's `globalExtends` reference with its own tag.
