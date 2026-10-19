@@ -1,67 +1,77 @@
 name: epic-rollback (reusable)
 
-# The reusable epic-rollback engine (workflow_call). Every governed repo's thin `epic-rollback.yaml`
-# admin-dispatch caller, provisioned by repocfg, calls this with its org creds and the operator's
-# dispatch inputs. It runs in the caller's context, where a `./` path resolves against the caller's
-# checkout, so nested actions are remote-pinned. This is a destructive escape hatch, and the admin
-# gate and typed confirmation live in the job below.
+# Reverts a landed Epic's merged members across repositories and lands the reverts together. Each
+# governed repository calls this engine from the `epic-rollback.yaml` dispatch that repocfg renders.
+# The rollback undoes merged code, so the job opens with an admin check and a typed confirmation.
 on:
   workflow_call:
     inputs:
       epic_number:
-        description: The Epic number N to roll back (numeric).
+        description: Number N of the Epic to roll back.
         required: true
         type: string
       confirm:
-        description: Type "revert-epic-<N>" exactly (e.g. revert-epic-42) to confirm you are reverting MERGED code.
+        description: >
+          The text "revert-epic-<N>", such as revert-epic-42, confirming that the run reverts merged
+          code. Any other value fails the run.
         required: true
         type: string
       reason:
-        description: Why INV-1 is violated (goes into the audit trail + the rollback-epic body).
+        description: >
+          Why the Epic's landed members must be reverted. The rollback records it in the step summary,
+          the rollback Epic and every revert pull request.
         required: true
         type: string
       dry_run:
-        description: "true (default) = print the plan only; false = actually open + land the reverts."
+        description: >
+          When "true", prints the plan without writing anything. "false" opens the reverts, which land
+          once a person approves them.
         required: false
         type: string
         default: "true"
       max_rollback_repos:
-        description: BLAST-CAP — abort if the rollback would touch more than this many distinct repos (default 5). Raise it deliberately for a genuinely wide rollback.
+        description: >
+          Most repositories one rollback may touch. A wider rollback fails before any revert. Raise it
+          for a genuinely wide rollback.
         required: false
         type: string
         default: "5"
       client_id:
-        description: The [Agent] bot App client id.
+        description: >
+          Client id of the GitHub App that reconstructs the Epic across the org and writes its reverts
+          and board updates.
         required: true
         type: string
       project_id:
-        description: Node id of the org "Tasks" board (PVT_…) — the rollback drives board state here.
+        description: Node id (PVT_…) of the org project board whose rolled-back tasks return to Ready.
         required: true
         type: string
       kill_switch:
-        description: Org-level HALT token (FAIL-SAFE — RUNNING only for an explicit off-token; anything else engages). Threaded from the org variable.
+        description: >
+          Org-wide halt value. Any value but an explicit off value (empty, 0, off, false, no,
+          disabled) fails the run before it mints a token.
         required: false
         type: string
         default: ""
     secrets:
       app_private_key:
-        description: The [Agent] bot App private key (PEM).
+        description: Private key (PEM) of the App that client_id names.
         required: true
 
 jobs:
   rollback:
     runs-on: ubuntu-latest
-    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
     environment:
       name: governance
       deployment: false
-    # The default token serves only the admin check, which needs Metadata:read; the rollback action
-    # mints its own least-privilege [Agent] tokens for every read and write.
+    # The default token serves only the admin check. The rollback action mints its own narrow App
+    # tokens for every read and write.
     permissions:
       contents: read
     steps:
-      # workflow_dispatch is open to any write user, so these gates keep a destructive rollback
-      # admin-only and deliberate.
+      # Any user with write access can dispatch, so these gates keep a rollback admin-only and
+      # deliberate.
       - uses: a-novel-kit/workflows/generic-actions/require-role@v1.63.0
         with:
           roles: admin
@@ -73,12 +83,11 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          # Numeric validation before the number ever reaches the `label:"epic:<N>"` search grammar.
+          # The number reaches the `label:"epic:<N>"` search query, so it must be numeric.
           if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
             echo "::error::epic_number must be an integer, got \"${EPIC:-}\"."
             exit 1
           fi
-          # Typed confirmation, so a destructive operation cannot be triggered by a slip.
           if [ "${CONFIRM:-}" != "revert-epic-${EPIC}" ]; then
             echo "::error::confirmation mismatch — type \"revert-epic-${EPIC}\" exactly to proceed."
             exit 1
@@ -92,12 +101,6 @@ jobs:
           epic_number: ${{ inputs.epic_number }}
           reason: ${{ inputs.reason }}
           dry_run: ${{ inputs.dry_run }}
-          # Blast cap: abort before any revert if the ledger spans more repos than this.
           max_rollback_repos: ${{ inputs.max_rollback_repos }}
-          # Org-level halt. Fail-safe: running only for an explicit off-token (empty/unset, 0, off,
-          # false, no, disabled); any other value engages it and the action aborts loudly as its first
-          # step, before any mint. Threaded from the org variable, which a composite action cannot
-          # read itself.
           kill_switch: ${{ inputs.kill_switch }}
-          # The org "Tasks" board id, inlined per org as derive-status passes it.
           project_id: ${{ inputs.project_id }}

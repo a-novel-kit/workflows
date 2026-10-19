@@ -1,16 +1,10 @@
-# Reusable daily fine-grained-PAT expiry watcher for a whole org. It runs every day but pings the
-# dedicated Discord channel only when a token crosses a milestone in the ping policy below, so quiet
-# days stay silent. Each ping @mentions one configured admin, who triages, and shows the token owner's
-# login in the message. Per-owner pinging waits on the Bitwarden resolver; wire it where `did` is
-# resolved below. The caller owns when it runs and its concurrency, while this owns the enumeration,
-# the policy and the pings.
+# Reusable daily watcher of an organization's fine-grained personal access tokens. It reads their
+# metadata through the org PAT endpoint, never a token value, and posts to the token-expiry Discord
+# channel only when a token crosses a milestone of the ping policy below, so quiet days stay silent.
 #
-# Firing the caller from the UI with test_run=true posts for every PAT regardless of the policy,
-# still admin-only and still for real: an end-to-end drill of the channel and the formatting.
-#
-# It reads metadata alone through the org PAT endpoint, on an App token carrying
-# organization_personal_access_tokens read: owner login, name, expiry, access-granted date. It never
-# holds a token value, so unlike a header-based check it cannot leak a credential.
+# Each post @mentions the one configured admin, who triages, and names the token's owner in the
+# message. The caller owns the schedule and the concurrency. A dispatch with test_run=true posts for
+# every token, for real, to drill the channel and the message format end to end.
 name: token-expiry
 
 on:
@@ -19,33 +13,30 @@ on:
       client_id:
         required: true
         type: string
-        description: The org's [Agent] bot App client id (vars.AGENT_BOT_CLIENT_ID).
+        description: Client id of a GitHub App installed on the organization.
       dry_run:
         required: false
         type: string
         default: "false"
-        description: When "true", log every ping that WOULD be sent without posting it (arm by flipping to "false"). Ignored during a test_run.
+        description: When "true", log every post the run would send without sending it. A test_run ignores it.
       test_run:
         required: false
         type: boolean
         default: false
         description: >
-          Test drive: post to the channel for EVERY PAT regardless of the ping policy (still admin-only).
-          Forces a real post (overrides dry_run) so you actually see the messages land. Wire it to the
-          caller's workflow_dispatch.
+          Post for every token regardless of the ping policy, overriding dry_run, to drill the channel and
+          the message format. Wire it to the caller's workflow_dispatch.
     secrets:
       private_key:
         required: true
-        description: The [Agent] bot App private key (PEM) — the AGENT_BOT_PRIVATE_KEY org secret.
+        description: Private key (PEM) of the App that client_id names.
       webhook:
         required: false
-        description: Discord webhook for the DEDICATED token-expiry channel (TOKEN_EXPIRY_WEBHOOK). Empty makes the ping a no-op.
+        description: Discord webhook of the token-expiry channel. Empty skips every post with a warning.
       default_mention:
         required: false
         description: >
-          Discord user id that every ping is sent to (the admin who triages). Per-owner pinging is
-          deferred to the Bitwarden resolver (#104); until then the owner login is shown in the message
-          and the admin is @mentioned. Empty means post WITHOUT a ping (fail-soft, never fail).
+          Discord user id of the admin every post @mentions, who triages. Empty posts without a mention.
 
 jobs:
   sweep:
@@ -176,11 +167,8 @@ jobs:
 
             status=$([ "$expired" = "true" ] && echo "EXPIRED" || echo "${days}d left")
             reason=$(ping_reason "$days" "$life" || true)
-            # A test run pings every token, bypassing the policy, to validate the real message
-            # rendering, so it still needs a reason when no milestone fired and falls back to the
-            # token's status. Everything below is identical to a genuine ping — same content, embed,
-            # color and reason format — and only the recipient differs: a test run delivers to the
-            # admin. The 🧪 markers live in the run summary, never in the delivered message.
+            # A test run posts every token, with its status as the reason when no milestone fired. Its
+            # message matches a genuine post; the 🧪 markers stay in the run summary.
             if [ "$TEST_RUN" = "true" ] && [ -z "$reason" ]; then reason="$status"; fi
             if [ -z "$reason" ]; then
               echo "  - ${name} (${login}): ${status} — no ping today" >> "$GITHUB_STEP_SUMMARY"; continue

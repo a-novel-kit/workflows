@@ -1,8 +1,9 @@
 name: notify-release (reusable)
 
-# Announces each published release in Discord with its notes, as GitHub shows them. Every governed
-# repo's thin `notify.yaml` caller, provisioned by repocfg, calls this on `release: published`.
-# release-core creates releases with an App token, so the event fires for them, hotfixes included.
+# Announces each published release in Discord with its notes, as GitHub shows them. Each governed
+# repository calls this engine on `release: published`, from the `notify.yaml` that repocfg renders.
+# release-core and release-core-hotfix create releases with an App token, so the event fires for
+# every release.
 on:
   workflow_call:
     inputs:
@@ -13,7 +14,7 @@ on:
         default: "false"
     secrets:
       webhook:
-        description: Discord webhook of the org's releases channel (RELEASES_WEBHOOK). Empty skips the post.
+        description: Discord webhook of the releases channel. Empty skips the post.
         required: false
 
 jobs:
@@ -22,8 +23,8 @@ jobs:
     if: github.event_name == 'release' && github.event.action == 'published'
     permissions: {}
     steps:
-      # GitHub renders a bare pull-request or compare URL as "#N" or "v1...v2"; Discord shows it
-      # whole. Only bare URLs are rewritten, so a link the author already wrote stays intact.
+      # GitHub renders a bare pull request or compare URL as "#N" or "v1...v2", and Discord shows it
+      # whole. The step rewrites only bare URLs, so a link the author already wrote stays intact.
       - name: Format the notes
         id: notes
         env:

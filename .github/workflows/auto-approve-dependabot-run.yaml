@@ -1,44 +1,50 @@
 name: auto-approve-dependabot (reusable)
 
-# The reusable auto-approve-dependabot engine (workflow_call). Every governed repo's thin
-# `auto-approve-dependabot.yaml` caller, provisioned by repocfg, calls this with its org creds. It
-# runs in the caller's context, approving and queueing that repo's trusted dependency-bot PRs.
+# Approves and queues a repository's trusted dependency-bot pull requests. Each governed repository
+# calls this engine from the `auto-approve-dependabot.yaml` that repocfg renders, and the engine runs
+# in that repository's context.
 #
-# Approval is what lets a bot PR merge, so it also enforces Renovate's release-age gate: an update
-# younger than its minimumReleaseAge carries a pending `renovate/stability-days` status, which no
-# ruleset requires. The caller re-runs this on that status turning green, a `status` event with no
-# pull_request payload, so the job resolves the PR from the commit.
+# Approval is what lets a bot pull request merge, so the engine also enforces Renovate's release age.
+# An update younger than its minimumReleaseAge carries a pending `renovate/stability-days` status,
+# which no ruleset requires. The caller re-runs the engine when that status turns green. A `status`
+# event carries no pull request, so the job resolves the pull request from the commit.
 on:
   workflow_call:
     inputs:
       client_id:
-        description: The [Agent] bot App client id — mints the approval token (a distinct identity whose review counts toward the required-approval rule).
+        description: >-
+          Client id of the GitHub App that approves and auto-merges each pull request. The App needs
+          write access to contents and pull requests, and its review must count toward the required
+          approval.
         required: true
         type: string
       dependency_bot_login:
-        description: Login of the trusted dependency bot (e.g. the org Renovate bot) whose PRs are auto-approved.
+        description: >-
+          Login of the trusted dependency bot, such as Renovate, whose pull requests are approved. A
+          `status` event resolves only this bot's pull requests.
         required: true
         type: string
       dependabot_security_login:
-        description: Login of the Dependabot security-updates bot whose PRs are auto-approved.
+        description: Login of the Dependabot security-updates bot whose pull requests are approved.
         required: true
         type: string
       strict:
         description: >-
-          For a repository whose merges reach production. Approve only a release pin, or a version
-          update Renovate itself put on auto-merge; every other bot PR waits for a person.
+          Set for a repository whose merges reach production. The engine then approves only a release
+          pin, or a version update Renovate itself put on auto-merge. Every other bot pull request
+          waits for a person.
         required: false
         type: boolean
         default: false
     secrets:
       bot_private_key:
-        description: The [Agent] bot App private key (PEM) — signs the approval token.
+        description: Private key (PEM) of the App that client_id names.
         required: true
 
 jobs:
   auto-approve:
     runs-on: ubuntu-latest
-    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
     environment:
       name: governance
       deployment: false
@@ -46,24 +52,24 @@ jobs:
       github.event_name == 'status' ||
       github.event.pull_request.user.login == inputs.dependency_bot_login ||
       github.event.pull_request.user.login == inputs.dependabot_security_login
-    # The default token only reads commit statuses, which the App cannot; the rest uses the App.
+    # The default token reads commit statuses, which the App cannot. Every other call uses the App.
     permissions:
       statuses: read
     steps:
-      # Approve as the App: an identity distinct from the bot author, and one whose review
-      # counts toward the required-approval rule, where a workflow's own token does not.
+      # The App approves because the workflow token's review does not count toward the required
+      # approval.
       - name: Mint approval token
         id: token
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ inputs.client_id }}
           private-key: ${{ secrets.bot_private_key }}
-          # Omitting `owner` and `repositories` scopes the token to the current repository,
-          # which is all approving and merging this one PR needs.
+          # Without `owner` and `repositories`, the token covers the current repository only.
           permission-contents: write
           permission-pull-requests: write
 
-      # A status event names only a commit: approve the open dependency-bot PR whose head it is.
+      # A `status` event names only a commit, so the step looks up the open dependency-bot pull
+      # request whose head it is.
       - name: Resolve the pull request
         id: pr
         env:
@@ -86,11 +92,10 @@ jobs:
           fi
           { echo "url=$url"; echo "author=$author"; echo "sha=$EVENT_SHA"; } >> "$GITHUB_OUTPUT"
 
-      # A human push to the branch means the change needs real review, so this approves only when
-      # every commit is the bot's own. An unknown author counts as non-bot, failing closed. An author
-      # is only an email that a push can claim, so each commit must also carry GitHub's signature,
-      # which only the bot's own API commits get. An update still inside its release-age window
-      # waits: the green status re-runs this job.
+      # A person's push means the change needs real review, so the step approves only when every
+      # commit is the bot's own. An unknown author counts as a person. A push can claim any author
+      # email, so each commit must also carry GitHub's signature, which only the bot's API commits
+      # get. An update inside its release-age window waits for its green status to re-run the job.
       - name: Confirm every commit is the bot's and the update has aged
         id: guard
         if: ${{ steps.pr.outputs.skip != 'true' }}
@@ -123,8 +128,8 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # In strict mode Renovate's own auto-merge decision stands, so its production configuration,
-      # majors and moved tags wait for a person.
+      # Strict mode defers to Renovate's own auto-merge choice, so an update Renovate leaves to
+      # review, and any moved tag, waits for a person.
       - name: Classify the change
         id: classify
         if: ${{ inputs.strict && steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
@@ -147,11 +152,10 @@ jobs:
           # Strict mode approves the classified commit, so a later push needs its own approval.
           head_sha: ${{ inputs.strict && steps.pr.outputs.sha || '' }}
 
-      # Put the approved PR in the merge queue so it merges hands-off. The queue re-validates the
-      # required checks on the group and owns the merge method; `--squash` is the org's only allowed
-      # method and makes the command explicit in a repo with no queue. Where there is one, gh just
-      # logs that the strategy is queue-controlled. In strict mode a Renovate update already carries
-      # Renovate's own auto-merge, which re-enabling would replace with the agent's.
+      # Auto-merge puts the approved pull request in the merge queue, which re-validates the required
+      # checks and owns the merge method. `--squash` is the org's only merge method and serves a
+      # repository with no queue. In strict mode, a Renovate update keeps the auto-merge Renovate
+      # enabled, so the step arms only a release pin.
       - name: Enable auto-merge
         if: >-
           ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' &&

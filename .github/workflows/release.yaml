@@ -1,9 +1,9 @@
 name: release
 
-# Releases are cut from the GitHub UI (Actions ▸ release ▸ pick a type ▸ Run) or by the release
-# train, through workflow_call's identical inputs. `plan` rehearses with no credential; `cut` runs in
-# the protected `release` environment, the "who can publish" gate whose key only it reads, and
-# pushes the version commit, the tags and the GitHub Release as the release App.
+# A person cuts a release from the Actions tab (release ▸ pick a type ▸ Run), or the release train
+# dispatches it with the same inputs. `plan` rehearses with no credential. `cut` runs in the
+# protected `release` environment, the only holder of the release App's key, and pushes the version
+# commit, the tags and the GitHub Release as that App.
 on:
   workflow_dispatch:
     inputs:
@@ -32,10 +32,8 @@ on:
 
 run-name: "🚀 release ${{ inputs.release_type }}${{ inputs.dry_run && ' (dry-run)' || '' }}"
 
-# There is no concurrency lock. Two releases triggered at once compute the same next tag: the first
-# push wins and the second is rejected as non-fast-forward, failing in the release job below before
-# any build job runs, so an accidental double-trigger cannot double-release. The protected `release`
-# environment is the human gate on top.
+# Two releases started at once compute the same next tag. The first push wins and the second fails
+# as non-fast-forward, so a double trigger cannot release twice.
 
 jobs:
   plan:
@@ -77,9 +75,7 @@ jobs:
           client_id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 
-      # Surface the cut version in the run summary, since the run name carries only the bump type.
-      # Both values arrive through env rather than ${{ }}: an expression is substituted into the
-      # script before bash sees it, so its contents would be code; as variables they are data.
+      # The run name carries only the bump type, so the summary names the cut version.
       - env:
           TAG: ${{ steps.core.outputs.tag }}
           RELEASE_TYPE: ${{ inputs.release_type }}

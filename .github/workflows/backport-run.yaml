@@ -1,26 +1,20 @@
 name: backport (reusable)
 
-# The reusable backport engine (workflow_call). Every governed repo's thin `hotfix.yaml` dispatch
-# caller, provisioned by repocfg, calls this with its org creds. It runs in the caller's context, so
-# nested actions are remote-pinned: a `./` path in a reusable workflow resolves against the caller.
+# Opens one backport pull request per fix onto a release line `release/vX.Y`. Each fix lands on the
+# default branch first through its normal pull request, so a hotfix ships only reviewed, tested
+# changes and never unreleased work. CI and review run against the released code, and merging a
+# backport cuts the patch through release-line-run.yaml.
 #
-# A hotfix ships reviewed, tested changes only, and never the default branch's unreleased work. The
-# fix lands on the default branch first, through its normal pull request. This workflow then carries
-# each fix commit onto the release line `release/vX.Y`, created from the line's latest tag on first
-# use, as its own backport pull request: CI and review run against the released code, and merging
-# the backport cuts the patch (release-line-run.yaml). A backport whose patch is the reviewed fix's
-# own carries that review: the Dependencies App opens it and the agent approves it. One that git had
-# to fit to different context opens as the agent and waits for a person. A fix that does not apply
-# opens nothing; the run fails with the commands to write the release line's form of the fix by hand.
-#
-# A hotfix is not gated on the org kill switch. The switch pauses normal automation, while the
-# emergency patch path stays open, gated by the admin check here and the `release` environment on
-# the cut.
+# A fix that does not apply opens nothing. The run fails and escalates with the commands that write
+# the release line's form of the fix by hand. The kill switch does not gate this emergency patch
+# path. An admin check and the cut's `release` environment guard it instead.
 on:
   workflow_call:
     inputs:
       line:
-        description: 'X.Y line to patch (e.g. "1.4"); its release line branches from the latest vX.Y.* tag'
+        description: >
+          Line to patch as MAJOR.MINOR, such as "1.4". A missing release line starts from the line's
+          latest stable vX.Y.PATCH tag.
         required: true
         type: string
       fix_refs:
@@ -32,68 +26,74 @@ on:
         type: string
         default: ""
       severity:
-        description: Escalation severity if the backport fails (sev2 / sev1)
+        description: Escalation severity, sev2 or sev1, when the backport fails.
         required: false
         type: string
         default: sev2
       dry_run:
-        description: When true, report what would be created without pushing a branch or opening a pull request
+        description: >
+          When true, reports what the run would create, without pushing a branch or opening a pull
+          request.
         required: false
         type: boolean
         default: true
       client_id:
-        description: The [Agent] bot App client id.
+        description: >
+          Client id of the agent, the GitHub App that pushes the backport branches, approves the clean
+          ones and files the escalation ticket.
         required: true
         type: string
       release_client_id:
         description: >
-          The release App client id. A missing release line is created by that App, which alone may
-          create one, in its own job that waits at the `release` environment; without it the agent
-          creates the line.
+          Client id of the release App, the only GitHub App that may create a release line. A missing
+          line is then created in a job of its own that waits at the `release` environment. Empty, the
+          agent creates the line.
         required: false
         type: string
         default: ""
       dependency_client_id:
         description: >
-          The Dependencies App client id. When set, that App opens each clean backport, so the agent can
-          approve it; without it every backport waits for a person.
+          Client id of a second GitHub App that opens each clean backport, one that carries the
+          reviewed fix's patch unchanged. The agent can then approve it, since the agent is not its
+          last pusher. Empty, every backport waits for a person.
         required: false
         type: string
         default: ""
       project_id:
-        description: Node id of the org "Tasks" board (PVT_…) — escalate drives the failure ticket's Status here.
+        description: Node id (PVT_…) of the org project board that tracks the escalation ticket.
         required: true
         type: string
       mention:
-        description: Threaded to escalate as the SEV1/SEV2 GitHub @mention on tickets.
+        description: GitHub @mention, a user or a team, that a SEV1 or SEV2 escalation ticket pings.
         required: false
         type: string
         default: ""
       push_mention:
-        description: Threaded to escalate as the Discord mention on the SEV1 push ("<@&ROLE_ID>").
+        description: Discord mention, such as "<@&ROLE_ID>", that a SEV1 escalation's push pings.
         required: false
         type: string
         default: ""
     secrets:
       app_private_key:
-        description: The [Agent] bot App private key (PEM).
+        description: Private key (PEM) of the App that client_id names.
         required: true
       release_private_key:
         description: >
-          The release App private key (PEM). Pass secrets.RELEASE_BOT_PRIVATE_KEY by name: it exists
-          only in the `release` environment.
+          Private key (PEM) of the App that release_client_id names. The caller passes it by name from
+          its `release` environment, which only the job that creates the line opens.
         required: false
       dependency_private_key:
-        description: The Dependencies App private key (PEM), with dependency_client_id.
+        description: Private key (PEM) of the App that dependency_client_id names.
         required: false
       push_webhook:
-        description: Threaded to escalate as the SEV1 push webhook (empty = push channel off).
+        description: Chat webhook URL that receives a SEV1 escalation's push. Empty turns the push off.
         required: false
 
 jobs:
-  # Whether the release line exists, read without the `release` environment, so a backport onto an
-  # existing line never waits for an approval, and the tag a missing line starts from: the line's
-  # highest stable vLINE.PATCH tag, the baseline the backport job picks too.
+  # Reads whether the release line exists and, for a missing line, the tag it starts from. That tag
+  # is the line's highest stable vLINE.PATCH tag, the baseline the backport job picks too. The job
+  # runs outside the `release` environment, so a backport onto an existing line never waits for an
+  # approval.
   line:
     runs-on: ubuntu-latest
     permissions:
@@ -124,9 +124,8 @@ jobs:
           echo "missing=true" >>"$GITHUB_OUTPUT"
           echo "baseline=$baseline" >>"$GITHUB_OUTPUT"
 
-  # Only the release App may create a release line, and its key opens only in the `release`
-  # environment, so this job alone waits there, once per line. The backport job opens the pull
-  # requests without it.
+  # Only the release App may create a release line, and its key lives in the `release` environment.
+  # This job alone waits there, once per line, and the backport job opens the pull requests without it.
   create-line:
     needs: line
     if: needs.line.outputs.missing == 'true' && needs.line.outputs.baseline != '' && !inputs.dry_run && inputs.release_client_id != ''
@@ -147,7 +146,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-          # The line starts at an old tag whose workflow files differ from the default branch's, and
+          # The line starts at an old tag whose workflow files differ from the default branch's.
           # GitHub refuses that ref to an App token without the workflows permission.
           permission-workflows: write
       - name: Create the release line
@@ -164,16 +163,16 @@ jobs:
     needs: [line, create-line]
     if: ${{ !cancelled() && needs.line.result == 'success' && needs.create-line.result != 'failure' }}
     runs-on: ubuntu-latest
-    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    # The App keys are secrets of the caller's governance environment, which no feature branch opens.
     environment:
       name: governance
       deployment: false
-    # The default token serves only the admin check; branch and pull request writes use the [Agent]
-    # token minted below.
+    # The default token serves only the admin check. Branch and pull request writes use the App
+    # tokens minted below.
     permissions:
       contents: read
     steps:
-      # workflow_dispatch is open to any write user, so this gate keeps hotfixes admin-only.
+      # Any user with write access can dispatch, so this gate keeps hotfixes admin-only.
       - uses: a-novel-kit/workflows/generic-actions/require-role@v1.63.0
         with:
           roles: admin
@@ -188,8 +187,8 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
-      # A pull request's approval must come from someone other than its last pusher, so a clean
-      # backport is pushed and opened by the Dependencies App and approved by the agent.
+      # A pull request's approval must come from someone other than its last pusher. This token makes
+      # the last push to a clean backport and opens it, so the agent can approve it.
       - name: Mint backport token
         id: backport-token
         if: ${{ inputs.dependency_client_id != '' }}
@@ -220,9 +219,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The highest vLINE.PATCH release tag, excluding sub-module tags (<dir>/v…) and pre-releases.
-          # The line is validated first, which guards the glob and grep against a malformed or injected
-          # value; its dots are escaped so line 1.4 cannot match a tag v1x4.0.
+          # Prints the highest vLINE.PATCH release tag, excluding sub-module tags (<dir>/v…) and
+          # pre-releases. Validating the line first guards the glob and grep against a malformed or
+          # injected value. Escaping its dots keeps line 1.4 from matching a tag v1x4.0.
           release_baseline() {
             local line="$1" line_re
             if ! printf '%s' "$line" | grep -qE '^[0-9]+\.[0-9]+$'; then
@@ -234,8 +233,8 @@ jobs:
           }
 
           # Creates release/vLINE from the baseline tag when the line has none yet. An existing line
-          # must contain the baseline: its head is the latest patch, and a line missing it was cut by
-          # hand from something else.
+          # must contain the baseline, since its head is the latest patch. A line missing the baseline
+          # was cut by hand from something else.
           ensure_release_line() {
             local line="$1" baseline="$2" branch="release/v$1"
             if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
@@ -251,14 +250,15 @@ jobs:
               git update-ref "refs/remotes/origin/$branch" "$baseline"
               return 0
             fi
-            # Reached only by callers without the release App, whose create-line job made it already.
+            # Only a caller without the release App gets here. With it, the create-line job made the line.
             git push --quiet origin "$baseline^{commit}:refs/heads/$branch"
             git fetch --quiet origin "$branch"
             echo "Created \`$branch\` from \`$baseline\`." >> "$GITHUB_STEP_SUMMARY"
           }
 
-          # Prints the full SHA of a commit on the default branch. Every fix is resolved before
-          # anything is created, so a bad ref leaves no release line behind.
+          # Prints the full SHA of a commit on the default branch. The step resolves every fix before
+          # it writes anything, so a bad ref stops the run before any backport opens. The create-line
+          # job runs earlier and still creates a missing line.
           resolve_fix() {
             local ref="$1" sha
             case "$ref" in -*)
@@ -277,9 +277,9 @@ jobs:
             echo "$sha"
           }
 
-          # Names the faster path: when the line's baseline is the latest release and the default branch
-          # holds nothing unreleased but the fixes, a normal patch release ships them with one review
-          # less. Prints nothing otherwise.
+          # Prints a hint when a normal patch release ships the fixes with one review less. That holds
+          # when the line's baseline is the latest release and the default branch holds nothing
+          # unreleased but the fixes. Prints nothing otherwise.
           fast_path() {
             local baseline="$1" latest unreleased
             shift
@@ -296,12 +296,13 @@ jobs:
             git show "$1" | git patch-id --stable | cut -d' ' -f1
           }
 
-          # Cherry-picks one resolved fix onto the release line as its own pull request, titled with
-          # the fix's own subject. A conflict leaves nothing behind and appends the commands to write
-          # the line's form of the fix by hand to $INSTRUCTIONS, the escalation ticket's body.
+          # Cherry-picks one resolved fix onto the release line and opens it as its own pull request. A
+          # conflict leaves nothing behind and appends the commands that write the line's form of the
+          # fix by hand to $INSTRUCTIONS, the escalation ticket's body.
           backport_fix() {
             local sha="$1" line="$2" base="release/v$2" subject branch signed url writer="${GH_TOKEN:-}" clean=false
-            # The title reuses the fix's subject, which reached the default branch Conventional.
+            # The title reuses the fix's subject, which passed the Conventional Commits check on the
+            # default branch.
             subject=$(git log -1 --format=%s "$sha")
             # `git cherry` prints `-` for a commit whose patch is already on the line.
             if git cherry "origin/$base" "$sha" "${sha}^" | grep -q '^-'; then
@@ -335,15 +336,16 @@ jobs:
               echo "[dry-run] would open \`$subject [v$line]\` from \`$branch\` into \`$base\`." >> "$GITHUB_STEP_SUMMARY"
               return 0
             fi
-            # A clean backport is the reviewed fix unchanged, so the Dependencies App writes it and the
-            # agent can approve it. One that git fitted to different context stays the agent's.
+            # A clean backport is the reviewed fix unchanged, so the backport token writes it and the
+            # agent can approve it. A backport git fitted to different context stays the agent's.
             if [ -n "${BACKPORT_TOKEN:-}" ] && [ "$(patch_of "$sha")" = "$(patch_of HEAD)" ]; then
               writer="$BACKPORT_TOKEN" clean=true
             fi
             git push --quiet origin "HEAD:refs/heads/$branch"
-            # The release line requires signed commits, and GitHub signs only the commits the App makes
-            # through its API. The push put the cherry-pick's tree on GitHub, so the App recreates the
-            # commit from it and moves the backport branch, which no ruleset requires signed, onto it.
+            # The release line requires signed commits, and GitHub signs only the commits an App makes
+            # through its API. The push puts the cherry-pick's tree on GitHub under the backport branch,
+            # which no ruleset requires signed. The writing App then recreates the commit from that tree
+            # and moves the branch onto it.
             signed=$(GH_TOKEN="$writer" gh api "repos/$GITHUB_REPOSITORY/git/commits" -f message="$(git log -1 --format=%B)" \
               -f tree="$(git rev-parse 'HEAD^{tree}')" -f "parents[]=$(git rev-parse HEAD^)" --jq .sha) || return 1
             GH_TOKEN="$writer" gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" -f sha="$signed" \
@@ -386,8 +388,8 @@ jobs:
           fi
           exit "$failed"
 
-      # Any failure in the hotfix path pulls a human in, so the emergency path is never silent. It
-      # passes the dispatch severity, a wired push webhook pages SEV1, and dry-run only logs it.
+      # Any failure in this job escalates to a person at the dispatch's severity. A failed line or
+      # create-line job skips this job and escalates nothing. A dry run only logs the escalation.
       - name: Escalate on failure
         if: ${{ failure() }}
         uses: a-novel-kit/workflows/generic-actions/escalate@v1.63.0
