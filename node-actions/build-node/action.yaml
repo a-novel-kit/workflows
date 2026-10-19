@@ -19,4 +19,6 @@ runs:
         github_token: ${{ inputs.github_token }}
     - name: build
       shell: bash
-      run: pnpm run ${{ inputs.build_action }}
+      env:
+        BUILD_ACTION: ${{ inputs.build_action }}
+      run: pnpm run "$BUILD_ACTION"
