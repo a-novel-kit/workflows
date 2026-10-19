@@ -6,16 +6,17 @@ import { Failure } from "./common.mjs";
 const DIRECTORY = ".visual/review";
 export const REVIEW_FILE = `${DIRECTORY}/playwright-drift.html`;
 const ROLES = { expected: "Old", actual: "New", diff: "Diff" };
+const IMAGE_ROOTS = ["test-results", ".visual/snapshots"];
+
+/** Whether a resolved path lies strictly inside the root directory. */
+function inside(root, path) {
+  const child = relative(resolve(root), path);
+  return child && !child.startsWith("..") && !isAbsolute(child);
+}
 
 async function png(path) {
   const resolved = await realpath(path);
-  if (
-    !(await lstat(path)).isFile() ||
-    !["test-results", ".visual/snapshots"].some((root) => {
-      const child = relative(resolve(root), resolved);
-      return child && !child.startsWith("..") && !isAbsolute(child);
-    })
-  )
+  if (!(await lstat(path)).isFile() || !IMAGE_ROOTS.some((root) => inside(root, resolved)))
     throw new Failure("Review image is outside the declared screenshot directories");
   const data = await readFile(resolved);
   if (!data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))

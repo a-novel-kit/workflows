@@ -23,6 +23,19 @@ export async function digest(path) {
   return hash.digest("hex");
 }
 
+/** A folder unfit for batches: not a live, listable folder nested inside a Shared Drive. */
+function unusableFolder(folder) {
+  const parents = folder.parents;
+  return (
+    folder.mimeType !== "application/vnd.google-apps.folder" ||
+    folder.trashed ||
+    !folder.driveId ||
+    folder.id === folder.driveId ||
+    (parents !== undefined && (!Array.isArray(parents) || parents.length !== 1 || parents[0] === folder.driveId)) ||
+    !folder.capabilities?.canListChildren
+  );
+}
+
 function rank(a, b) {
   return (
     Number(a.properties.run_number) - Number(b.properties.run_number) ||
@@ -86,16 +99,7 @@ export class Drive {
     // Drive hides parents from folder-only shares; maintenance must verify the full hierarchy.
     const parentsVisible = folders.every((folder) => folder.parents !== undefined);
     if (
-      folders.some(
-        (folder) =>
-          folder.mimeType !== "application/vnd.google-apps.folder" ||
-          folder.trashed ||
-          !folder.driveId ||
-          folder.id === folder.driveId ||
-          (folder.parents !== undefined &&
-            (!Array.isArray(folder.parents) || folder.parents.length !== 1 || folder.parents[0] === folder.driveId)) ||
-          !folder.capabilities?.canListChildren
-      ) ||
+      folders.some(unusableFolder) ||
       folders[0].driveId !== folders[1].driveId ||
       (maintenance && !parentsVisible) ||
       (parentsVisible && !isDeepStrictEqual(folders[0].parents, folders[1].parents))
@@ -364,77 +368,91 @@ async function verifyTree(directory) {
   }
 }
 
+/** Only the latest push run on master, at the reviewed seed commit, may create the first reference. */
+async function canSeed(env, github) {
+  return (
+    env.SEED_SHA === env.GITHUB_SHA &&
+    env.GITHUB_REF === "refs/heads/master" &&
+    env.GITHUB_EVENT_NAME === "push" &&
+    (await github.current(env.GITHUB_SHA, env.GITHUB_RUN_ID, env.GITHUB_RUN_ATTEMPT))
+  );
+}
+
+/** Extract the current master reference into a fresh snapshot directory, or seed the first one. */
+async function downloadReference(env, drive, github, workspace) {
+  const snapshots = ".visual/snapshots";
+  if (existsSync(snapshots)) throw new Failure("Reference download requires a fresh snapshot directory");
+  await mkdir(snapshots, { recursive: true });
+  let seed = false,
+    baseline = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const batch = currentReference(await drive.batches(env.REFERENCES_FOLDER));
+    if (!batch) {
+      if (!(await canSeed(env, github))) throw new Failure("No reference exists; explicit master seeding is required");
+      seed = true;
+      break;
+    }
+    try {
+      const archive = join(workspace, "reference.tar");
+      await drive.download(batch, archive);
+      await extractSnapshots(archive, snapshots);
+      await unlink(archive);
+      baseline = batch.properties.sha;
+      break;
+    } catch (error) {
+      // A promotion may delete the listed reference before its download, so the listing runs again.
+      if (error.status !== 404 || attempt === 2) throw error;
+    }
+  }
+  await writeFile(".visual/context.json", JSON.stringify({ baseline, seed }));
+  await appendFile(
+    env.GITHUB_ENV,
+    `VISUAL_SEED=${seed}\nPLAYWRIGHT_SNAPSHOT_DIR=.visual/snapshots\nPLAYWRIGHT_VISUAL_REPORT=.visual/results.json\n`
+  );
+}
+
+/** Upload this run's batch: a branch result, or the master reference that stage publishes. */
+async function uploadBatch(env, mode, drive, github, workspace) {
+  const stage = mode === "stage";
+  const props = {
+    sha: testedHead(env),
+    run_id: env.GITHUB_RUN_ID,
+    run_number: env.GITHUB_RUN_NUMBER,
+    attempt: env.GITHUB_RUN_ATTEMPT,
+  };
+  if (stage && !(await github.current(props.sha, props.run_id, props.attempt))) {
+    // Master moving on mid-run is routine: the newer run stages its own reference.
+    if ((await github.request("git/ref/heads/master")).object.sha === props.sha)
+      throw new Failure("Only the latest main.yaml push run on master can stage references");
+    await appendFile(
+      env.GITHUB_STEP_SUMMARY,
+      "\nMaster moved on during this run; the newer run stages the reference.\n"
+    );
+    return;
+  }
+  const batch = await drive.upload(
+    stage ? env.REFERENCES_FOLDER : env.RESULTS_FOLDER,
+    env.BATCH_ARCHIVE,
+    props,
+    join(workspace, stage ? "reference-id" : "result-id")
+  );
+  await appendFile(
+    env.GITHUB_STEP_SUMMARY,
+    `\n[Private Playwright batch](https://drive.google.com/file/d/${batch.id}/view)\n`
+  );
+}
+
 async function main() {
   const env = process.env;
   const mode = process.argv[2];
   const github = new GitHub(env.GITHUB_REPOSITORY, env.GH_TOKEN);
   const drive = new Drive(env.DRIVE_TOKEN, env.GITHUB_REPOSITORY);
-  const references = env.REFERENCES_FOLDER,
-    results = env.RESULTS_FOLDER;
-  await drive.validateFolders(references, results, ["stage", "cleanup"].includes(mode));
+  await drive.validateFolders(env.REFERENCES_FOLDER, env.RESULTS_FOLDER, ["stage", "cleanup"].includes(mode));
   const workspace = join(env.RUNNER_TEMP, "playwright-drive");
   await mkdir(workspace, { recursive: true });
-  if (mode === "download") {
-    const snapshots = ".visual/snapshots";
-    if (existsSync(snapshots)) throw new Failure("Reference download requires a fresh snapshot directory");
-    await mkdir(snapshots, { recursive: true });
-    let seed = false,
-      baseline = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const batch = currentReference(await drive.batches(references));
-      if (!batch) {
-        seed =
-          env.SEED_SHA === env.GITHUB_SHA &&
-          env.GITHUB_REF === "refs/heads/master" &&
-          env.GITHUB_EVENT_NAME === "push" &&
-          (await github.current(env.GITHUB_SHA, env.GITHUB_RUN_ID, env.GITHUB_RUN_ATTEMPT));
-        if (!seed) throw new Failure("No reference exists; explicit master seeding is required");
-        break;
-      }
-      try {
-        const archive = join(workspace, "reference.tar");
-        await drive.download(batch, archive);
-        await extractSnapshots(archive, snapshots);
-        await unlink(archive);
-        baseline = batch.properties.sha;
-        break;
-      } catch (error) {
-        if (error.status !== 404 || attempt === 2) throw error;
-      }
-    }
-    await writeFile(".visual/context.json", JSON.stringify({ baseline, seed }));
-    await appendFile(
-      env.GITHUB_ENV,
-      `VISUAL_SEED=${seed}\nPLAYWRIGHT_SNAPSHOT_DIR=.visual/snapshots\nPLAYWRIGHT_VISUAL_REPORT=.visual/results.json\n`
-    );
-  } else if (["upload", "stage"].includes(mode)) {
-    const props = {
-      sha: testedHead(env),
-      run_id: env.GITHUB_RUN_ID,
-      run_number: env.GITHUB_RUN_NUMBER,
-      attempt: env.GITHUB_RUN_ATTEMPT,
-    };
-    if (mode === "stage" && !(await github.current(props.sha, props.run_id, props.attempt))) {
-      // Master moving on mid-run is routine: the newer run stages its own reference.
-      if ((await github.request("git/ref/heads/master")).object.sha === props.sha)
-        throw new Failure("Only the latest main.yaml push run on master can stage references");
-      await appendFile(
-        env.GITHUB_STEP_SUMMARY,
-        "\nMaster moved on during this run; the newer run stages the reference.\n"
-      );
-      return;
-    }
-    const batch = await drive.upload(
-      mode === "stage" ? references : results,
-      env.BATCH_ARCHIVE,
-      props,
-      join(workspace, mode === "stage" ? "reference-id" : "result-id")
-    );
-    await appendFile(
-      env.GITHUB_STEP_SUMMARY,
-      `\n[Private Playwright batch](https://drive.google.com/file/d/${batch.id}/view)\n`
-    );
-  } else if (mode === "cleanup") await cleanup(drive, github, results, references);
+  if (mode === "download") await downloadReference(env, drive, github, workspace);
+  else if (mode === "upload" || mode === "stage") await uploadBatch(env, mode, drive, github, workspace);
+  else if (mode === "cleanup") await cleanup(drive, github, env.RESULTS_FOLDER, env.REFERENCES_FOLDER);
   else throw new Failure("Unknown storage operation");
 }
 
