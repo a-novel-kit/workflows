@@ -1,13 +1,17 @@
 name: approve bot
-description: Records a pull request approval on every invocation. Only enable this for a specific set of users.
+description: >
+  Approve a pull request as the token's identity. The action checks no policy of its own, so the
+  caller decides who may trigger it.
 
 inputs:
   pull_request:
     required: true
-    description: URL or number of the pull request to approve. A number refers to the calling repository.
+    description: >
+      URL or number of the pull request to approve. A number refers to the calling repository. With
+      head_sha set, the pull request must belong to the calling repository.
   github_token:
     required: true
-    description: The GitHub token to use for the action.
+    description: Token with pull requests write, which approves and, when the head moves, dismisses the review.
   head_sha:
     required: false
     default: ""
@@ -33,8 +37,9 @@ runs:
           exit 0
         fi
         review="$(gh api "$pull/reviews" --method POST -f event=APPROVE -f commit_id="$HEAD_SHA" --jq .id)"
-        # Whether GitHub counts an older commit's approval after a push is undocumented, so a head that
-        # moved meanwhile withdraws it. A push after this read dismisses the approval as stale.
+        # GitHub does not document whether an older commit's approval counts after a push, so a head
+        # that moved meanwhile withdraws it. A push after this read is left to the branch rules, which
+        # dismiss a stale approval.
         if [ "$(gh api "$pull" --jq .head.sha)" != "$HEAD_SHA" ]; then
           gh api "$pull/reviews/$review/dismissals" --method PUT -f event=DISMISS \
             -f message="The head moved past the approved commit." >/dev/null

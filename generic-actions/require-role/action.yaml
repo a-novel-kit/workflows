@@ -1,10 +1,10 @@
 name: require-role
 description: >
-  Fails the job unless the person who started this run attempt holds one of the allowed roles on the
+  Fail the job unless the person who started this run attempt holds one of the allowed roles on the
   repository. Anyone with write access can dispatch or re-run a workflow, so a workflow reserved for
-  admins or maintainers calls this as its first step. It checks `github.triggering_actor`, because
-  `github.actor` still names the original dispatcher on a re-run, and it reads the role name, because
-  the legacy permission field reports Maintain as write.
+  admins or maintainers calls this action as its first step. The action checks
+  `github.triggering_actor`, because `github.actor` still names the original dispatcher on a re-run.
+  It reads the role name, because the legacy permission field reports Maintain as write.
 
 inputs:
   roles:

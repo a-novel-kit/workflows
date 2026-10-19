@@ -20,8 +20,7 @@ runs:
       uses: actions/setup-go@v7
       with:
         go-version-file: ${{ inputs.working_directory && format('{0}/go.mod', inputs.working_directory) || 'go.mod' }}
-        # setup-go keys one cache on go.sum for every Go job in the repo, so the first
-        # job to finish decided whether the generator tools arrived compiled.
+        # Each Go action keeps its own cache, since setup-go keys one cache on go.sum for every Go job.
         cache: false
     - id: go-cache
       uses: actions/cache/restore@v6

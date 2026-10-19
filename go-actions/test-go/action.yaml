@@ -51,8 +51,7 @@ runs:
       if: ${{ inputs.skip_setup != 'true' }}
       with:
         go-version-file: "go.mod"
-        # setup-go keys one cache on go.sum for every Go job in the repo, so the first
-        # job to finish decided whether the dependencies arrived compiled.
+        # Each Go action keeps its own cache, since setup-go keys one cache on go.sum for every Go job.
         cache: false
     - id: go-cache
       uses: actions/cache/restore@v6
@@ -69,15 +68,11 @@ runs:
       env:
         PACKAGES: ${{ runner.temp }}/go-test-packages.txt
       run: |
-        # Enumerate every package across every module. Iterating modules from
-        # `go list -m` is what makes this work in a Go workspace, where packages
-        # span more than one module and a single `go list ./...` reaches only one.
+        # Lists the packages of every module from `go list -m`, since one `go list ./...` reaches a
+        # single module of a Go workspace.
         #
-        # Every read is checked, and the resulting set has to be non-empty. An empty list is
-        # passed to gotestsum as no package arguments at all, which makes it default to `.` — a
-        # directory that in most of these modules holds no test files. It reports `DONE 0 tests`
-        # and exits 0, coverage comes out as the bare `mode: set` header, and the job goes green
-        # having run nothing. This action is the only place these tests run.
+        # An empty set fails. gotestsum given no package tests `.`, which holds no tests in most
+        # modules, and passes with coverage reduced to its `mode: set` header.
         discover_modules() {
           local root modules mod packages
 
@@ -99,9 +94,8 @@ runs:
               return 1
             fi
 
-            # A module contributing nothing is legitimate — every one of its packages may be
-            # filtered out, and then the filter chain's last grep exits 1. Only the emptiness of
-            # the whole set is a failure, so it is checked once, below.
+            # A module may list no package, or the filters may drop all of them. Only an empty set
+            # overall fails, below.
             [ -n "$packages" ] || continue
 
             printf '%s\n' "$packages" ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }} >>"$PACKAGES"

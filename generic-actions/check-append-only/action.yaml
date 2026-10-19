@@ -1,8 +1,8 @@
 name: check append-only
 description: >
-  Allow new files under a path while rejecting changes to existing files. A visible PR label is the
-  deliberate override for bulk regeneration or another reviewed exception. It approves the head it was
-  added on: a push is checked without it, and removes it when a token is given.
+  Allow new files under a path and reject changes to existing ones. A visible pull request label
+  overrides the check for bulk regeneration or another reviewed exception. The label approves the
+  head it was added on. A push is checked without it, and the push removes it when a token is given.
 
 inputs:
   path:
@@ -11,18 +11,18 @@ inputs:
   base:
     required: true
     description: >
-      Full base-branch commit SHA. The checkout must use `fetch-depth: 0`; shallow history fails
-      closed because Git cannot resolve the pull request's merge base reliably.
+      Full base-branch commit SHA. The checkout must use `fetch-depth: 0`. A shallow history fails the
+      check, because Git cannot resolve the pull request's merge base reliably in it.
   override_label:
     required: false
     default: append-only-override
-    description: PR label that bypasses the check. Empty disables the override.
+    description: Pull request label that bypasses the check. Empty disables the override.
   github_token:
     required: false
     default: ""
     description: >
-      Token with pull requests write. With it, a push removes the override label so a reviewer can add
-      it again for the new head; without it, a push only ignores the label.
+      Token with pull requests write. With it, a push removes the override label, so a reviewer adds
+      it again for the new head. Without it, a push only ignores the label.
 
 runs:
   using: composite

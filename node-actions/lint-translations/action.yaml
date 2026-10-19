@@ -1,10 +1,10 @@
 name: lint translations
 description: >
-  Check a platform's translation catalogs: structure always, then on a branch push or pull request the
-  gaps and drift the branch introduced since its merge base with the default branch. The PR labels
-  allow-incomplete-translations and allow-translation-drift accept those two, except on the run for a
-  pull request push, since each approved an earlier head; a merge group checks structure only. Later
-  checks still run after an earlier finding, so one run reports every problem.
+  Check a platform's translation catalogs. Every run checks their structure. A branch push or a pull
+  request also checks the gaps and drift the branch introduced since its merge base with the default
+  branch. The allow-incomplete-translations and allow-translation-drift labels accept those, except on
+  the run for a pull request push, since each label approved an earlier head. Every check runs after
+  an earlier finding, so one run reports every problem.
 inputs:
   github_token:
     required: true

@@ -1,24 +1,25 @@
 name: discord-post
 description: >
   Post one embed to a Discord channel webhook: a colored side bar naming the event's state, a title
-  linking to GitHub, and a Markdown body. Pings are limited to the role and user ids passed in, so
-  text copied from a PR title or release notes can never ping anyone. A notification never fails the
-  job it reports on: delivery errors end as a warning, and an empty webhook skips the post. A map of
-  webhooks routes the post to its repository's own channel.
+  linking to GitHub, and a Markdown body. Only the role and user ids passed in can be pinged, so text
+  copied from a pull request title or release notes pings nobody. A map of webhooks routes the post
+  to its repository's own channel. Delivery errors end as a warning and an empty webhook skips the
+  post, so a notification fails its job only on a caller error, such as an unknown color.
 
 inputs:
   webhook:
     required: false
     default: ""
     description: >
-      Discord channel webhook URL, passed from a secret. Empty skips the post, so a repository
-      without the secret stays quiet.
+      Discord channel webhook URL, which is a secret. Empty skips the post, unless webhooks holds an
+      entry for the repository.
   webhooks:
     required: false
     default: ""
     description: >
-      JSON map from "<org>/<repo>" to a channel webhook URL, passed from a secret. The entry for
-      repository wins over webhook, so a repository missing from the map posts to webhook.
+      JSON map from "<org>/<repo>" to a channel webhook URL, which is a secret. The entry for
+      repository wins over webhook, so a repository missing from the map posts to webhook. A value
+      that is not a JSON object also falls back to webhook, with a warning.
   repository:
     required: false
     default: ${{ github.repository }}
@@ -94,7 +95,7 @@ runs:
           *) echo "::error::unknown color \"$COLOR\""; exit 1 ;;
         esac
 
-        # Snowflakes are digits; anything else is a caller bug that would otherwise ping nobody.
+        # Discord ids are digits only. Any other value is a caller bug and fails the step.
         for list in MENTION_ROLES MENTION_USERS; do
           if printf '%s' "${!list}" | tr ', ' '\n' | grep -qv '^[0-9]*$'; then
             echo "::error::${list,,} must hold Discord ids (digits only)"
@@ -104,8 +105,8 @@ runs:
         roles=$(printf '%s' "$MENTION_ROLES" | tr ', ' '\n' | jq -Rn '[inputs | select(length > 0)]')
         users=$(printf '%s' "$MENTION_USERS" | tr ', ' '\n' | jq -Rn '[inputs | select(length > 0)]')
 
-        # Mobile push notifications show `content`, not the embed, so a pinged message repeats its
-        # title there. jq slices strings by character, which keeps a cut multibyte character whole.
+        # Mobile push notifications show `content` and skip the embed, so a pinged message repeats its
+        # title there. jq slices strings by codepoint, so a cut never splits a multibyte character.
         payload=$(jq -cn \
           --arg title "$TITLE" --arg url "$URL" --arg description "$DESCRIPTION" \
           --arg footer "$FOOTER" --argjson bar "$bar" \
@@ -145,7 +146,7 @@ runs:
         fi
 
         # Discord answers 204 on success, 429 when rate limited and 5xx transiently. curl runs
-        # without --fail so those codes are captured and retried.
+        # without --fail, so the loop reads every status and retries any non-2xx answer.
         code=000
         for attempt in 1 2 3; do
           code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' \

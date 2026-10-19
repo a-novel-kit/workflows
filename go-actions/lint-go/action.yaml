@@ -15,12 +15,8 @@ runs:
     - id: setup-go
       uses: actions/setup-go@v7.0.0
       with:
-        # Resolve go.mod relative to working-directory so the action works when the
-        # Go module is not at the repo root. An empty working-directory falls back
-        # to the repo-root go.mod.
         go-version-file: ${{ inputs.working-directory && format('{0}/go.mod', inputs.working-directory) || 'go.mod' }}
-        # setup-go keys one cache on go.sum for every Go job in the repo, so the first
-        # job to finish decided what the others restored. Each Go action keeps its own.
+        # Each Go action keeps its own cache, since setup-go keys one cache on go.sum for every Go job.
         cache: false
     - id: go-cache
       uses: actions/cache/restore@v6
@@ -30,13 +26,9 @@ runs:
           ~/.cache/go-build
         key: go-lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('**/*.sum') }}
         restore-keys: go-lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-
-    # golangci-lint.mod is the single source of truth for the version developers run
-    # locally (`go tool -modfile=golangci-lint.mod golangci-lint`): Renovate bumps it
-    # and CI follows, with no version literal here to drift.
-    #
-    # The prebuilt binary below never reads golangci-lint.sum, so an incomplete one
-    # would rot until the local command fails with `missing go.sum entry`. Loading the
-    # tool's import graph fails on exactly those entries without compiling the tool.
+    # golangci-lint.mod pins the version developers run locally, and CI reads it from there.
+    # The prebuilt binary never reads golangci-lint.sum, so loading the tool's import graph checks
+    # that file for missing entries without compiling the tool.
     - id: golangci-version
       shell: bash
       env:

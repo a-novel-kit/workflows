@@ -1,27 +1,27 @@
 name: lint semgrep
 description: >
-  Enforce the A-Novel structural conventions golangci-lint cannot express: a call that must be
-  present, a pairing that must hold. The ruleset ships with the action, so a consuming repo carries
-  no semgrep config. Rules are read from disk — no network call, so nothing off-repo can stall it.
+  Enforce the A-Novel structural conventions that golangci-lint cannot express, such as a call that
+  must be present or a pairing that must hold. The ruleset ships with the action, so a consuming repo
+  carries no semgrep config. Semgrep reads the rules from disk, so no rule registry can stall the
+  scan.
 
 inputs:
   ruleset:
     required: false
     default: "service"
     description: >
-      "service" for the clean-architecture layout; "none" for libraries, whose conventions
-      golangci-lint already covers.
+      Ruleset to enforce. "service" fits the clean-architecture layout. "none" fits a library, whose
+      conventions golangci-lint already covers, and skips the scan.
   advisory:
     required: false
     default: "false"
     description: >
-      When "true", findings go to the run summary and the log but the check passes — for a repo
-      adopting the rules over an existing backlog. When "false" (the default), any finding fails.
+      When "true", findings go to the run summary and the log, and the check passes. When "false",
+      any finding fails the check. A scan that fails to run fails either way.
   version:
     required: true
     description: >
-      semgrep image tag. Pinned by the caller so Renovate bumps it per repo instead of every
-      upgrade waiting on a workflows release. Annotate it:
+      semgrep image tag. The caller pins it so Renovate bumps it per repo, with the annotation
       `# renovate: datasource=docker depName=semgrep/semgrep`.
 
 runs:

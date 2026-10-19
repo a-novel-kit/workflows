@@ -1,11 +1,9 @@
 name: approve-pr
 description: >
-  Approves a pull request through the App on behalf of a repo admin or maintainer — in
-  practice, one approving their own PR. Self-approval is normally forbidden because it
-  makes review pointless, but it is tolerated for them as an escape hatch: to act
-  under urgency, or to set things up when no other contributor is available to
-  review. `require-role` keeps it to that case, refusing to run for anyone below
-  Maintain. Wraps `approve-bot`.
+  Approve a pull request as a GitHub App on behalf of a repository admin or maintainer, usually one
+  approving their own pull request. Self-approval skips review, so it stays an escape hatch for urgent
+  work or for a repository with no other reviewer. `require-role` refuses anyone below Maintain, and
+  `approve-bot` records the approval.
 
 inputs:
   client_id:
@@ -16,34 +14,29 @@ inputs:
     description: Private key (PEM) of that App.
   pull_request:
     required: true
-    description: URL (or number) of the pull request to approve.
+    description: URL or number of a pull request in the calling repository.
   kill_switch:
     required: false
     default: ""
     description: >
-      Org-level HALT, threaded from the caller as `kill_switch: vars.AGENT_KILL_SWITCH`
-      (a composite action cannot read the `vars` context itself). FAIL-SAFE: this action is RUNNING
-      only when the value (lowercased, whitespace-stripped) is an explicit off-token — empty/unset,
-      0, off, false, no, disabled; ANYTHING ELSE (a fat-fingered value or garbage) engages the halt.
-      When engaged this mutating, human-triggered action aborts LOUD (exit 1) before minting or
-      approving anything — lift the org kill-switch deliberately before recording an approval.
+      Org-wide halt switch. The action runs only when the value, lowercased and stripped of
+      whitespace, is empty, 0, off, false, no or disabled. Any other value halts it, so a mistyped
+      value fails safe. A halt fails the step before the role check, the token mint and the approval.
 
 runs:
   using: composite
   steps:
-    # Org-level halt, read before the role check or any mint. A human-triggered mutation aborts
-    # loudly so the operator sees the halt and lifts it deliberately.
+    # The org-wide halt is read first. A person triggers this action, so a halt fails the step where
+    # that person sees it.
     - name: Halt guard (kill-switch)
       shell: bash
       env:
         KILL_SWITCH: ${{ inputs.kill_switch }}
       run: |
         set -euo pipefail
-        # Fail-safe: running only for an explicit off-token (empty/unset, 0, off, false, no,
-        # disabled); any other value engages the halt. A failing step stops the composite, so the
-        # role check, the mint and the approval never run.
+        # A failing step stops the composite, so the role check, the mint and the approval never run.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "::error::AGENT_KILL_SWITCH engaged — [Agent] automation is halted org-wide; approvals are refused. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to proceed."
             exit 1
@@ -54,8 +47,8 @@ runs:
       with:
         roles: admin,maintain
 
-    # Mint a token scoped to writing the PR review. The nested action addresses
-    # the pull request directly, so it does not need a checkout or contents access.
+    # The token only writes the review. approve-bot reaches the pull request through the API, so it
+    # needs no checkout and no contents access.
     - name: Mint approval token
       id: token
       uses: actions/create-github-app-token@v3

@@ -1,23 +1,29 @@
 name: self-hosted renovate
-description: Run a self-hosted Renovate pass against the repository, authenticated as the bot.
+description: Run a self-hosted Renovate pass over the calling repository as a GitHub App.
 
 inputs:
   repository_config:
     required: false
     default: "false"
-    description: Use the repository's class preset as the only source of update policy.
+    description: >
+      When "true", drop the workflows base preset this action extends globally, so the repository's
+      class preset is the only source of update policy.
   allowed_commands:
     required: false
-    description: Specify allowed commands for renovate post update actions.
+    description: >
+      Regular expressions of the post-upgrade commands Renovate may run. Empty keeps the action's
+      default, which allows pnpm install, format and dedupe.
   github_token:
     required: true
-    description: The GitHub token to use for the action.
+    description: >
+      Token that reads GitHub Packages. Renovate authenticates to npm.pkg.github.com with it and
+      passes it to the commands it runs as GITHUB_TOKEN.
   app_private_key:
     required: true
-    description: The GitHub App private key.
+    description: Private key of the GitHub App that Renovate runs as.
   client_id:
     required: false
-    description: GitHub App client id (recommended).
+    description: Client ID of that App. The token mint fails without it.
 
 runs:
   using: "composite"
@@ -36,7 +42,7 @@ runs:
         configurationFile: ${{ github.action_path }}/config.json
         docker-network: ${{ job.container.network }}
       env:
-        # Empty overrides preserve the JSON defaults for callers that have not migrated.
+        # An empty variable leaves the matching config.json setting in force.
         RENOVATE_GLOBAL_EXTENDS: ${{ inputs.repository_config == 'true' && '[]' || '' }}
         RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"

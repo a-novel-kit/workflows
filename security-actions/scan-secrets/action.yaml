@@ -1,13 +1,8 @@
 name: scan secrets
 description: >
   Scan the working tree for committed credentials with gitleaks. A baseline config ships with the
-  action; most repos need none of their own. Offline and sub-second, which is what makes it safe on
-  the merge path.
-
-  History is out of scope — a secret committed then deleted is invisible here. That belongs to a
-  scheduled sweep, where a network-dependent scan costs an investigation, not a blocked merge.
-
-  Uses the gitleaks binary, not gitleaks-action: the action's free tier covers one repo per org.
+  action, and most repos need none of their own. The scan runs offline, which keeps it safe on the
+  merge path. It reads the working tree alone, so a secret committed and later deleted goes unseen.
 
 inputs:
   config:
@@ -16,21 +11,21 @@ inputs:
     description: >
       Repo-local gitleaks config, relative to the workspace. Empty uses the shipped baseline.
 
-      A repo config REPLACES the baseline rather than adding to it. gitleaks rejects
-      `extend.path` together with `extend.useDefault`, and an extending config's allowlists
-      replace the base's rather than merging — so a repo needing one entry restates the rest.
-      Copy the shipped gitleaks.toml as the starting point.
+      A repo config replaces the baseline whole. gitleaks rejects `extend.path` together with
+      `extend.useDefault`, and an extending config's allowlists replace the base's. A repo that
+      needs one more allowlist entry therefore copies the shipped gitleaks.toml and adds to it.
   advisory:
     required: false
     default: "false"
     description: >
-      When "true", findings go to the run summary and the log but the check passes — for a repo
-      adopting the scan over an existing backlog. When "false" (the default), any finding fails.
+      When "true", redacted findings go to the run summary and the log, and the check passes. When
+      "false", any finding fails the check. A scan that fails to run fails either way.
   version:
     required: true
     description: >
-      gitleaks release tag, without the leading v. Pinned by the caller so Renovate bumps it per
-      repo. Annotate it: `# renovate: datasource=github-releases depName=gitleaks/gitleaks`.
+      gitleaks release tag, with or without the leading v. The caller pins it so Renovate bumps it
+      per repo, with the annotation
+      `# renovate: datasource=github-releases depName=gitleaks/gitleaks`.
 
 runs:
   using: composite
@@ -41,16 +36,14 @@ runs:
         GITLEAKS_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        # gitleaks tags its releases v-prefixed but names the archive without it.
-        # Accept either spelling of the input so a bump that keeps the v still resolves.
+        # gitleaks tags its releases with a v and names the archive without one, so the input works
+        # either way. The binary runs directly, because gitleaks-action's free tier covers one repo
+        # per organization.
         v="${GITLEAKS_VERSION#v}"
         tmp=$(mktemp -d)
-        # Downloaded to a file, then extracted, rather than piped into tar. `--retry-all-errors` is
-        # what retries a transport-level reset (curl exit 35); plain `--retry` covers only transient
-        # HTTP statuses and timeouts. Retrying into a pipe would not help either — curl restarts the
-        # transfer while tar has already consumed the partial bytes. The sibling shellcheck download
-        # failed exactly this way, reddening a PR that only bumped prettier; this one is the same
-        # shape and was fixed with it.
+        # curl restarts a retried transfer from its first byte, so the archive lands in a file before
+        # tar reads it. `--retry-all-errors` also retries a transport-level reset (curl exit 35),
+        # which plain `--retry` leaves fatal.
         if ! curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors \
           "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
           -o "$tmp/gitleaks.tar.gz"; then
@@ -78,6 +71,6 @@ runs:
           exit 1
         fi
 
-        # Reserve 10 for findings; gitleaks uses 1 for configuration and execution errors.
+        # Exit code 10 marks findings, apart from the 1 that gitleaks returns on its own errors.
         node "$ACTION_PATH/../run-scan.mjs" gitleaks \
           gitleaks dir . --config "$config" --redact --exit-code 10 --verbose

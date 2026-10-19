@@ -1,22 +1,26 @@
 name: maintain playwright
-description: Promote successful master screenshot batches and remove superseded or merged/deleted branch evidence from Drive.
+description: >
+  Maintain the Drive store of `test-playwright`. A staged reference batch is published once its
+  browser tests passed and its commit is still master's head, and older references are deleted. Each
+  live branch keeps its newest completed result batch, and batches of merged or deleted branches are
+  deleted.
 
 inputs:
   github_token:
     required: true
-    description: Read-only token for verifying run completion, current master and live branches.
+    description: Read-only token that checks each batch's run, the master head and the live branches.
   identity_provider:
     required: true
-    description: Trusted default-branch maintenance Workload Identity provider.
+    description: Workload Identity provider that admits only the default branch's maintenance job.
   service_account:
     required: true
-    description: Trusted service account able to publish and permanently delete batches in both configured folders.
+    description: Service account that can add and permanently delete batches in both folders.
   references_folder:
     required: true
-    description: Platform references folder ID inside a Shared Drive.
+    description: ID of the platform's references folder inside a Shared Drive.
   results_folder:
     required: true
-    description: Sibling platform results folder ID inside a Shared Drive.
+    description: ID of the platform's results folder, a sibling of the references folder.
 
 runs:
   using: composite

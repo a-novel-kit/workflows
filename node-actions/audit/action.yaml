@@ -1,8 +1,8 @@
 name: audit
 description: >
   Run pnpm audit --fix and open or update one pull request with the resulting dependency fixes, as
-  the bot. Pass the Dependencies App, whose pull requests the auto-approver approves like a Renovate
-  update; no bot pushes the default branch.
+  the given App. Pass a dependency bot's App, so the auto-approver treats the pull request like a
+  Renovate update.
 
 inputs:
   github_token:
@@ -38,30 +38,25 @@ runs:
         permission-pull-requests: write
     - name: run audit
       shell: bash
-      # --fix takes a mode since pnpm 11; "override" pins vulnerable transitive
-      # dependencies through pnpm-workspace.yaml overrides, leaving direct ones alone.
+      # --fix=override pins vulnerable transitive dependencies through pnpm-workspace.yaml
+      # overrides and leaves direct ones alone.
       env:
-        # Unfreeze any install pnpm triggers here: CI freezes the lockfile by
-        # default, and the overrides `audit --fix` writes make it mismatch the
-        # committed one.
+        # The overrides make the lockfile mismatch the committed one, so installs here unfreeze it.
         npm_config_frozen_lockfile: "false"
       run: |
         set -euo pipefail
         pnpm audit --fix=override
-        # The overrides are all audit changes. Without one there is nothing to reconcile, format
-        # or commit, and a repo's format script can otherwise take minutes (go mod tidy, lint fixes).
+        # The overrides are the audit's whole change. Without one, the run skips the format script,
+        # which can take minutes.
         if [ -z "$(git status --porcelain -- pnpm-workspace.yaml)" ]; then
           echo "No audit fixes."
           exit 0
         fi
-        # `pnpm audit --fix` rewrites the overrides but leaves the lockfile stale, so
-        # reconcile it before `pnpm format`: pnpm 11 runs a verify-deps-before-run
-        # pre-hook on any `pnpm <script>`, which spawns a frozen install and aborts
-        # with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
+        # The audit leaves the lockfile stale, and pnpm's verify-deps hook before `pnpm format` runs
+        # a frozen install that aborts with ERR_PNPM_LOCKFILE_CONFIG_MISMATCH. Reconcile it first.
         pnpm i --no-frozen-lockfile
         pnpm format
-    # Only the files the audit owns are committed: whatever else the format script touches
-    # (a go.sum tidy, lint fixes) would otherwise reach master unreviewed under this message.
+    # The commit carries only the files the audit owns, whatever else the format script touched.
     - name: check diff
       id: check_diff
       shell: bash

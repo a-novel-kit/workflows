@@ -1,27 +1,27 @@
 name: lint workflows
 description: >
-  Audit GitHub Actions workflows with zizmor. Replaces CodeQL's `actions` analysis: its
-  `excessive-permissions` is the class CodeQL reported as `actions/missing-workflow-permissions`,
-  plus checkout credential leaks, cache poisoning and floating refs. Config ships with the action;
-  runs `--offline`.
+  Audit a repo's GitHub Actions workflows with zizmor, in place of CodeQL's `actions` analysis.
+  zizmor reports CodeQL's `actions/missing-workflow-permissions` as `excessive-permissions`, and adds
+  checkout credential leaks, cache poisoning and floating refs. The baseline config ships with the
+  action, and zizmor runs offline. A repo without `.github/workflows` passes.
 
 inputs:
   config:
     required: false
     default: ""
     description: >
-      Path to a repo-local zizmor config, relative to the workspace. Empty (the default) uses the
-      baseline shipped with this action.
+      Path to a repo-local zizmor config, relative to the workspace. Empty uses the baseline shipped
+      with this action.
   advisory:
     required: false
     default: "false"
     description: >
-      When "true", findings go to the run summary and the log but the check passes — for a repo
-      adopting the audit over an existing backlog. When "false" (the default), any finding fails.
+      When "true", findings go to the run summary and the log, and the check passes. When "false",
+      any finding fails the check. An audit that fails to run fails either way.
   version:
     required: true
     description: >
-      zizmor image tag. Pinned by the caller so Renovate bumps it per repo. Annotate it:
+      zizmor image tag. The caller pins it so Renovate bumps it per repo, with the annotation
       `# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor`.
 
 runs:

@@ -1,23 +1,25 @@
 name: check changes
-description: Check if there are uncommitted changes in the pathspec.
+description: >
+  Detect uncommitted changes under a pathspec, untracked files included, and fail on them by
+  default. Run after a generation step, it proves the committed output is current.
 
 inputs:
   pathspec:
-    description: "The pathspec to check for uncommitted changes. Defaults to the current directory."
+    description: Git pathspec to check.
     required: false
     default: "."
   fail_on_changes:
-    description: "Whether to fail the action if there are uncommitted changes. Defaults to true."
+    description: When "true", uncommitted changes fail the step. When "false", only the diff output reports them.
     required: false
     default: "true"
   fail_message:
-    description: "The message to display if there are uncommitted changes. Defaults to 'Uncommitted changes found in the pathspec.'"
+    description: Message printed when uncommitted changes fail the step.
     required: false
     default: "Uncommitted changes found in the pathspec."
 
 outputs:
   diff:
-    description: "Set to 1 when there are uncommitted changes in the pathspec; empty otherwise."
+    description: '"1" when the pathspec holds uncommitted changes, empty otherwise.'
     value: ${{ steps.check_diff.outputs.diff }}
 
 runs:

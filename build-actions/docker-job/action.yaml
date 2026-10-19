@@ -1,5 +1,5 @@
 name: build docker job
-description: Build a docker container from a Dockerfile, and make sure it completes successfully when run.
+description: Build an image from a Dockerfile, verify that its run exits 0, push it and attest its provenance.
 
 inputs:
   file:
@@ -12,10 +12,8 @@ inputs:
   version:
     required: false
     description: >
-      Explicit release version (e.g. 1.2.3) for the dispatched release flow. When
-      set, the image is tagged vX.Y.Z / vX.Y / vX / latest from it instead of from
-      the git ref (the workflow runs on the default branch, not the tag). Leave
-      empty for the legacy tag-push flow, which keeps the ref-derived tags.
+      Version of a dispatched release, such as 1.2.3, which runs on the default branch. The image is
+      then tagged vX.Y.Z, vX.Y, vX and latest from it. Empty derives the tags from the git ref.
   run_args:
     required: false
     description: Docker flags for the test run. Supports quoted values and $NAME/${NAME} environment references; command substitution is not evaluated.
@@ -32,7 +30,6 @@ inputs:
   context:
     required: false
     description: The context to use for the build.
-    # Default to the repository root so the build context matches local and CI builds.
     default: .
   secrets:
     description: "List of secrets to expose to the build (e.g., key=string, GIT_AUTH_TOKEN=mytoken)."
@@ -46,11 +43,9 @@ inputs:
   cache:
     required: false
     description: >
-      Reuse a cross-run GHA layer cache (type=gha) for the build. Default true,
-      which persists the go build + module cache so an image whose sources are
-      unchanged restores its previous compilation. Set false for images that do
-      not compile (e.g. a stock-base database image), where caching the large
-      base to GHA is pure overhead and can make the build slower than cold.
+      When "true", reuse a GitHub Actions layer cache across runs, so an image whose Go sources are
+      unchanged restores its compilation. Set "false" for an image that compiles nothing, such as a
+      stock database image, where caching the large base costs more time than it saves.
     default: "true"
 
 outputs:

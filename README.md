@@ -93,15 +93,15 @@ move a tag.
 | `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                |
 | `archive-board-items`    | Archive the repository's "Awaiting release" board items on release.                                              |
 | `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                          |
-| `board-write`            | Set one single-select or date board field as [Agent], the single write path.                                     |
+| `board-write`            | Set one single-select or date board field on issues or PRs, writing only on a change.                            |
 | `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                      |
 | `check-changes`          | Detect uncommitted changes in a pathspec, and optionally fail.                                                   |
 | `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.           |
 | `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.     |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                         |
-| `derive-status`          | Derive a Task's board Status from its PR's current state, as the single writer.                                  |
+| `derive-status`          | Derive the board Status of the issues a PR closes from the PR's current state.                                   |
 | `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
-| `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given, never fails the job. |
+| `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given.                      |
 | `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked and fail-soft.                          |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App, so it queues once green.                                    |
 | `epic-membership`        | Resolve an Epic's authorized member set: the open PRs labeled `epic:<N>`.                                        |

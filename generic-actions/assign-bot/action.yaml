@@ -1,13 +1,12 @@
 name: assign bot
 description: >
-  Assign a pull request to its author. A bot's pull request stays unassigned: an assignee would be
-  notified of every version bump, and a failing one already reaches the team through the Discord
-  dependencies feed.
+  Assign a pull request to its author. A bot's pull request stays unassigned, which spares a person
+  a notification for every version bump.
 
 inputs:
   github_token:
     required: true
-    description: The GitHub token to use for the action.
+    description: Token with pull requests write, which adds the assignee.
 
 runs:
   using: "composite"
