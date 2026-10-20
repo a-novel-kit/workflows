@@ -126,8 +126,9 @@ runs:
     - name: Reconstruct the Epic, derive bumps, drive each release.yaml
       shell: bash
       env:
-        # Every bare `gh` call reads with the read token. The dispatch and issue tokens apply inline
-        # at their call sites, so a read never holds a write scope.
+        # Every bare `gh` call reads with the read token. The dispatch token applies inline to the
+        # dispatches and to the run reads, which need Actions access, and the issue token to the
+        # receipt write.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         DISPATCH_TOKEN: ${{ steps.dispatch.outputs.token }}
         ISSUE_TOKEN: ${{ steps.issue.outputs.token }}
@@ -240,9 +241,9 @@ runs:
         }
 
         # Does a published GitHub Release exist for <tag>? A botched cut leaves a tag without one.
-        # `--silent` hides whether a failure is a 404 or a transient error, so every failure is
-        # retried, and a persistent one returns 1. The caller then reports a botched cut, which a
-        # re-dispatch clears once the read succeeds.
+        # gh exits 1 on a 404 and on a transient error alike, so every failure is retried, and a
+        # persistent one returns 1. The caller then reports a botched cut, which a re-dispatch clears
+        # once the read succeeds.
         release_exists() { # $1=owner/repo $2=tag
           for attempt in 1 2 3; do
             if gh api "repos/$1/releases/tags/$2" --silent >/dev/null 2>&1; then return 0; fi
@@ -336,7 +337,8 @@ runs:
         # Poll a run to completion and print its conclusion. A cut waits up to an hour at the protected
         # `release` environment for a person's approval. A rehearsal runs outside that environment, so
         # a rehearsal waiting there prints "blocked" at once, as does a cut nobody approves within the
-        # hour. A blocked run can still complete on approval, so the caller records it as parked.
+        # hour. A blocked run can still complete on approval, so the caller records it as parked. A
+        # run that keeps running past about 30 minutes prints "timeout".
         poll_run() { # $1=owner/repo $2=run_id $3=approval(true|false)
           local repo="$1" run_id="$2" approval="$3" polls=0 waits=0 st cc
           while [ "$polls" -lt 180 ]; do   # ~30 min of running at 10s (release-core can go install + build on a cold runner)
@@ -365,7 +367,7 @@ runs:
           printf 'timeout'; return 0
         }
 
-        # Snapshot a repo's v* / <dir>/v* tag set (one per line, sorted for `comm`).
+        # Snapshot a repository's `vX…` and `<dir>/vX…` tags, one per line, sorted for `comm`.
         tag_set() { # $1=owner/repo
           gh api "repos/$1/git/matching-refs/tags" --paginate --jq '.[].ref' 2>/dev/null \
             | sed 's|refs/tags/||' | grep -E '(^|/)v[0-9]' | sort -u || true

@@ -364,8 +364,8 @@ runs:
             + "\([.[] | select(.bucket=="open")] | length) open · "
             + "\([.[] | select(.bucket=="closed")] | length) closed-unmerged"')
 
-          # The managed region, timestamp included. $rows passes as a %s argument, which keeps its
-          # backticks literal.
+          # The managed region, timestamp included. $counts and $rows pass as %s arguments, so printf
+          # never reads a `%` or `\` in them as a format directive.
           local ts region_inner
           ts=$(date -u '+%Y-%m-%d %H:%M')
           region_inner=$(printf '### Epic status — display-only, derived from live GitHub truth (not authority)\n\n_Rendered %s UTC by the reconcile sweep. A lost or hand-edited table is cosmetic — every decision reads live state._\n\n%s\n\n| Repo | PR | State | SHA | Released |\n|------|----|-------|-----|----------|\n%s' \
@@ -403,7 +403,7 @@ runs:
             return 0
           fi
 
-          # A narrow window remains between the re-read and this write. A snapshot write inside it is
+          # A narrow window remains between the read and this write. A snapshot write inside it is
           # overwritten with the marker the body held before. merge-gate retries when its verify sees
           # the loss, and otherwise its next pass decides again from the restored marker.
           local region_file body_file spliced_file
@@ -442,7 +442,8 @@ runs:
         # fd 3 isolates the outer loop's input from every gh call inside render_epic.
         while IFS= read -r epic <&3; do
           [ -n "$epic" ] || continue
-          # Defense in depth: the number feeds a `label:"epic:<N>"` search qualifier.
+          # enumerate_epics emits digits only. The number feeds a `label:"epic:<N>"` search qualifier,
+          # so it is checked again here.
           if ! [[ "$epic" =~ ^[0-9]+$ ]]; then
             echo "::warning::skipping non-numeric epic token \"$epic\""
             continue

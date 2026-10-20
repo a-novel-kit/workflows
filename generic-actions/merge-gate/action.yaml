@@ -7,8 +7,8 @@ description: >
   A pull request belongs to Epic N when it carries the `epic:<N>` label. Applying a label needs
   triage access, so the label is a permission-gated claim. A `Closes` keyword is author-controlled,
   and the gate uses it only to suggest the label. A pull request without an `epic:<N>` label is
-  standalone and passes. On a pull_request event its labels come from the payload, so an ordinary
-  pull request passes without an API read. An Epic member passes only when every member of its set,
+  standalone and passes. On a pull_request event its labels come from the payload, so a GraphQL
+  outage cannot hold an ordinary pull request. An Epic member passes only when every member of its set,
   resolved through epic-membership, is non-draft, approved and passing `review-gate`. The set's
   cross-repo pull requests therefore land together.
 
@@ -105,8 +105,9 @@ runs:
         permission-pull-requests: read
 
     # Post the verdict for every case that needs no member set: the halt, a misconfigured caller, a
-    # paused Epic, unreadable labels and a standalone pull request. An Epic member emits its Epic
-    # number for the resolve and evaluate steps instead.
+    # merge group that names no pull request, unreadable or truncated labels, a paused Epic and a
+    # standalone pull request. An Epic member emits its Epic number for the resolve and evaluate
+    # steps instead.
     - name: Classify PR (standalone vs Epic member)
       id: discover
       shell: bash
@@ -179,9 +180,8 @@ runs:
         }
 
         # Read a pull request's labels and its `Closes` parent in one query, retrying transient
-        # GraphQL errors. Prints the response JSON, or prints nothing and returns 1, and the caller
-        # chooses between holding and passing. A null `pullRequest` also counts as a failure, which
-        # lets the caller post its hold.
+        # GraphQL errors. Prints the response JSON, or prints nothing and returns 1 on an error or a
+        # null `pullRequest`. The label read then holds, and the hint read drops the hint.
         fetch_pr() { # $1=pr number
           local q data
           q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
@@ -643,7 +643,7 @@ runs:
             frozen | retired) return 0 ;;
           esac
           # A pending marker whose `at` cannot be parsed never ages, so it stays unsettled however
-          # equal its members look. The decision step routes it to a repairing write.
+          # equal its members look. The decision above routes it to a repairing write.
           printf '%s' "$1" | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null 2>&1
         }
 

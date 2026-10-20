@@ -11,9 +11,9 @@ description: >
   wave. The snapshot fixes who the members are, and each member's state is read live on every run.
   A `pending` or `retired` marker counts as no snapshot, so the live label set applies.
 
-  The action only reads. It fails when it cannot read the Epic issue or complete the label search,
-  and it reports an empty set when it cannot re-read every frozen member. The caller decides
-  whether either outcome holds or passes.
+  The action only reads. A missing Epic issue counts as no snapshot. The action fails when any other
+  read of the Epic issue fails or the label search cannot complete, and it reports an empty set when
+  it cannot re-read every frozen member. The caller decides whether either outcome holds or passes.
 
 inputs:
   epic_number:
@@ -132,8 +132,8 @@ runs:
           | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
           | sed -n '/^[[:space:]]*[{[]/,$p' \
           | jq -s -c '.[0] // empty' 2>/dev/null || true)
-        # Only a frozen marker with a valid member list counts. A pending, malformed or misshapen
-        # marker leaves `frozen` empty, and the live search applies.
+        # Only a frozen marker listing 1 to 50 valid members counts, the cap merge-gate writes with. A
+        # pending, malformed or misshapen marker leaves `frozen` empty, and the live search applies.
         #
         # The guards are strict because `.repo` and `.number` go into the GraphQL document below, and
         # anyone who can edit the Epic issue can write the marker. The repo pattern excludes quotes and

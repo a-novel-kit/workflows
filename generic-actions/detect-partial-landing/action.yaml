@@ -80,8 +80,8 @@ inputs:
     required: false
     default: "true"
     description: >
-      When "true" (default), log every intended check post and re-enqueue without writing to GitHub.
-      Only "false" posts check-runs and re-enqueues.
+      Only "false", in any letter case, posts check-runs and re-enqueues. Any other value, the default
+      "true" included, logs every intended check post and re-enqueue without writing to GitHub.
   planning_repo:
     required: false
     default: .github
@@ -105,8 +105,8 @@ inputs:
       disabled, compared lowercased with whitespace removed. Any other value halts it, so a mistyped
       value stops automation. The flag resolves with no API call and is acted on before any
       evaluation. When halted, per-PR mode posts a `failure` hold on the head, because a skipped or
-      neutral required check passes. The sweep does nothing, because merge-gate holds every pull
-      request while halted.
+      neutral required check passes. The sweep posts and re-enqueues nothing, because merge-gate holds
+      every pull request while halted.
 
 runs:
   using: composite
@@ -228,13 +228,14 @@ runs:
     - name: Detect + reconcile partial landings
       shell: bash
       env:
-        # GH_TOKEN is the read token. The checks and write tokens are applied inline at the two
-        # mutating calls, so no read helper holds a write scope. WRITE_TOKEN is empty when its mint
-        # was skipped.
+        # GH_TOKEN is the read token. freeze_post and reenqueue apply the checks and write tokens
+        # inline, so no read helper holds a write scope. WRITE_TOKEN is empty when its mint was
+        # skipped.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         CHECKS_TOKEN: ${{ steps.checks.outputs.token }}
         WRITE_TOKEN: ${{ steps.write.outputs.token }}
-        # The open pull requests the scope step saved. Empty in per-PR mode or when its read failed.
+        # Path to the file of open pull requests the scope step saved. Empty in per-PR mode or when its
+        # read failed.
         OPEN_PRS: ${{ steps.scope.outputs.open_prs }}
         MODE: ${{ steps.mode.outputs.mode }}
         ORG: ${{ inputs.org }}
@@ -446,7 +447,7 @@ runs:
         # decides nothing.
         #
         # Prints the response. Returns 0 when read, 2 when the Epic issue does not exist, and 1 when the
-        # read failed. EPIC_ISSUE_ERR holds the last attempt's error text.
+        # read failed. The last attempt's error text is cached as <N>.err.
         epic_issue() { # $1 = epic number
           local f="${EPIC_CACHE}/$1.json" rcf="${EPIC_CACHE}/$1.rc" ef="${EPIC_CACHE}/$1.err"
           local resp errf attempt rc=1
@@ -516,8 +517,7 @@ runs:
           nodes=$(printf '%s' "$pages" | jq -s -c 'add // []' 2>/dev/null) || nodes='[]'
           total=$(printf '%s' "$nodes" | jq '[.[] | select(has("pull_request") | not)] | length' 2>/dev/null || echo 0)
           # fd 4 keeps the loop body's commands off this feed. The loop runs in this shell, so
-          # CLAIM_EPICS and CLAIM_MEMBERS persist. The list endpoint returns pull requests too, which
-          # carry a `pull_request` key. jq -c puts each issue on one line.
+          # CLAIM_EPICS and CLAIM_MEMBERS persist. jq -c puts each issue on one line.
           while IFS= read -r elem <&4; do
             n=$(printf '%s' "$elem" | jq -r '.number')
             # Prime epic_issue's cache with this issue.
@@ -561,7 +561,7 @@ runs:
         # Fills SNAP_MERGED, SNAP_CLOSED and SNAP_OPEN in search_prs' node shape, and SNAP_SINCE with
         # any valid wave boundary, a `retired` tombstone's included. Returns 0 when the frozen set
         # resolved, 2 when there is no usable snapshot and the live floor stands alone, and 1 when a
-        # frozen set exists but did not resolve. On 1, EV_DECISION stays error. The sweep then posts
+        # frozen set exists, or might, and did not resolve. On 1, EV_DECISION stays error. The sweep then posts
         # nothing, so a standing freeze stays, and per-PR mode fails open on its head.
         snapshot_buckets() { # $1 = epic number
           SNAP_MERGED='[]'
@@ -618,8 +618,8 @@ runs:
           fi
 
           [ -n "$marker" ] || return 2
-          # Only a well-formed frozen marker counts. A pending, hand-edited or misshapen marker falls
-          # back to the live floor.
+          # Only a well-formed frozen marker counts. A pending or misshapen marker falls back to the live
+          # floor.
           #
           # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
           # document below, and anyone with write access to the planning repo can edit the body. The
@@ -1039,6 +1039,8 @@ runs:
           # The freeze is still posted on every target, because a confirmed partial landing stays
           # frozen. The cap raises an ::error and sets the flag sweep_main checks after its loop, so the
           # sweep ends red without stopping mid-Epic.
+        # Evaluates one Epic and posts its decision. A paused Epic gets no post and no roll-forward, so
+        # its landing is under manual control.
           local distinct_repos
           distinct_repos=$(printf '%s' "$targets" | jq -r '[.[].repo] | unique | length')
           if [ "$distinct_repos" -gt "$MAX_FREEZE_REPOS" ]; then
@@ -1054,7 +1056,6 @@ runs:
         }
 
         sweep_epic() { # $1 = epic
-          # A paused Epic gets no post and no roll-forward, so its landing is under manual control.
           if epic_paused "$1"; then
             echo "epic #$1: automation:paused — skipping (no freeze / roll-forward this sweep)." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
@@ -1073,6 +1074,8 @@ runs:
         standalone_sweep() {
           local standalone count s_repo s_sha
           standalone=$(printf '%s' "$all_open" | jq -c '
+        # Runs the standalone backstop, then evaluates every active Epic in the org. Fails the run when
+        # enumeration fails or a freeze exceeded max_freeze_repos.
             [ .[]
               | select(.number != null)
               | select( ([(.labels.nodes // [])[].name] | map(test("^epic:[0-9]+$")) | any) | not )
@@ -1101,7 +1104,7 @@ runs:
             exit 1
           fi
 
-          # The jq `test` keeps only numeric `epic:<N>` labels, and the loop re-checks each number.
+          # The jq `test` keeps only numeric `epic:<N>` labels.
           local label_epics epics
           label_epics=$(printf '%s' "$all_open" | jq -r '
             [ .[] | (.labels.nodes // [])[].name | select(test("^epic:[0-9]+$")) | ltrimstr("epic:") ]
@@ -1109,7 +1112,8 @@ runs:
 
           # Epics reached through their frozen snapshot join the set, so an Epic whose last labeled pull
           # request was de-labeled is still evaluated. build_claim_index also primes the issue cache
-          # the loop reads.
+          # the loop reads. Each number feeds a `label:"epic:<N>"` search qualifier, so grep keeps only
+          # all-digit lines.
           build_claim_index
           epics=$(printf '%s\n%s\n' "$label_epics" "$CLAIM_EPICS" | grep -E '^[0-9]+$' | sort -un || true)
 

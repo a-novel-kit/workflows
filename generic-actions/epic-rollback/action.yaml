@@ -136,7 +136,7 @@ runs:
       run: |
         set -euo pipefail
 
-        # ---- Validate untrusted inputs before they reach a search grammar --------------------
+        # ---- Validate untrusted inputs before they reach a search, a token scope or an API path ----
         # epic_number builds `label:"epic:<N>"`, where a non-numeric value can close the quoted
         # qualifier and inject terms.
         if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
@@ -159,8 +159,8 @@ runs:
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
           exit 1
         fi
-        # The cap feeds shell arithmetic and a `-gt` compare, so it must be a positive integer. An
-        # empty value takes the default of 5.
+        # The cap feeds a `-gt` compare, so it must be a positive integer. An empty value takes the
+        # default of 5.
         MAX_ROLLBACK_REPOS="${MAX_ROLLBACK_REPOS:-5}"
         if ! [[ "${MAX_ROLLBACK_REPOS}" =~ ^[0-9]+$ ]] || [ "${MAX_ROLLBACK_REPOS}" -lt 1 ]; then
           echo "::error::max_rollback_repos must be a positive integer, got \"${MAX_ROLLBACK_REPOS:-}\""
@@ -186,7 +186,8 @@ runs:
         #
         # An unreadable or invalid boundary stops the run. An unscoped ledger also reverts retired
         # waves, and GitHub answers a malformed `merged:` qualifier with no rows. The Epic body is
-        # editable, so a rejected value is shown cut to one line.
+        # editable, so a rejected value is shown on one line of at most 64 characters. A boundary up
+        # to five minutes ahead of the runner's clock still passes.
         wave_since() { # $1 = Epic body. Prints the boundary, or nothing; 1 = unreadable
           local region marker since shown since_epoch
           region=$(printf '%s\n' "$1" | awk -v s='<!-- epic-membership:snapshot:start -->' \
@@ -412,10 +413,10 @@ runs:
         fi
 
         # ---- Output the ledger and the write token's repository scope --------------------------
-        # repos holds bare repository names, since the token's `owner:` supplies the owner. The
-        # planning repo joins them for the rollback Epic and its labels. A leaked write token reaches
-        # no repository outside this rollback. The mutation step reverts this exact ledger, so
-        # nothing drifts against a second search.
+        # The `repos` output holds bare repository names, since the token's `owner:` supplies the
+        # owner. The planning repo joins them for the rollback Epic and Epic N's `rolled-back` label.
+        # A leaked write token reaches no repository outside this rollback. The mutation step reverts
+        # this exact ledger, so nothing drifts against a second search.
         repos_csv=$(printf '%s' "$ledger" | jq -r --arg pr "$PLANNING_REPO" '([.[].repo | split("/")[1]] + [$pr]) | unique | join(",")')
         {
           echo "repos=${repos_csv}"
@@ -434,8 +435,8 @@ runs:
 
     # Write token, minted only on a live run that cleared every gate, and scoped to the Epic's
     # repositories plus the planning repo. contents pushes the revert branches, pull-requests opens,
-    # labels and arms the reverts, and issues writes the rollback Epic and the epic:<M> label. The
-    # App authors the reverts and GitHub refuses a self-approval, so a person approves the wave.
+    # labels and arms the reverts, and issues writes the rollback Epic, the epic:<M> labels and Epic
+    # N's `rolled-back` label.
     - name: Mint scoped write token
       id: write
       if: ${{ steps.plan.outputs.proceed == 'true' }}
@@ -469,8 +470,8 @@ runs:
       if: ${{ steps.plan.outputs.proceed == 'true' }}
       shell: bash
       env:
-        # Every bare `gh` call reads with the read token. The write and board tokens apply inline at
-        # the mutating call sites, so a read never holds a write scope.
+        # GH_TOKEN holds the read token, so a `gh` call that names no token cannot write. Every call in
+        # this step names the write or board token inline, its reads included.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         WRITE_TOKEN: ${{ steps.write.outputs.token }}
         BOARD_TOKEN: ${{ steps.board.outputs.token }}

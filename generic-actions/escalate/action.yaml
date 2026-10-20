@@ -1,8 +1,8 @@
 name: escalate
 description: >
   Bring a person in when governance automation reaches a state it cannot resolve on its own. The
-  action files a deduplicated ticket, an issue whose board Status it sets because closing an issue
-  leaves its board item in place. A SEV1 also posts a page to a Discord webhook. The severity picks
+  action files a deduplicated ticket, an issue in `planning_repo`, and sets its Status on a Projects
+  v2 board. A SEV1 also posts a page to a Discord webhook. The severity picks
   the channels:
 
     SEV1  org inconsistent    → ticket + @mention + page
@@ -69,7 +69,7 @@ inputs:
   epic:
     required: false
     default: ""
-    description: Epic reference for context, as a number rendered #N, or a URL.
+    description: Epic reference for context, as a number or a URL. The ticket renders a bare number as #N.
   run_url:
     required: false
     default: ""
@@ -127,7 +127,7 @@ inputs:
   dry_run:
     required: false
     default: "false"
-    description: When "true", log every intended issue/board/push action without performing it.
+    description: When "true", "1" or "yes", in any case, log every intended issue, board and push action without performing it.
 
 outputs:
   issue_number:
@@ -151,8 +151,9 @@ outputs:
 runs:
   using: composite
   steps:
-    # Validate every input before a token is minted, so a bad severity or dedup_key fails with
-    # nothing done. The step also picks the channels and the target board Status.
+    # Validate the routing inputs before a token is minted, so a bad severity, state, dedup_key or
+    # planning_repo fails with nothing done. The step also picks the channels and the target board
+    # Status.
     - name: Resolve inputs and routing
       id: resolve
       shell: bash
@@ -210,9 +211,10 @@ runs:
           echo "::error::planning_repo must be owner/name (got \"$PLANNING_REPO\")"; exit 1
         fi
 
-        # Collapse newlines in the free text that reaches a title or a log line, so it cannot inject
-        # a ::workflow-command:: or break the single-line title. The body keeps its newlines, since
-        # it is Markdown written only to a --body-file.
+        # These values reach GITHUB_OUTPUT as key=value lines, where a newline would end the value and
+        # forge another output such as do_push. Collapsing newlines also keeps the title on one line
+        # and keeps a ::workflow-command:: out of the log lines that echo them. The body keeps its
+        # newlines, since the ticket step reads it from the input and writes it only to a --body-file.
         clean_summary=$(printf '%s' "$SUMMARY" | tr -d '\r' | tr '\n' ' ')
         clean_mention=$(printf '%s' "${MENTION:-}" | tr -d '\r' | tr '\n' ' ')
         clean_push_mention=$(printf '%s' "${PUSH_MENTION:-}" | tr -d '\r' | tr '\n' ' ')
@@ -429,8 +431,8 @@ runs:
         emit updated true "$num" "$node" "$url"
 
     # The SEV1 page is the most critical output, so it runs before the board write, and `always()`
-    # runs it even when the ticket or token step failed. do_push is false unless the `resolve` step
-    # set it. A page that fails after the ticket is filed fails the run.
+    # runs it even when the token or ticket step failed. A failed `resolve` step leaves do_push
+    # unset, so an invalid input never pages. A failed page fails the run.
     - name: SEV1 push
       id: push
       if: ${{ always() && steps.resolve.outputs.do_push == 'true' }}
@@ -448,7 +450,6 @@ runs:
       run: |
         set -euo pipefail
 
-        # Discord's `content` caps at 2000 characters.
         content="🚨 **[SEV1] ${SUMMARY}**"
         content="${content}"$'\n'"repo: ${REPO}"
         [ -n "${EPIC:-}" ] && content="${content} · epic: ${EPIC}"
@@ -456,7 +457,8 @@ runs:
         [ -n "${RUNBOOK:-}" ] && content="${content}"$'\n'"runbook: ${RUNBOOK}"
         [ -n "${ISSUE_URL:-}" ] && content="${content}"$'\n'"ticket: ${ISSUE_URL}"
         [ -n "${PUSH_MENTION:-}" ] && content="${content}"$'\n'"cc ${PUSH_MENTION}"
-        # head -c cuts the whole message to 1900 bytes, well under the limit. `iconv -c` then drops a
+        # Discord's `content` caps at 2000 characters, and head -c cuts the whole message to 1900
+        # bytes, well under that limit. `iconv -c` then drops a
         # multibyte character the cut split, since Discord answers 400 to invalid UTF-8.
         content=$(printf '%s' "$content" | head -c 1900)
         content=$(printf '%s' "$content" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
@@ -480,8 +482,8 @@ runs:
         max=3
         code=000
         for attempt in $(seq 1 "$max"); do
-          # The fallback sits outside the substitution. curl already prints "000" through -w on
-          # failure, so an `|| echo 000` inside would yield "000000".
+          # curl prints "000" through -w on a transport failure and exits non-zero. The fallback sits
+          # outside the substitution, so it only stops `set -e` and the code stays three digits.
           code=$(curl -sS --connect-timeout 5 --max-time 15 \
             -o "$RUNNER_TEMP/esc_push_resp" -w '%{http_code}' \
             -X POST -H 'Content-Type: application/json' --data "$payload" "$PUSH_WEBHOOK") || code=000

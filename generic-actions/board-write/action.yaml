@@ -38,7 +38,7 @@ inputs:
     default: "true"
     description: >
       When "true" (default), add a content that is not on the board yet, so a derived write never
-      silently skips it. When "false", a missing item fails the run.
+      silently skips it. Any other value makes a missing item fail the run.
   only_if_empty:
     required: false
     default: "false"
