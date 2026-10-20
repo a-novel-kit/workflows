@@ -403,7 +403,7 @@ test("Node actions check out with the workflow token and only audit mints an App
   assert.equal(checkout.with.token, "${{ inputs.github_token }}");
   assert.equal(checkout.with["persist-credentials"], false);
 
-  // audit commits as the bot, with a token that can only write contents.
+  // audit commits as the bot, with a token minted to write contents.
   const mint = manifest("node-actions/audit/action.yaml").runs.steps.find((s) =>
     s.uses?.startsWith("actions/create-github-app-token@")
   );
