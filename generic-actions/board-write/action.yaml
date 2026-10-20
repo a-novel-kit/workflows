@@ -122,7 +122,7 @@ runs:
           field(name:$field){
             ... on ProjectV2FieldCommon{ id dataType }
             ... on ProjectV2SingleSelectField{ options{ id name } } } } } }'
-        fresp=$(gh api graphql -f query="$field_q" -F proj="$PROJECT_ID" -F field="$FIELD")
+        fresp=$(gh api graphql -f query="$field_q" -f proj="$PROJECT_ID" -f field="$FIELD")
         field_id=$(echo "$fresp" | jq -r '.data.node.field.id // empty')
         data_type=$(echo "$fresp" | jq -r '.data.node.field.dataType // empty')
         if [ -z "$field_id" ]; then
@@ -131,9 +131,8 @@ runs:
         fi
 
         # Build the value fragment to write and the selection that reads the current value. The value
-        # is inlined into the mutation, since gh -F coerces an all-digit option id to a number. An
-        # option id comes from GitHub's own option list and a date passes the checks below, so both
-        # are safe to inline.
+        # is inlined into the mutation, since its shape follows the field's type. An option id comes
+        # from GitHub's own option list and a date passes the checks below, so both are safe to inline.
         case "$data_type" in
           SINGLE_SELECT)
             opt_id=$(echo "$fresp" | jq -r --arg v "$VALUE" \
@@ -191,8 +190,8 @@ runs:
           item=""
           cursor=""
           while :; do
-            args=(-F c="$content_id" -F field="$FIELD")
-            [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+            args=(-f c="$content_id" -f field="$FIELD")
+            [ -n "$cursor" ] && args+=(-f cursor="$cursor")
             iresp=$(gh api graphql -f query="$item_q" "${args[@]}")
             item=$(echo "$iresp" | jq -c --arg p "$PROJECT_ID" \
               '[.data.node.projectItems.nodes[] | select(.project.id==$p)][0] // empty')
@@ -211,7 +210,7 @@ runs:
                 | tee -a "$GITHUB_STEP_SUMMARY"
               continue
             fi
-            item=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$content_id" -F field="$FIELD" \
+            item=$(gh api graphql -f query="$add_m" -f proj="$PROJECT_ID" -f c="$content_id" -f field="$FIELD" \
               | jq -c '.data.addProjectV2ItemById.item')
             echo "Added content to the board (item $(echo "$item" | jq -r '.id'))." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
@@ -239,7 +238,7 @@ runs:
             continue
           fi
 
-          gh api graphql -f query="$write_m" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$field_id" >/dev/null
+          gh api graphql -f query="$write_m" -f proj="$PROJECT_ID" -f item="$item_id" -f field="$field_id" >/dev/null
           echo "Set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." | tee -a "$GITHUB_STEP_SUMMARY"
           any_changed=true
         done

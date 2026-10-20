@@ -727,7 +727,7 @@ runs:
             field(name:"Status"){
               ... on ProjectV2FieldCommon{ id }
               ... on ProjectV2SingleSelectField{ options{ id name } } } } } }'
-          fresp=$(GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$fq" -F proj="$PROJECT_ID") || return 1
+          fresp=$(GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$fq" -f proj="$PROJECT_ID") || return 1
           board_status_field=$(printf '%s' "$fresp" | jq -r '.data.node.field.id // empty')
           board_ready_opt=$(printf '%s' "$fresp" | jq -r '.data.node.field.options[]? | select(.name=="Ready") | .id')
           [ -n "$board_status_field" ] && [ -n "$board_ready_opt" ]
@@ -738,8 +738,8 @@ runs:
             projectItems(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ id project{ id } } } } } }'
           item_id=""
           while :; do
-            local args=(-F c="$content")
-            [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+            local args=(-f c="$content")
+            [ -n "$cursor" ] && args+=(-f cursor="$cursor")
             iresp=$(GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$iq" "${args[@]}") || return 1
             item_id=$(printf '%s' "$iresp" | jq -r --arg p "$PROJECT_ID" '[.data.node.projectItems.nodes[] | select(.project.id==$p) | .id][0] // empty')
             [ -n "$item_id" ] && break
@@ -749,20 +749,19 @@ runs:
           if [ -z "$item_id" ]; then
             local am
             am='mutation($proj:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$proj,contentId:$c}){ item{ id } } }'
-            item_id=$(GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$am" -F proj="$PROJECT_ID" -F c="$content" \
+            item_id=$(GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$am" -f proj="$PROJECT_ID" -f c="$content" \
               | jq -r '.data.addProjectV2ItemById.item.id') || return 1
           fi
           cq='query($item:ID!){ node(id:$item){ ... on ProjectV2Item{ fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue{ current: name } } } } }'
-          cur=$(GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$cq" -F item="$item_id" | jq -r '.data.node.fieldValueByName.current // empty') || return 1
+          cur=$(GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$cq" -f item="$item_id" | jq -r '.data.node.fieldValueByName.current // empty') || return 1
           if [ "$cur" = "Ready" ]; then
             echo "board: Task ${content} already \"Ready\" — no-op." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
-          # The option id is inlined into the mutation, as board-write does, since gh -F coerces an
-          # all-digit option id to an integer that the mutation rejects. board_ready_opt comes from
+          # The option id is inlined into the mutation, as board-write does. board_ready_opt comes from
           # GitHub's own option list, so it is safe to inline.
           wm="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{projectId:\$proj,itemId:\$item,fieldId:\$field,value:{singleSelectOptionId:\"${board_ready_opt}\"}}){ projectV2Item{ id } } }"
-          GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$wm" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$board_status_field" >/dev/null || return 1
+          GH_TOKEN="$BOARD_TOKEN" gh api graphql -f query="$wm" -f proj="$PROJECT_ID" -f item="$item_id" -f field="$board_status_field" >/dev/null || return 1
           echo "board: Task ${content} \"${cur:-<unset>}\" → \"Ready\"." | tee -a "$GITHUB_STEP_SUMMARY"
         }
 

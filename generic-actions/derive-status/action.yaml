@@ -85,7 +85,7 @@ runs:
             state isDraft reviewDecision
             closingIssuesReferences(first:5){ nodes{ id number } } } } }'
         # A missing or unreadable pull request fails the query, reported here as one message.
-        if ! pr=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$PR"); then
+        if ! pr=$(gh api graphql -f query="$q" -f owner="$OWNER" -f repo="$REPO" -F num="$PR"); then
           echo "::error::could not query PR #$PR (not found, or the token lacks access)"
           exit 1
         fi

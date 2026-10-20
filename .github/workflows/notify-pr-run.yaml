@@ -186,7 +186,7 @@ jobs:
               }
             } }
           }'
-          pr="$(GH_TOKEN="$APP_TOKEN" gh api graphql -F owner="$owner" -F name="${GITHUB_REPOSITORY#*/}" \
+          pr="$(GH_TOKEN="$APP_TOKEN" gh api graphql -f owner="$owner" -f name="${GITHUB_REPOSITORY#*/}" \
             -F number="$number" -f query="$query" --jq .data.repository.pullRequest)"
 
           # A bot's history decides its posts. The history holds every CI run since the pull request
