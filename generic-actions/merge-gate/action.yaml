@@ -188,7 +188,7 @@ runs:
                  labels(first:100){ nodes{ name } pageInfo{ hasNextPage } }
                  closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } }'
           for attempt in 1 2 3; do
-            if data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$1" 2>/dev/null) \
+            if data=$(gh api graphql -f query="$q" -f owner="$OWNER" -f repo="$REPO" -F num="$1" 2>/dev/null) \
               && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not) and (.data.repository.pullRequest != null)' >/dev/null 2>&1; then
               printf '%s' "$data"
               return 0

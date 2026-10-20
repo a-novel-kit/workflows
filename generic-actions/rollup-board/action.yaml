@@ -88,7 +88,7 @@ runs:
         def gh(query, **vars):
             cmd = ["gh", "api", "graphql", "-f", "query=" + query]
             for k, v in vars.items():
-                cmd += ["-F", "%s=%s" % (k, v)]
+                cmd += ["-f", "%s=%s" % (k, v)]
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode != 0:
                 sys.stderr.write(r.stderr)

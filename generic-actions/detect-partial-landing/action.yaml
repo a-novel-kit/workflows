@@ -411,7 +411,7 @@ runs:
         fetch_pr_labels() { # $1 = pr number
           local data
           for attempt in 1 2 3; do
-            if data=$(gh api graphql -f query="$PR_LABELS_Q" -F owner="$ORG" -F repo="$REPO" -F num="$1" 2>&1) \
+            if data=$(gh api graphql -f query="$PR_LABELS_Q" -f owner="$ORG" -f repo="$REPO" -F num="$1" 2>&1) \
               && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not) and (.data.repository.pullRequest != null)' >/dev/null 2>&1; then
               printf '%s' "$data" | jq -c '[(.data.repository.pullRequest.labels.nodes // [])[].name]'
               return 0
