@@ -178,7 +178,8 @@ runs:
       run: |
         set -euo pipefail
 
-        # Lowercase $1 and drop its whitespace, so " SEV1 " and "sev1" read the same.
+        # Lowercase $1 and drop its whitespace, so " SEV1 " and "sev1" read the same. The errors below
+        # echo this form, which holds no newline that could start a ::workflow-command:: line.
         normalize() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'; }
 
         sev=$(normalize "${SEVERITY:-}")
@@ -186,11 +187,11 @@ runs:
           sev1 | 1) sev=sev1; sevlabel="SEV1 — org inconsistent" ;;
           sev2 | 2) sev=sev2; sevlabel="SEV2 — one repo blocked" ;;
           sev3 | 3) sev=sev3; sevlabel="SEV3 — cleanup / advisory" ;;
-          *) echo "::error::severity must be sev1|sev2|sev3 (got \"${SEVERITY:-}\")"; exit 1 ;;
+          *) echo "::error::severity must be sev1|sev2|sev3 (got \"$sev\")"; exit 1 ;;
         esac
 
         st=$(normalize "${STATE:-open}")
-        case "$st" in open | resolve) : ;; *) echo "::error::state must be open|resolve (got \"${STATE:-}\")"; exit 1 ;; esac
+        case "$st" in open | resolve) : ;; *) echo "::error::state must be open|resolve (got \"$st\")"; exit 1 ;; esac
 
         # dry_run is normalized once, so a "True" or " true " still stays dry. Every later step reads
         # this value.

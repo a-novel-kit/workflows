@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { step, succeeds, workspace, manifest } from "./helpers.mjs";
+import { ghVariables, step, succeeds, workspace, manifest } from "./helpers.mjs";
 
 const decide = step(".github/workflows/notify-pr-run.yaml", "state");
 const kushuh = { databaseId: 1, login: "kushuh" };
@@ -80,7 +80,7 @@ function notify(
   eventName,
   event,
   pr,
-  { runs = [], jobs = [], pulls = "7", at = settled, pull = {}, reviews = [], main = true } = {}
+  { runs = [], jobs = [], pulls = "7", at = settled, pull = {}, reviews = [], main = true, env: extra = {} } = {}
 ) {
   const w = workspace(t);
   w.write("output", "");
@@ -122,6 +122,7 @@ function notify(
     PULLS: pulls,
     PULL: JSON.stringify(pull),
     REVIEWS: reviews.map((entry) => JSON.stringify(entry)).join("\n"),
+    ...extra,
   };
   succeeds(w.bash(decide, env));
   const outputs = Object.fromEntries(
@@ -283,6 +284,16 @@ test("notify-pr asks for a reviewer, follows review requests, and tells the owne
     assert.equal(outputs.users, users, name);
     assert.equal(outputs.role, role, name);
   }
+});
+
+test("notify-pr reads its pull request with owner and name as strings and the number as an Int", (t) => {
+  const env = { GITHUB_REPOSITORY: "true/123" };
+  const { calls } = notify(t, "pull_request_target", prEvent("ready_for_review"), pullRequest(), { env });
+  assert.deepEqual(ghVariables(calls.find((args) => args.includes("graphql"))), {
+    owner: "true",
+    name: "123",
+    number: 7,
+  });
 });
 
 test("notify-pr folds the changes of a pull request's first ready minute into its ready post", (t) => {

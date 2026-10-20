@@ -100,8 +100,8 @@ runs:
         matches=$(mktemp)
         cursor=""
         while :; do
-          args=(-F proj="$PROJECT_ID")
-          [ -n "$cursor" ] && args+=(-F cursor="$cursor")
+          args=(-f proj="$PROJECT_ID")
+          [ -n "$cursor" ] && args+=(-f cursor="$cursor")
           resp=$(gh api graphql -f query="$items_q" "${args[@]}")
           echo "$resp" | jq -c --arg repo "$REPO_FULL" --arg status "$STATUS" --arg closed "$ARCHIVE_CLOSED" '
             ($status | split(",") | map(gsub("^\\s+|\\s+$";""))) as $statuses
@@ -134,7 +134,7 @@ runs:
           if [ "$DRY_RUN" = "true" ]; then
             echo "- [dry-run] would $verb #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            gh api graphql -f query="$archive_m" -F proj="$PROJECT_ID" -F item="$id" >/dev/null
+            gh api graphql -f query="$archive_m" -f proj="$PROJECT_ID" -f item="$id" >/dev/null
             # The close is best-effort, since a pull request or draft item has no issue to close.
             if [ "$CLOSE" = "true" ] && [ -n "$num" ] && [ "$num" != "null" ] && [ -n "$rp" ] && [ "$rp" != "null" ]; then
               gh issue close "$num" --repo "$rp" --reason completed >/dev/null 2>&1 || true

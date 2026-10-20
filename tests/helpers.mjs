@@ -75,6 +75,23 @@ export function workspace(t) {
   };
 }
 
+/**
+ * Reads the GraphQL variables of a `gh api` call from its arguments, typed as gh types them: -f sends
+ * a string, while -F sends an integer, a boolean or null when the value reads as one.
+ */
+export function ghVariables(args) {
+  const literals = ["true", "false", "null"];
+  const typed = (v) => (/^[+-]?\d+$/.test(v) ? Number(v) : literals.includes(v) ? JSON.parse(v) : v);
+  const variables = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "-f" && args[i] !== "-F") continue;
+    const [key, value] = args[i + 1].split(/=(.*)/s);
+    if (key !== "query") variables[key] = args[i] === "-F" ? typed(value) : value;
+    i++;
+  }
+  return variables;
+}
+
 export function succeeds(result) {
   assert.equal(result.status, 0, result.stderr + result.stdout);
   return result.stdout.trimEnd();
