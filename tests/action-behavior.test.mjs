@@ -421,6 +421,21 @@ test("escalate keeps a newline in an input from forging another output", (t) => 
   assert.doesNotMatch(result.stdout, /do_push/);
 });
 
+test("escalate's input errors keep a newline in the input out of the log", (t) => {
+  const w = workspace(t);
+  const path = "generic-actions/escalate/action.yaml";
+  const steps = manifest(path).runs.steps;
+  const inputs = { severity: "sev3", summary: "s", dedup_key: "k", planning_repo: "a-novel-kit/.github" };
+  for (const input of ["severity", "state"]) {
+    const result = w.bash(
+      step(path, "resolve"),
+      bind(steps, "resolve", { ...inputs, [input]: "bad\n::warning::forged" })
+    );
+    assert.equal(result.status, 1, input);
+    assert.doesNotMatch(result.stdout, /^::warning::/m, input);
+  }
+});
+
 test("enable-auto-merge reads the halt before it requires a pull request number", (t) => {
   const w = workspace(t);
   w.stub("gh", "process.exit(1);");
