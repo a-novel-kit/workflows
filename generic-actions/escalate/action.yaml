@@ -208,29 +208,36 @@ runs:
           *$'\n'*) echo "::error::dedup_key must not contain a newline"; exit 1 ;;
         esac
 
+        # planning_repo splits into planning_owner and planning_name, which reach GITHUB_OUTPUT as
+        # key=value lines where a newline would forge another output. The error omits the value, so a
+        # newline cannot start a ::workflow-command:: line in the log either.
+        case "$PLANNING_REPO" in
+          *$'\n'*) echo "::error::planning_repo must not contain a newline"; exit 1 ;;
+        esac
         powner=${PLANNING_REPO%%/*}
         pname=${PLANNING_REPO#*/}
         if [ -z "$powner" ] || [ -z "$pname" ] || [ "$powner" = "$PLANNING_REPO" ]; then
           echo "::error::planning_repo must be owner/name (got \"$PLANNING_REPO\")"; exit 1
         fi
 
-        # These values reach GITHUB_OUTPUT as key=value lines, where a newline would end the value and
-        # forge another output such as do_push. Collapsing newlines also keeps the title on one line
-        # and keeps a ::workflow-command:: out of the log lines that echo them. The body keeps its
-        # newlines, since the ticket step reads it from the input and writes it only to a --body-file.
-        clean_summary=$(printf '%s' "$SUMMARY" | tr -d '\r' | tr '\n' ' ')
-        clean_mention=$(printf '%s' "${MENTION:-}" | tr -d '\r' | tr '\n' ' ')
-        clean_push_mention=$(printf '%s' "${PUSH_MENTION:-}" | tr -d '\r' | tr '\n' ' ')
-
-        run_url="${RUN_URL:-${SERVER_URL}/${REPO_FULL}/actions/runs/${RUN_ID}}"
+        # Collapse $1's newlines to spaces. The free-text values below reach GITHUB_OUTPUT as key=value
+        # lines, where a newline would end the value and forge another output such as do_push.
+        # Collapsing also keeps the title on one line and keeps a ::workflow-command:: out of the log
+        # lines that echo these values. The body keeps its newlines, since the ticket step reads it
+        # from the input and writes it only to a --body-file.
+        oneline() { printf '%s' "$1" | tr -d '\r' | tr '\n' ' '; }
+        clean_summary=$(oneline "$SUMMARY")
+        clean_mention=$(oneline "${MENTION:-}")
+        clean_push_mention=$(oneline "${PUSH_MENTION:-}")
+        run_url=$(oneline "${RUN_URL:-${SERVER_URL}/${REPO_FULL}/actions/runs/${RUN_ID}}")
+        if [ "$st" = "resolve" ]; then target_status="$RESOLVED_STATUS"; else target_status="$BOARD_STATUS"; fi
+        target_status=$(oneline "$target_status")
 
         # Only a raised SEV1 with a webhook pages, and only a raised SEV1 or SEV2 mentions.
         do_push=false
         if [ "$sev" = "sev1" ] && [ "$st" = "open" ] && [ -n "${PUSH_WEBHOOK:-}" ]; then do_push=true; fi
         do_mention=false
         if { [ "$sev" = "sev1" ] || [ "$sev" = "sev2" ]; } && [ "$st" = "open" ]; then do_mention=true; fi
-
-        if [ "$st" = "resolve" ]; then target_status="$RESOLVED_STATUS"; else target_status="$BOARD_STATUS"; fi
 
         {
           echo "sev=$sev"
