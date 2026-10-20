@@ -1,0 +1,49 @@
+name: collect warnings
+description: >
+  Collect the CI warnings an org's default branches raised since the calling workflow's previous
+  successful run, one entry per warning, merged across repositories. GitHub keeps every `::warning::`,
+  its own deprecation notices included, as a check-run annotation, so the action reads those of the
+  runs that finished in that window. Pull request runs keep theirs on the pull request.
+
+  Ignore rules hide expected warnings. The step summary lists every warning and counts what each
+  rule hid, so a rule that matches nothing shows up there.
+
+inputs:
+  github_token:
+    required: true
+    description: >
+      Token that reads the workflow runs and check runs of every repository in the org, the calling
+      repository's included: an App token with actions and checks read.
+  ignore:
+    required: false
+    default: "[]"
+    description: >
+      JSON list of rules hiding expected warnings. A rule holds a required "reason" and at least one
+      of "repo", "job" and "message", each a regular expression the warning must match, against
+      "<org>/<repo>" for "repo".
+
+outputs:
+  count:
+    description: Number of distinct warnings left after the ignore rules.
+    value: ${{ steps.collect.outputs.count }}
+  title:
+    description: Post title naming that number.
+    value: ${{ steps.collect.outputs.title }}
+  description:
+    description: Post body, one bold line per warning with its jobs, hits and repositories.
+    value: ${{ steps.collect.outputs.description }}
+  footer:
+    description: How many warnings the ignore rules hid, or empty when none.
+    value: ${{ steps.collect.outputs.footer }}
+
+runs:
+  using: composite
+  steps:
+    - name: Collect the warnings
+      id: collect
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        CALLER: ${{ github.workflow_ref }}
+        IGNORE: ${{ inputs.ignore }}
+      run: node "$GITHUB_ACTION_PATH/collect.mjs"

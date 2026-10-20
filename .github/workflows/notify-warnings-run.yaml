@@ -1,0 +1,75 @@
+name: notify-warnings (reusable)
+
+# Posts one daily digest of the CI warnings an org's default branches raised to its Discord CI
+# channel, one line per warning whatever the number of repositories raising it, and nothing on a
+# clean day. `collect-warnings` reads the runs that finished since the caller's previous successful
+# run, so the next run catches up a late or failed one.
+#
+# The caller's ignore rules hide expected warnings. Each rule needs a reason, and the step summary
+# counts what each rule hid, so a rule that no longer matches anything shows up there.
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        required: true
+        type: string
+        description: Client id of the GitHub App that reads the org's workflow runs and their annotations.
+      ignore:
+        required: false
+        type: string
+        default: "[]"
+        description: >-
+          JSON list of rules hiding expected warnings. A rule holds a required "reason" and at least
+          one of "repo", "job" and "message", each a regular expression the warning must match,
+          against "<org>/<repo>" for "repo".
+      dry_run:
+        required: false
+        type: string
+        default: "false"
+        description: When "true", write the digest to the step summary instead of posting it.
+    secrets:
+      private_key:
+        required: true
+        description: Private key (PEM) of the App that client_id names.
+      webhook:
+        required: false
+        description: Discord webhook of the org's CI channel. Empty skips the post.
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
+    # The App token reads every run in the org, the caller's included, so the default one is unused.
+    permissions: {}
+    steps:
+      - name: Mint read token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-actions: read
+          permission-checks: read
+
+      - name: Collect the warnings
+        id: collect
+        uses: a-novel-kit/workflows/generic-actions/collect-warnings@v1.64.0
+        with:
+          github_token: ${{ steps.token.outputs.token }}
+          ignore: ${{ inputs.ignore }}
+
+      - name: Post to the CI channel
+        if: steps.collect.outputs.count != '0'
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.64.0
+        with:
+          webhook: ${{ secrets.webhook }}
+          color: upcoming
+          title: ${{ steps.collect.outputs.title }}
+          url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          description: ${{ steps.collect.outputs.description }}
+          footer: ${{ steps.collect.outputs.footer }}
+          dry_run: ${{ inputs.dry_run }}

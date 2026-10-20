@@ -33,14 +33,16 @@ rules:
       #   notify-issues-run.yaml: reads the org board, whose issues live in every repository.
       #   notify-pr-run.yaml: reads the issues a pull request closes, in any repository.
       #   notify-stuck-run.yaml: searches every repository for stuck bot pull requests.
+      #   notify-warnings-run.yaml: reads every repository's default-branch runs and annotations.
       #
-      # All five keep the default token unused or read-only and give the App token read-only
+      # All six keep the default token unused or read-only and give the App token read-only
       # `permission-*` scopes. A wider grant voids this exception.
       - token-expiry.yaml
       - reconcile-board.yaml
       - notify-issues-run.yaml
       - notify-pr-run.yaml
       - notify-stuck-run.yaml
+      - notify-warnings-run.yaml
 
   artipacked:
     ignore:
