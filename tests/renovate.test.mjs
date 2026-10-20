@@ -155,6 +155,16 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
   for (const file of ["go.mod", "cli/go.mod"]) assert(matches(go.matchFileNames, file));
   for (const file of ["buf.mod", "golangci-lint.mod", "gotestsum.mod", "mockery.mod"])
     assert(!matches(go.matchFileNames, file));
+  // go.dev lists a release before Docker Hub tags its image, so the directive reads the image the group bumps.
+  const image = base.packageRules.find((r) => r.groupName === "go toolchain" && r !== go);
+  assert.deepEqual([go.overrideDatasource, go.overridePackageName], ["docker", image.matchDepNames[0]]);
+  const version = (tag) => tag.match(new RegExp(go.extractVersion))?.groups.version;
+  assert.deepEqual(["1.27.3-alpine", "1.27.3-alpine3.24", "1.27.3", "1.28rc1-alpine"].map(version), [
+    "1.27.3",
+    undefined,
+    undefined,
+    undefined,
+  ]);
   // Type-checking tools need an x/tools that reads the toolchain's export data, yet it is `// indirect`.
   const xtools = goTools.packageRules.find((r) => r.matchDepNames?.includes("golang.org/x/tools"));
   assert.equal(xtools.enabled, true);

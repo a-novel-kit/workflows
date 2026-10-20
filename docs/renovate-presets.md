@@ -32,6 +32,11 @@ of its first upgrade by name, usually an image, so these groups carry both `go m
 `pnpm dedupe` for their members. The same applies to the golang image in the `go toolchain` group
 and the Playwright image pin in `playwright runtime`.
 
+The `go` directive in `go.mod` reads its versions from the golang image's alpine tags, not from
+go.dev. Docker Hub publishes a Go release a day or more after go.dev does, and the image builds with
+`GOTOOLCHAIN=local`, so a directive ahead of the image fails every image build. The directive and
+the image therefore move together, once the image exists.
+
 A workflow that runs in the Playwright container annotates the image, so its tag follows npm's
 `playwright` releases:
 
