@@ -351,6 +351,17 @@ function bind(steps, id, inputs, outputs = {}) {
   return Object.fromEntries(Object.entries(env).map(([key, text]) => [key, expand(text)]));
 }
 
+/** Reads the `name=value` lines a step wrote to its GITHUB_OUTPUT file. A later line wins, as on the runner. */
+function outputs(w) {
+  return Object.fromEntries(
+    w
+      .read("output")
+      .trim()
+      .split("\n")
+      .map((line) => line.split(/=(.*)/s).slice(0, 2))
+  );
+}
+
 test("escalate pages Discord with push_mention and keeps the GitHub mention on the ticket", (t) => {
   const w = workspace(t);
   const path = "generic-actions/escalate/action.yaml";
@@ -366,17 +377,48 @@ test("escalate pages Discord with push_mention and keeps the GitHub mention on t
     dry_run: "true",
   };
   succeeds(w.bash(step(path, "resolve"), bind(steps, "resolve", inputs)));
-  const outputs = Object.fromEntries(
-    w
-      .read("output")
-      .trim()
-      .split("\n")
-      .map((line) => line.split(/=(.*)/s).slice(0, 2))
-  );
-  succeeds(w.bash(step(path, "push"), bind(steps, "push", inputs, outputs)));
+  succeeds(w.bash(step(path, "push"), bind(steps, "push", inputs, outputs(w))));
   const page = w.read("summary");
   assert.match(page, /^cc <@&42>$/m);
   assert.doesNotMatch(page, /@octocat/);
+});
+
+test("escalate keeps a newline in an input from forging another output", (t) => {
+  const w = workspace(t);
+  const path = "generic-actions/escalate/action.yaml";
+  const steps = manifest(path).runs.steps;
+  const forged = "\ndry_run=false\ndo_push=true";
+  const inputs = {
+    severity: "sev3",
+    summary: "cleanup pending",
+    dedup_key: "cleanup:a-novel-kit/x",
+    planning_repo: "a-novel-kit/.github",
+    push_webhook: "https://discord.invalid/webhook",
+    dry_run: "true",
+    run_url: `https://run${forged}`,
+  };
+  for (const [state, status] of [
+    ["open", "board_status"],
+    ["resolve", "resolved_status"],
+  ]) {
+    w.write("output", "");
+    succeeds(w.bash(step(path, "resolve"), bind(steps, "resolve", { ...inputs, state, [status]: `Triage${forged}` })));
+    const values = outputs(w);
+    assert.equal(values.dry_run, "true", state);
+    assert.equal(values.do_push, "false", state);
+    assert.equal(values.run_url, "https://run dry_run=false do_push=true", state);
+    assert.equal(values.target_status, "Triage dry_run=false do_push=true", state);
+  }
+
+  // A newline in planning_repo fails the step before any output, and the log never echoes it.
+  w.write("output", "");
+  const result = w.bash(
+    step(path, "resolve"),
+    bind(steps, "resolve", { ...inputs, planning_repo: `a-novel-kit/.github${forged}` })
+  );
+  assert.equal(result.status, 1);
+  assert.equal(w.read("output"), "");
+  assert.doesNotMatch(result.stdout, /do_push/);
 });
 
 test("Node actions check out with the workflow token and only audit mints an App token", () => {
