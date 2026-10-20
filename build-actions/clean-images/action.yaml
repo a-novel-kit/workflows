@@ -1,8 +1,9 @@
 name: clean images
 description: >
   Delete a container package's images once the branch or pull request that built them is gone: untagged
-  builds and tags of closed pull requests, merge-queue builds, and old branch tags. Release tags, the
-  default branch's tag and builds, and open pull requests' tags and builds stay, with the manifests and
+  builds and tags of closed pull requests, merge-queue builds, old branch tags, and the default branch's
+  untagged builds from before the last minor release. Release tags, the default branch's tag and its
+  builds since that release, and open pull requests' tags and builds stay, with the manifests and
   attestations they reference. Run it for one package at a time.
 
 inputs:
@@ -12,9 +13,9 @@ inputs:
   github_token:
     required: true
     description: >
-      Token with packages write, pull requests read and attestations read. The package must grant the
-      calling repository the Admin role, which GitHub gives the repository whose workflow first
-      published it.
+      Token with packages write, contents read, pull requests read and attestations read. The package
+      must grant the calling repository the Admin role, which GitHub gives the repository whose workflow
+      first published it.
   min_age_days:
     required: false
     default: "1"
