@@ -1,9 +1,10 @@
 name: test playwright
 description: >
-  Run a platform's browser component tests with coverage, then its Playwright journeys. With Drive
-  configured, the journeys compare their screenshots against the master reference kept in a private
-  Shared Drive, and the run posts the result as the `visual-comparison` commit status. A screenshot
-  change passes only on a head approved through `approve-playwright`.
+  Run browser component tests with coverage, then screenshot tests: a platform's Playwright journeys
+  or a Vitest browser project. With Drive configured, the tests compare their screenshots against the
+  master reference kept in a private Shared Drive, and the run posts the result as the
+  `visual-comparison` commit status. A screenshot change passes only on a head approved through
+  `approve-playwright`.
 
 inputs:
   github_token:
@@ -18,7 +19,15 @@ inputs:
   test_action:
     required: false
     default: test:e2e
-    description: Package script that runs the Playwright journeys. It starts the application and services itself.
+    description: >
+      Package script that runs the screenshot tests: Playwright journeys, which start the application
+      and services themselves, or a Vitest browser project.
+  runner:
+    required: false
+    default: playwright
+    description: >
+      Test runner behind test_action, "playwright" or "vitest". With Drive configured, Vitest tests
+      declare their screenshots with visual-snapshot annotations, as Playwright journeys do.
   coverage_artifact:
     required: false
     default: browsercover
@@ -153,13 +162,14 @@ runs:
       run: |
         set -euo pipefail
         node "$ACTION_PATH/drive/policy.mjs" allow
-    - name: Run Playwright journeys
+    - name: Run screenshot tests
       id: journeys
       shell: bash
       env:
         TEST_ACTION: ${{ inputs.test_action }}
         ACTION_PATH: ${{ github.action_path }}
         DRIVE_PROVIDER: ${{ inputs.drive_ci_provider }}
+        VISUAL_RUNNER: ${{ inputs.runner }}
       run: |
         set -euo pipefail
         if [ -n "$DRIVE_PROVIDER" ]; then

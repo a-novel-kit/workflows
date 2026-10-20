@@ -10,9 +10,11 @@
     "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
+    "@vitest/browser-playwright": "5.0.5",
     "playwright": "1.64.1",
     "prettier": "^3.6.2",
     "prettier-plugin-packagejson": "^3.0.0",
+    "vitest": "5.0.5",
     "yaml": "2.9.1"
   },
   "packageManager": "pnpm@12.14.0"

@@ -168,12 +168,14 @@ check-migration-snapshots:
 | `lint-translations` | Check catalog structure, and the translation gaps and drift a branch introduces, with label approvals.      |
 | `setup-node`        | Set up Node and pnpm against the GitHub registry, and install.                                              |
 | `test-node`         | Run the package's tests and upload coverage.                                                                |
-| `test-playwright`   | Run browser component and Playwright tests with coverage and optional private Drive screenshot comparisons. |
+| `test-playwright`   | Run browser component and screenshot tests with coverage and optional private Drive screenshot comparisons. |
 
 #### `test-playwright`
 
 `test-playwright` runs the package scripts `test:browser`, for component tests, and `test:e2e`, for
-journeys that start the application and its services themselves. It uploads
+journeys that start the application and its services themselves. With `runner: vitest`, `test_action`
+names a Vitest browser project instead, such as Storybook stories, set up through the
+[Vitest guide](./docs/migrations/v1.64.0.md). It uploads
 `coverage/browser/lcov.info` and exposes the artifact's `artifact-id` for Codecov. Pass `compose_file`
 for disposable integration services, with a unique `COMPOSE_PROJECT_NAME` set in the calling job. The
 action collects their logs and always removes the Compose project's services and volumes. The

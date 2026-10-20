@@ -23,11 +23,23 @@ const COMPARISON_EVIDENCE = [
   [".visual/results.json", ".visual/comparison.json"],
 ];
 
+/** Each runner's arguments for an update mode, named as Playwright's, and the reporter that writes the report. */
+const RUNNERS = {
+  playwright: (mode) => [`--update-snapshots=${mode}`, `--add-reporter=${join(import.meta.dirname, "reporter.mjs")}`],
+  // Vitest's attachments land in test-results, beside Playwright's, so evidence and review treat both alike.
+  vitest: (mode) => [
+    `--update=${{ all: "all", missing: "new", none: "none" }[mode]}`,
+    "--reporter=default",
+    `--reporter=${join(import.meta.dirname, "vitest-reporter.mjs")}`,
+    "--attachmentsDir=test-results",
+  ],
+};
+
 /** Require a complete, unique inventory and distinguish visual failures from functional errors. */
 export function inspectReport(report) {
   const cases = report.tests ?? [];
   if (!cases.length || cases.length !== report.expected || report.errors?.length)
-    throw new Failure("Playwright did not complete the selected test suite");
+    throw new Failure("The test runner did not complete the selected suite");
   if (new Set(cases.map((test) => test.id)).size !== cases.length)
     throw new Failure("Retried tests cannot publish a reference");
   const paths = new Set();
@@ -57,15 +69,26 @@ export function inspectReport(report) {
 
 async function runTests(script, mode) {
   const reportPath = process.env.PLAYWRIGHT_VISUAL_REPORT;
+  const runner = RUNNERS[process.env.VISUAL_RUNNER || "playwright"];
+  if (!runner) throw new Failure("Unknown visual test runner");
   await rm(reportPath, { force: true });
-  const result = spawnSync(
-    "pnpm",
-    ["run", script, `--update-snapshots=${mode}`, `--add-reporter=${join(import.meta.dirname, "reporter.mjs")}`],
-    { stdio: "inherit" }
-  );
-  if (result.error || result.signal || !existsSync(reportPath))
-    throw new Failure("Playwright visual report is missing");
+  const result = spawnSync("pnpm", ["run", script, ...runner(mode)], { stdio: "inherit" });
+  if (result.error || result.signal || !existsSync(reportPath)) throw new Failure("The visual report is missing");
   return [result.status, JSON.parse(await readFile(reportPath, "utf8"))];
+}
+
+/** The screenshots on disk, relative to the snapshot directory. */
+async function captures(snapshots) {
+  const paths = new Set();
+  for await (const path of glob(`${snapshots}/**/*.png`)) paths.add(relative(snapshots, path));
+  return paths;
+}
+
+/** Fail when a run wrote a screenshot that no visual-snapshot annotation declares. */
+async function requireDeclared(snapshots, declared) {
+  const undeclared = [...(await captures(snapshots)).difference(declared)];
+  if (undeclared.length)
+    throw new Failure(`Screenshots captured without a visual-snapshot annotation: ${undeclared.sort().join(", ")}`);
 }
 
 /** Package only declared evidence and prevent symlinks from exposing workspace secrets. */
@@ -108,13 +131,13 @@ export async function archiveBatch(paths, target) {
 export async function compare(script, { approved = false, seed = false } = {}) {
   await mkdir(".visual", { recursive: true });
   const snapshots = ".visual/snapshots";
-  const previous = new Set();
-  for await (const path of glob(`${snapshots}/**/*.png`)) previous.add(relative(snapshots, path));
+  const previous = await captures(snapshots);
   // Missing mode captures new images without overwriting any existing reference.
   let [code, report] = await runTests(script, seed ? "all" : "missing");
   let inspection;
   try {
     inspection = inspectReport(report);
+    await requireDeclared(snapshots, previous.union(inspection.paths));
     const added = !inspection.paths.isSubsetOf(previous);
     const existingDrift = report.tests.some((test) => test.comparisons?.some((comparison) => comparison.drift));
     if (!seed && added && inspection.visualOnly && !existingDrift) {
@@ -149,6 +172,7 @@ export async function compare(script, { approved = false, seed = false } = {}) {
     const updated = inspectReport(updatedReport);
     if (updatedCode || !isDeepStrictEqual(updated.paths, paths))
       throw new Failure("Approved screenshot regeneration did not complete the same test inventory");
+    await requireDeclared(snapshots, paths);
   }
   for (const path of paths)
     if (!existsSync(join(snapshots, path)) || !(await lstat(join(snapshots, path))).isFile())
@@ -166,7 +190,7 @@ async function main() {
     await archiveBatch(paths, ".visual/batch.tar");
     return;
   }
-  if (!mode) throw new Failure("A Playwright package script is required");
+  if (!mode) throw new Failure("A visual test package script is required");
   const changed = await compare(mode, {
     approved: process.env.VISUAL_APPROVED === "true",
     seed: process.env.VISUAL_SEED === "true",
@@ -174,4 +198,4 @@ async function main() {
   await writeFile(".visual/verdict.json", JSON.stringify({ changed, sha: testedHead() }));
 }
 
-runCli(import.meta.url, main, "Playwright comparison or evidence packaging failed");
+runCli(import.meta.url, main, "Screenshot comparison or evidence packaging failed");
