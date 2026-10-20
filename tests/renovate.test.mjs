@@ -139,6 +139,18 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
   for (const name of lookalikes) assert(!matches(base.packageRules[exempt].matchPackageNames, name), name);
 });
 
+test("Renovate pins third-party actions to their release commit and keeps the workflows actions on tags", () => {
+  assert(base.extends.includes("helpers:pinGitHubActionDigestsToSemver"));
+  const actions = base.packageRules.filter((r) => r.matchManagers?.includes("github-actions"));
+  // A digest update means the upstream tag moved: it overrides the automerge rule before it.
+  const moved = actions.find((r) => r.matchUpdateTypes?.includes("digest"));
+  assert.equal(moved.automerge, false);
+  assert(base.packageRules.indexOf(moved) > base.packageRules.findIndex((r) => r.automerge === true));
+  assert.equal(actions.find((r) => r.minimumReleaseAge).minimumReleaseAge, "3 days");
+  assert.equal(base.packageRules.find((r) => r.groupName === "a-novel-kit workflows").pinDigests, false);
+  assert.equal(preset("workflows").packageRules, undefined);
+});
+
 test("Renovate discovers tool modules and compose files while excluding unrelated formats", () => {
   const managerFiles = [
     ["gomod", ["buf.mod", "tools/mockery.mod"], true],

@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigestsToSemver"],
   "prHourlyLimit": 0,
   "rebaseWhen": "behind-base-branch",
   "semanticCommits": "enabled",
@@ -38,8 +38,14 @@
   "packageRules": [
     {
       "description": "Automerge everything except major updates",
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
       "automerge": true
+    },
+    {
+      "description": "Review an action's digest update by hand. It keeps the action's version and moves it to another commit, which means the upstream tag was moved: the shape of the 2026 trivy-action hijack.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": false
     },
     {
       "description": "Hold TypeScript on the v6 line until the toolchain supports the v7 native-compiler rewrite. TS7 removes JS-API surface prettier's .ts-config loader relies on (it reads an undefined ModuleKind member and throws), and typescript-eslint still caps its peer range at typescript <6.1.0, so a frozen-lockfile install fails on the unmet peer. Drop this rule once typescript-eslint's peer range admits v7.",
@@ -62,8 +68,13 @@
       "minimumReleaseAge": "1 hour"
     },
     {
-      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to npm registry releases (what pnpm installs from pnpm-lock.yaml, workspaces and catalogs, plus workflow pins annotated with datasource=npm) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install, and an annotated pin moves with its package. Other ecosystems (gomod, docker, github-actions) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value, its built-in 1-day default.",
+      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to npm registry releases (what pnpm installs from pnpm-lock.yaml, workspaces and catalogs, plus workflow pins annotated with datasource=npm) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install, and an annotated pin moves with its package. Other ecosystems (gomod, docker) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value, its built-in 1-day default.",
       "matchDatasources": ["npm"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Hold new third-party action releases for three days. Actions run beside the release App's key and the bots' keys, so the age bounds a compromised upstream release before it reaches one.",
+      "matchManagers": ["github-actions"],
       "minimumReleaseAge": "3 days"
     },
     {
@@ -101,9 +112,10 @@
       "groupName": "nodelib"
     },
     {
-      "description": "Keep workflows action and Renovate preset refs on the same release in one update PR.",
+      "description": "Keep workflows action and Renovate preset refs on the same release in one update PR. They stay on release tags while every other action is pinned to its commit: each release is immutable, so GitHub never lets its tag move, and a release stamps its actions' references to their siblings with its own tag, which no commit can name.",
       "matchPackageNames": ["/.*a-novel-kit\\/workflows.*/"],
-      "groupName": "a-novel-kit workflows"
+      "groupName": "a-novel-kit workflows",
+      "pinDigests": false
     },
     {
       "matchPackageNames": ["/.*a-novel\\/platform-authentication.*/"],
