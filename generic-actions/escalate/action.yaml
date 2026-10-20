@@ -127,7 +127,9 @@ inputs:
   dry_run:
     required: false
     default: "false"
-    description: When "true", "1" or "yes", in any case, log every intended issue, board and push action without performing it.
+    description: >
+      When "true", "1" or "yes", in any case, log every intended issue, board and push action
+      without performing it.
 
 outputs:
   issue_number:

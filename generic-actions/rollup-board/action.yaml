@@ -28,7 +28,9 @@ inputs:
   dry_run:
     required: false
     default: "true"
-    description: Only "false", in any case, writes. Any other value, the default "true" included, logs the rollups without writing.
+    description: >
+      Only "false", in any case, writes. Any other value, the default "true" included, logs the
+      rollups without writing.
   kill_switch:
     required: false
     default: ""

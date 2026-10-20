@@ -558,8 +558,8 @@ runs:
         # Fills SNAP_MERGED, SNAP_CLOSED and SNAP_OPEN in search_prs' node shape, and SNAP_SINCE with
         # any valid wave boundary, a `retired` tombstone's included. Returns 0 when the frozen set
         # resolved, 2 when there is no usable snapshot and the live floor stands alone, and 1 when a
-        # frozen set exists, or might, and did not resolve. On 1, EV_DECISION stays error. The sweep then posts
-        # nothing, so a standing freeze stays, and per-PR mode fails open on its head.
+        # frozen set exists, or might, and did not resolve. On 1, EV_DECISION stays error. The sweep
+        # then posts nothing, so a standing freeze stays, and per-PR mode fails open on its head.
         snapshot_buckets() { # $1 = epic number
           SNAP_MERGED='[]'
           SNAP_CLOSED='[]'
