@@ -18,42 +18,49 @@ const query = `query($ids: [ID!]!) { nodes(ids: $ids) { ... on CheckSuite {
   } }
 } } }`;
 
+/** Whether an ignore rule holds a reason, at least one known pattern field, and only strings. */
+function validRule(rule) {
+  return (
+    rule?.constructor === Object &&
+    Object.keys(rule).every((key) => key === "reason" || fields.includes(key)) &&
+    typeof rule.reason === "string" &&
+    rule.reason !== "" &&
+    fields.some((field) => field in rule) &&
+    fields.every((field) => !(field in rule) || typeof rule[field] === "string")
+  );
+}
+
+/** An ignore rule with its patterns compiled, as [field, RegExp] pairs. */
+function compileRule(rule) {
+  const patterns = fields.filter((field) => field in rule).map((field) => [field, new RegExp(rule[field])]);
+  return { reason: rule.reason, patterns };
+}
+
 /** Parses the ignore rules, refusing a rule without a reason, without a pattern or with an unknown field. */
 export function parseRules(json) {
   const rules = JSON.parse(json);
-  const valid =
-    Array.isArray(rules) &&
-    rules.every(
-      (rule) =>
-        rule?.constructor === Object &&
-        Object.keys(rule).every((key) => key === "reason" || fields.includes(key)) &&
-        typeof rule.reason === "string" &&
-        rule.reason !== "" &&
-        fields.some((field) => field in rule) &&
-        fields.every((field) => !(field in rule) || typeof rule[field] === "string")
-    );
-  if (!valid) throw new Error("ignore must list rules holding a reason and string patterns for repo, job or message.");
-  return rules.map((rule) => ({
-    reason: rule.reason,
-    patterns: fields.filter((field) => field in rule).map((field) => [field, new RegExp(rule[field])]),
-  }));
+  if (!Array.isArray(rules) || !rules.every(validRule))
+    throw new Error("ignore must list rules holding a reason and string patterns for repo, job or message.");
+  return rules.map(compileRule);
 }
 
 /**
- * The check suites of the runs that finished inside the window, on a repository's own default
- * branch. Pull request runs belong to their pull request, and a fork can name its branch after the
- * default one. GitHub timestamps share one ISO 8601 UTC format, so they compare as strings.
+ * Whether a default-branch run counts: it finished inside the window, for no pull request, from its
+ * own repository. Pull request runs belong to their pull request, and a fork can name its branch
+ * after the default one. GitHub timestamps share one ISO 8601 UTC format, so they compare as strings.
  */
+function inWindow(run, since, until) {
+  return (
+    run.event !== "pull_request" &&
+    run.head_repository?.full_name === run.repository.full_name &&
+    run.updated_at > since &&
+    run.updated_at <= until
+  );
+}
+
+/** The check suites of the runs that finished inside the window. */
 export const selectSuites = (runs, since, until) =>
-  runs
-    .filter(
-      (run) =>
-        run.event !== "pull_request" &&
-        run.head_repository?.full_name === run.repository.full_name &&
-        run.updated_at > since &&
-        run.updated_at <= until
-    )
-    .map((run) => run.check_suite_node_id);
+  runs.filter((run) => inWindow(run, since, until)).map((run) => run.check_suite_node_id);
 
 /**
  * Merges the suites' warning annotations into one entry per fingerprint: the wording without its
@@ -87,14 +94,19 @@ export function digest(suites, rules) {
     }
   }
   const warnings = [...entries.values()]
-    .map(({ message, hits, jobs, repos }) => ({
-      message,
-      hits,
-      jobs: [...jobs].sort(),
-      repos: [...repos].sort(([a], [b]) => a.localeCompare(b)).map(([repo, url]) => ({ repo, url })),
-    }))
+    .map(sortedWarning)
     .sort((a, b) => b.repos.length - a.repos.length || b.hits - a.hits);
   return { warnings, rules: rules.map(({ reason }, i) => ({ reason, hidden: hidden[i] })) };
+}
+
+/** A merged warning with its jobs and repositories sorted, each repository linked to its first run. */
+function sortedWarning({ message, hits, jobs, repos }) {
+  return {
+    message,
+    hits,
+    jobs: [...jobs].sort(),
+    repos: [...repos].sort(([a], [b]) => a.localeCompare(b)).map(([repo, url]) => ({ repo, url })),
+  };
 }
 
 const cell = (text) => text.replaceAll("|", "\\|").replaceAll("\n", " ");
@@ -120,25 +132,27 @@ export function summary({ warnings, rules }, since, until) {
   return lines.join("\n");
 }
 
+/** A message's first line, cut to 200 characters. */
+function headline(message) {
+  const first = message.split("\n")[0];
+  return first.length > 200 ? `${first.slice(0, 199)}…` : first;
+}
+
+/** One warning's two post lines: its bold headline, then its jobs, hits and linked repositories. */
+function postLines({ message, hits, jobs, repos }) {
+  const jobList = jobs.map((job) => `\`${job}\``).join(", ");
+  const repoLinks = repos.map(({ repo, url }) => `[${repo.split("/")[1]}](${url})`).join(", ");
+  return [`**${headline(message)}**`, `-# ${jobList} · ${plural(hits, "hit")} · ${repoLinks}`];
+}
+
 /** The Discord post: a title, one bold line per warning with its jobs, hits and repositories. */
 export function post({ warnings, rules }) {
   const hidden = rules.reduce((sum, rule) => sum + rule.hidden, 0);
-  const line = (message) => {
-    const first = message.split("\n")[0];
-    return first.length > 200 ? `${first.slice(0, 199)}…` : first;
-  };
   return {
     count: warnings.length,
     title: `${plural(warnings.length, "CI warning")} on the default branches`,
     footer: hidden === 0 ? "" : `${hidden} hidden by ignore rules`,
-    description: warnings
-      .flatMap(({ message, hits, jobs, repos }) => [
-        `**${line(message)}**`,
-        `-# ${jobs.map((job) => `\`${job}\``).join(", ")} · ${plural(hits, "hit")} · ${repos
-          .map(({ repo, url }) => `[${repo.split("/")[1]}](${url})`)
-          .join(", ")}`,
-      ])
-      .join("\n"),
+    description: warnings.flatMap(postLines).join("\n"),
   };
 }
 

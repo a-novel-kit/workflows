@@ -185,6 +185,25 @@ function gh(...args) {
   return execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
+/** The commit a tag names in a repository, or "" when GitHub cannot resolve it. */
+function tagCommit(repository, tag) {
+  try {
+    return gh("api", `repos/${repository}/commits/${tag}`, "--jq", ".sha").trim();
+  } catch {
+    return "";
+  }
+}
+
+/** The pull request's auto-merge state and the first auto-merge enabling, with its actor. */
+const AUTO_MERGE_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    autoMergeRequest { enabledAt }
+    timelineItems(itemTypes: [AUTO_MERGE_ENABLED_EVENT], first: 1) {
+      nodes { ... on AutoMergeEnabledEvent { actor { login } } }
+    }
+  } }
+}`;
+
 async function main() {
   const { REPOSITORY, PULL_REQUEST, HEAD_SHA, BOT, GITHUB_OUTPUT } = process.env;
   const [owner, name] = REPOSITORY.split("/");
@@ -193,36 +212,16 @@ async function main() {
   // The diff of the exact commit the caller approves, whatever the branch does meanwhile.
   const { files } = JSON.parse(gh("api", `repos/${REPOSITORY}/compare/${base}...${HEAD_SHA}`, "--jq", "{files}"));
   // The first to enable auto-merge decided it; recover-prs re-arms a dropped pull request as the agent.
+  const variables = ["-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `number=${number}`];
   const { autoMergeRequest, timelineItems } = JSON.parse(
-    gh(
-      "api",
-      "graphql",
-      "-F",
-      `owner=${owner}`,
-      "-F",
-      `name=${name}`,
-      "-F",
-      `number=${number}`,
-      "-f",
-      "query=query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) " +
-        "{ pullRequest(number: $number) { autoMergeRequest { enabledAt } " +
-        "timelineItems(itemTypes: [AUTO_MERGE_ENABLED_EVENT], first: 1) " +
-        "{ nodes { ... on AutoMergeEnabledEvent { actor { login } } } } } } }"
-    )
+    gh("api", "graphql", ...variables, "-f", `query=${AUTO_MERGE_QUERY}`)
   ).data.repository.pullRequest;
-  const resolveTag = (repository, tag) => {
-    try {
-      return gh("api", `repos/${repository}/commits/${tag}`, "--jq", ".sha").trim();
-    } catch {
-      return "";
-    }
-  };
   const { decision, reason } = await classify({
     files,
     bot: BOT,
     autoMergeEnabledBy: timelineItems.nodes[0]?.actor?.login,
     autoMergeArmed: Boolean(autoMergeRequest?.enabledAt),
-    resolveTag,
+    resolveTag: tagCommit,
   });
   // A filename is the pull request author's choice, so it never reaches the output as a new line.
   const line = reason.replace(/[\u0000-\u001f\u007f]/g, " ");
