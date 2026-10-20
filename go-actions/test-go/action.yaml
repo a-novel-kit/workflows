@@ -33,6 +33,13 @@ inputs:
     required: false
     description: The go.mod file to use.
     default: go.mod
+  working_directory:
+    required: false
+    description: The Go module directory. Defaults to the repository root.
+  race:
+    required: false
+    default: "false"
+    description: When "true", run the tests with the race detector.
 
 outputs:
   artifact-id:
@@ -50,7 +57,7 @@ runs:
       uses: actions/setup-go@v7.0.0
       if: ${{ inputs.skip_setup != 'true' }}
       with:
-        go-version-file: "go.mod"
+        go-version-file: ${{ inputs.working_directory && format('{0}/go.mod', inputs.working_directory) || 'go.mod' }}
         # Each Go action keeps its own cache, since setup-go keys one cache on go.sum for every Go job.
         cache: false
     - id: go-cache
@@ -65,6 +72,7 @@ runs:
     - name: discover modules
       shell: bash
       id: discover
+      working-directory: ${{ inputs.working_directory || '.' }}
       env:
         PACKAGES: ${{ runner.temp }}/go-test-packages.txt
       run: |
@@ -110,18 +118,21 @@ runs:
         discover_modules || exit 1
     - name: run tests
       shell: bash
+      working-directory: ${{ inputs.working_directory || '.' }}
       env:
         PACKAGES: ${{ runner.temp }}/go-test-packages.txt
         MODFILE: ${{ inputs.modfile }}
         TEST_FILE: ${{ inputs.test_file }}
         COVERAGE_FILE: ${{ inputs.coverage_file }}
+        RACE: ${{ inputs.race }}
       run: |
         set -euo pipefail
         # A read loop rather than mapfile, which macOS runners' Bash 3.2 lacks.
         packages=()
         while IFS= read -r package; do packages+=("$package"); done <"$PACKAGES"
-        go tool -modfile="$MODFILE" gotestsum --jsonfile "$TEST_FILE" --format pkgname \
-          -- -count=1 -cover -coverprofile="$COVERAGE_FILE" -json "${packages[@]}"
+        flags=(-count=1 -cover -coverprofile="$COVERAGE_FILE" -json)
+        if [ "$RACE" = "true" ]; then flags+=(-race); fi
+        go tool -modfile="$MODFILE" gotestsum --jsonfile "$TEST_FILE" --format pkgname -- "${flags[@]}" "${packages[@]}"
 
         go tool cover -func "$COVERAGE_FILE"
     # Only pushes to the default branch save: other refs restore its cache, a merge-queue
@@ -139,9 +150,9 @@ runs:
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.coverage_artifact }}
-        path: ${{ inputs.coverage_file }}
+        path: ${{ inputs.working_directory || '.' }}/${{ inputs.coverage_file }}
     - name: archive test results
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.test_artifact }}
-        path: ${{ inputs.test_file }}
+        path: ${{ inputs.working_directory || '.' }}/${{ inputs.test_file }}
