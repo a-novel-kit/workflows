@@ -266,7 +266,7 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | `epic-rollback-run`           | Admin-gated dispatch of `epic-rollback`, behind a typed confirmation.                                             |
 | `merge-gate-run`              | Post the required `merge-gate` check, and arm auto-merge on ready Epic members so they land together.             |
 | `notify-ci-run`               | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
-| `notify-issues-run`           | Post board issues entering Ready, or changing assignees outside Backlog, to Discord, pinging the assignees.       |
+| `notify-issues-run`           | Post board issues' Status and assignee changes to Discord by stage color, pinging on Triage, Ready and assignees. |
 | `notify-pr-run`               | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
 | `notify-release-run`          | Announce a published release in Discord with its notes, colored by its bump, gold for a hotfix.                   |
 | `notify-stuck-run`            | Post bots' pull requests that stay green but out of the merge queue to Discord, pinging the repo role.            |
