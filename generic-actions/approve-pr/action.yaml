@@ -43,7 +43,7 @@ runs:
             ;;
         esac
 
-    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.66.1
+    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.66.2
       with:
         roles: admin,maintain
 
@@ -59,7 +59,7 @@ runs:
         repositories: ${{ github.event.repository.name }}
         permission-pull-requests: write
 
-    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.66.1
+    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.66.2
       with:
         pull_request: ${{ inputs.pull_request }}
         github_token: ${{ steps.token.outputs.token }}
