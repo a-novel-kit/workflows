@@ -20,9 +20,6 @@ jobs:
       # Renovate cannot resolve private GitHub Packages dependencies.
       packages: read
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
       - uses: $/generic-actions/renovate
         with:
           repository_config: "true"

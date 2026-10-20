@@ -19,9 +19,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
       # Calls this branch's setup-node directly, since lint-node pins setup-node to the last release.
       - uses: $/node-actions/setup-node
         with:

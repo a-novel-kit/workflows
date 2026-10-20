@@ -16,9 +16,6 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
       - uses: $/node-actions/audit
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
