@@ -168,7 +168,7 @@ test("archive-board-items pages and archives with its ids and cursors as strings
     STATUS: "Done",
     ARCHIVE_CLOSED: "",
     CLOSE: "",
-    DRY_RUN: "",
+    DRY_RUN: "false",
   };
   succeeds(
     w.bash(step("generic-actions/archive-board-items/action.yaml", "Archive (and close) terminal board items"), env)

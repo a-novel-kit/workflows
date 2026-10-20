@@ -34,8 +34,8 @@ inputs:
     required: false
     default: "true"
     description: >
-      Any value but "false", in any case, logs the intended change and leaves the pull request
-      alone. "false" enables auto-merge.
+      Only "false", ignoring case and whitespace, enables auto-merge. Any other value logs the
+      intended change and leaves the pull request alone.
   kill_switch:
     required: false
     default: ""
@@ -93,7 +93,8 @@ runs:
         already=$(gh pr view "$PR" --repo "$REPO_FULL" --json autoMergeRequest \
           -q '.autoMergeRequest != null')
 
-        dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
         if [ "$dry" != "false" ]; then
           if [ "$already" = "true" ]; then
             echo "auto-merge already enabled on ${target} — would no-op (DRY RUN)." | tee -a "$GITHUB_STEP_SUMMARY"

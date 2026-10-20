@@ -48,7 +48,9 @@ inputs:
   dry_run:
     required: false
     default: "false"
-    description: When "true", log the change that would be made without writing it.
+    description: >
+      Only "false", ignoring case and whitespace, writes. Any other value logs the change that would
+      be made without writing it.
   kill_switch:
     required: false
     default: ""
@@ -115,6 +117,8 @@ runs:
             exit 1
           fi
         done
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
 
         # 1. Resolve the field's node id and type, and the option ids of a single-select field. A
         #    single-select field matches both fragments, and a date field matches the first only.
@@ -205,7 +209,7 @@ runs:
               echo "::error::content $content_id is not on the board and add_if_missing=false"
               exit 1
             fi
-            if [ "$DRY_RUN" = "true" ]; then
+            if [ "$dry" = true ]; then
               echo "- [dry-run] would add content $content_id to the board and set \"$FIELD\" = \"$VALUE\"." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
               continue
@@ -232,7 +236,7 @@ runs:
           fi
 
           # 4. Write the value, or report it under dry_run.
-          if [ "$DRY_RUN" = "true" ]; then
+          if [ "$dry" = true ]; then
             echo "- [dry-run] would set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." \
               | tee -a "$GITHUB_STEP_SUMMARY"
             continue

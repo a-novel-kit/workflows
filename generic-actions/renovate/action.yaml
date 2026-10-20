@@ -22,8 +22,8 @@ inputs:
     required: true
     description: Private key of the GitHub App that Renovate runs as.
   client_id:
-    required: false
-    description: Client ID of that App. The token mint fails without it.
+    required: true
+    description: Client ID of that App.
 
 runs:
   using: "composite"

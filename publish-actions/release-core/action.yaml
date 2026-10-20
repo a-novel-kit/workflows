@@ -31,9 +31,9 @@ inputs:
     required: false
     default: "false"
     description: >
-      When "true", bump and report the version and tags, then revert the working tree without
-      committing, tagging, pushing or releasing. A dry run mints no token, so it runs outside the
-      release environment.
+      Only "false", ignoring case and whitespace, commits, tags, pushes and releases. Any other value
+      bumps and reports the version and tags, then reverts the working tree. A dry run mints no token,
+      so it runs outside the release environment.
 
 outputs:
   version:
@@ -50,8 +50,10 @@ runs:
   using: composite
   steps:
     # A tag cut from another branch names the wrong commit, so any other ref fails before a token
-    # is minted. A cut whose job is outside the `release` environment reads an empty key.
+    # is minted. A cut whose job is outside the `release` environment reads an empty key. Every later
+    # step reads the dry_run this guard resolves.
     - name: Guard — default branch and credentials
+      id: guard
       shell: bash
       env:
         REF_NAME: ${{ github.ref_name }}
@@ -59,20 +61,24 @@ runs:
         DRY_RUN: ${{ inputs.dry_run }}
         HAS_KEY: ${{ inputs.app_private_key != '' && inputs.client_id != '' }}
       run: |
+        set -euo pipefail
         if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
           echo "::error::releases run from the default branch ($DEFAULT_BRANCH) only — got '$REF_NAME'"
           exit 1
         fi
-        if [ "$DRY_RUN" != "true" ] && [ "$HAS_KEY" != "true" ]; then
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
+        if [ "$dry" = false ] && [ "$HAS_KEY" != "true" ]; then
           echo "::error::a cut needs the release App's client ID and key; run its job in the \`release\` environment"
           exit 1
         fi
+        echo "dry_run=$dry" >> "$GITHUB_OUTPUT"
 
     # The self-pin sync rewrites `.github/workflows/*`, and GitHub refuses an App push touching a
     # workflow file without workflows write (GH013).
     - name: Mint push token
       id: token
-      if: ${{ inputs.dry_run != 'true' }}
+      if: ${{ steps.guard.outputs.dry_run == 'false' }}
       uses: actions/create-github-app-token@v3
       with:
         client-id: ${{ inputs.client_id }}
@@ -132,7 +138,7 @@ runs:
         GH_TOKEN: ${{ steps.token.outputs.token }}
         APP_SLUG: ${{ steps.token.outputs.app-slug }}
         RELEASE_TYPE: ${{ inputs.release_type }}
-        DRY_RUN: ${{ inputs.dry_run }}
+        DRY_RUN: ${{ steps.guard.outputs.dry_run }}
         BRANCH: ${{ github.ref_name }}
         STAMP_NEEDED: ${{ steps.stamp.outputs.needed }}
       run: |

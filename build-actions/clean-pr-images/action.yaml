@@ -19,7 +19,9 @@ inputs:
   dry_run:
     required: false
     default: "false"
-    description: When "true", report what would be deleted without deleting it.
+    description: >
+      Only "false", ignoring case and whitespace, deletes. Any other value reports what would be
+      deleted without deleting it.
 
 runs:
   using: composite
@@ -35,4 +37,8 @@ runs:
         PULL_REQUEST: ${{ inputs.pull_request }}
         PACKAGES: ${{ inputs.packages }}
         DRY_RUN: ${{ inputs.dry_run }}
-      run: node "$GITHUB_ACTION_PATH/../clean-images/keep.mjs" close
+      run: |
+        set -euo pipefail
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
+        DRY_RUN=$dry node "$GITHUB_ACTION_PATH/../clean-images/keep.mjs" close

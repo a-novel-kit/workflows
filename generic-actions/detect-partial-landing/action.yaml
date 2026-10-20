@@ -80,8 +80,9 @@ inputs:
     required: false
     default: "true"
     description: >
-      Only "false", in any letter case, posts check-runs and re-enqueues. Any other value, the default
-      "true" included, logs every intended check post and re-enqueue without writing to GitHub.
+      Only "false", ignoring case and whitespace, posts check-runs and re-enqueues. Any other value,
+      the default "true" included, logs every intended check post and re-enqueue without writing to
+      GitHub.
   planning_repo:
     required: false
     default: .github
@@ -305,8 +306,9 @@ runs:
           fi
         fi
 
-        # Only "false", in any case, writes to GitHub. tr lowercases portably to Bash 3.
-        dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
+        # tr lowercases portably to Bash 3.
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
 
         now_epoch=$(date -u +%s)
         grace_seconds=$(( GRACE_MINUTES * 60 ))

@@ -29,8 +29,8 @@ inputs:
     required: false
     default: "true"
     description: >
-      Only "false", in any case, writes. Any other value, the default "true" included, logs the
-      rollups without writing.
+      Only "false", ignoring case and whitespace, writes. Any other value, the default "true"
+      included, logs the rollups without writing.
   kill_switch:
     required: false
     default: ""
@@ -73,11 +73,14 @@ runs:
             ;;
         esac
 
-        python3 - <<'PY'
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
+
+        DRY_RUN=$dry python3 - <<'PY'
         import json, os, subprocess, sys
 
         PROJECT = os.environ["PROJECT_ID"]
-        DRY = os.environ.get("DRY_RUN", "true").strip().lower() != "false"  # anything but "false" stays dry
+        DRY = os.environ["DRY_RUN"] == "true"
         summary = open(os.environ["GITHUB_STEP_SUMMARY"], "a") if os.environ.get("GITHUB_STEP_SUMMARY") else None
 
         def emit(line):
