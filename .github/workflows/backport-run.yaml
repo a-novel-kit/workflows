@@ -139,7 +139,7 @@ jobs:
           roles: admin
       - name: Mint line token
         id: token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ inputs.release_client_id }}
           private-key: ${{ secrets.release_private_key }}
@@ -179,7 +179,7 @@ jobs:
 
       - name: Mint git token
         id: token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ inputs.client_id }}
           private-key: ${{ secrets.app_private_key }}
@@ -192,7 +192,7 @@ jobs:
       - name: Mint backport token
         id: backport-token
         if: ${{ inputs.dependency_client_id != '' }}
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ inputs.dependency_client_id }}
           private-key: ${{ secrets.dependency_private_key }}
@@ -200,7 +200,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.token.outputs.token }}
           fetch-depth: 0

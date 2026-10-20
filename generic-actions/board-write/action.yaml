@@ -74,7 +74,7 @@ runs:
     # Organization Projects write alone bounds a leak of this token to board edits.
     - name: Mint org-Projects token
       id: token
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}

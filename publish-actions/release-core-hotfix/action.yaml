@@ -70,7 +70,7 @@ runs:
     - name: Mint push token
       id: token
       if: ${{ steps.dry.outputs.dry_run == 'false' }}
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
@@ -82,7 +82,7 @@ runs:
     # the tag resolve. The line goes into a sub-path, so the root workspace stays on the caller's ref
     # for any local `./` action the caller runs after the cut.
     - name: Checkout
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         token: ${{ steps.token.outputs.token || github.token }}
         ref: ${{ inputs.ref }}
@@ -91,7 +91,7 @@ runs:
         fetch-tags: true
 
     - name: Setup node
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: lts/*
     # Only repos that stamp docs, through a prepublish:doc script, need the a-novel CLI.
@@ -108,12 +108,12 @@ runs:
     # prepublish:doc scripts call pnpm, and Node ships without Corepack from v25 on.
     - name: Setup pnpm
       if: ${{ steps.stamp.outputs.needed == 'true' }}
-      uses: pnpm/action-setup@v6
+      uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       with:
         package_json_file: __hotfix/package.json
     - name: Setup Go
       if: ${{ steps.stamp.outputs.needed == 'true' }}
-      uses: actions/setup-go@v7.0.0
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version: stable
         cache: false

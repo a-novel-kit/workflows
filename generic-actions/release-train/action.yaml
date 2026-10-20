@@ -91,7 +91,7 @@ runs:
     # repository in the org, which the single-repository GITHUB_TOKEN cannot see.
     - name: Mint read token
       id: read
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
@@ -104,7 +104,7 @@ runs:
     # action never pushes, so it holds no contents:write, and release-core mints its own.
     - name: Mint dispatch token
       id: dispatch
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
@@ -115,7 +115,7 @@ runs:
     # The receipt is a best-effort audit, since a resume reads live tags.
     - name: Mint issue token
       id: issue
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
