@@ -83,6 +83,32 @@ test("Go package discovery propagates failed reads and rejects an empty filtered
   assert.equal(w.read("packages.txt"), "example.org/repo\nexample.org/repo/internal/dao\n");
 });
 
+test("Go test run adds the race detector only when asked", (t) => {
+  const script = step("go-actions/test-go/action.yaml", "run tests");
+  const w = workspace(t);
+  w.stub("go", `require("node:fs").appendFileSync("calls", JSON.stringify(process.argv.slice(2)) + "\\n");`);
+  w.write("packages.txt", "example.org/repo\nexample.org/repo/internal/dao\n");
+  const env = {
+    PACKAGES: "packages.txt",
+    MODFILE: "gotestsum.mod",
+    TEST_FILE: "tests.json",
+    COVERAGE_FILE: "cover.txt",
+  };
+  const testArgs = (race) => {
+    succeeds(w.bash(script, { ...env, RACE: race }));
+    const run = w
+      .read("calls")
+      .trimEnd()
+      .split("\n")
+      .map(JSON.parse)
+      .findLast((args) => args.includes("gotestsum"));
+    return run.slice(run.indexOf("--") + 1);
+  };
+  const packages = ["example.org/repo", "example.org/repo/internal/dao"];
+  assert.deepEqual(testArgs("false"), ["-count=1", "-cover", "-coverprofile=cover.txt", "-json", ...packages]);
+  assert.deepEqual(testArgs("true"), ["-count=1", "-cover", "-coverprofile=cover.txt", "-json", "-race", ...packages]);
+});
+
 test("Dockerfile discovery accepts fleet naming conventions without claiming source files", () => {
   const source = read("generic-actions/lint-dockerfile/action.yaml");
   const pattern = source.match(/\| grep -E '(.*)'\)/)[1];
