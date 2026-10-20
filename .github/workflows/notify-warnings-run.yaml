@@ -1,10 +1,9 @@
 name: notify-warnings (reusable)
 
 # Posts one daily digest of the CI warnings an org's default branches raised to its Discord CI
-# channel. GitHub keeps every `::warning::`, its own deprecation notices included, as a check-run
-# annotation. The digest reads the annotations of the runs that finished since the caller's previous
-# successful run, so the next run catches up a late or failed one. It merges a warning that fires
-# in several repositories into one line and posts nothing on a clean day.
+# channel, one line per warning whatever the number of repositories raising it, and nothing on a
+# clean day. `collect-warnings` reads the runs that finished since the caller's previous successful
+# run, so the next run catches up a late or failed one.
 #
 # The caller's ignore rules hide expected warnings. Each rule needs a reason, and the step summary
 # counts what each rule hid, so a rule that no longer matches anything shows up there.
@@ -57,102 +56,20 @@ jobs:
           permission-checks: read
 
       - name: Collect the warnings
-        id: scan
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          CALLER: ${{ github.workflow_ref }}
-          IGNORE: ${{ inputs.ignore }}
-        run: |
-          set -euo pipefail
-          # A run counts in the window where it finished, from the previous successful run's creation
-          # to this one's, so consecutive digests never overlap. A first run looks back one day.
-          workflow="${CALLER%@*}"
-          until="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
-          since="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "${workflow##*/}" --status success \
-            --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
-          since="${since:-$(jq -rn --arg until "$until" '$until | fromdate - 86400 | todate')}"
-
-          jq -e 'type == "array" and all(.[]; type == "object" and (keys - ["reason", "repo", "job", "message"] == [])
-            and (.reason | type == "string" and length > 0)
-            and ([.repo, .job, .message] | map(select(. != null)) | length > 0 and all(type == "string")))' \
-            <<<"$IGNORE" >/dev/null ||
-            { echo "::error::ignore must list rules holding a reason and string patterns for repo, job or message."; exit 1; }
-
-          # A run finishing in the window started at most a day before it. Pull request runs belong to
-          # their pull request, and a fork can name its branch after the default one.
-          created="$(jq -rn --arg since "$since" '$since | fromdate - 86400 | todate')"
-          repos="$(gh api --paginate "orgs/$GITHUB_REPOSITORY_OWNER/repos" \
-            --jq '.[] | select(.archived | not) | "\(.full_name) \(.default_branch)"')"
-          suites="$(mktemp)"
-          while read -r repo branch; do
-            gh api --paginate \
-              "repos/$repo/actions/runs?branch=$branch&status=completed&created=>=$created&per_page=100" |
-              jq -r --arg since "$since" --arg until "$until" '.workflow_runs[]
-                | select(.event != "pull_request" and .head_repository.full_name == .repository.full_name)
-                | select(.updated_at > $since and .updated_at <= $until) | .check_suite_node_id' >>"$suites"
-          done <<<"$repos"
-
-          # One query reads 50 runs, each job's first 50 annotations, under GitHub's 500,000-node limit.
-          # GitHub itself keeps at most 10 warnings per step.
-          query='query($ids: [ID!]!) { nodes(ids: $ids) { ... on CheckSuite {
-            repository { nameWithOwner }
-            checkRuns(first: 100, filterBy: {checkType: LATEST}) { nodes {
-              name url annotations(first: 50) { nodes { annotationLevel title message } }
-            } }
-          } } }'
-          pages="$(mktemp)"
-          jq -cRn --arg query "$query" '[inputs | select(length > 0)] | range(0; length; 50) as $i
-            | {query: $query, variables: {ids: .[$i:$i + 50]}}' <"$suites" |
-            while read -r body; do gh api graphql --input - <<<"$body"; done >"$pages"
-
-          # A warning's numbers and hashes change between runs, so its fingerprint drops them. The
-          # digest shows the first wording seen. A hit takes the first rule matching all its patterns.
-          digest="$(jq -sc --argjson rules "$IGNORE" '
-            [.[].data.nodes[] | select(.) | .repository.nameWithOwner as $repo
-              | .checkRuns.nodes[] | .name as $job | .url as $url
-              | .annotations.nodes[] | select(.annotationLevel == "WARNING")
-              | {repo: $repo, job: $job, url: $url,
-                 message: ([.title, .message] | map(select(. != null and . != "")) | join(": "))}]
-            | map(. as $hit | . + {rule: ($rules | map(. as $rule | all("repo", "job", "message";
-                . as $field | $rule[$field] == null or ($hit[$field] | test($rule[$field])))) | index(true))})
-            | {
-                rules: (reduce (.[] | .rule // empty) as $i ([$rules[] | {reason, hidden: 0}]; .[$i].hidden += 1)),
-                warnings: (map(select(.rule == null)) | group_by(.message | gsub("[0-9a-f]{7,}|[0-9]+"; "#"))
-                  | map({message: .[0].message, hits: length, jobs: (map(.job) | unique),
-                         repos: (group_by(.repo) | map({repo: .[0].repo, url: .[0].url}))})
-                  | sort_by(-(.repos | length), -.hits))
-              }' "$pages")"
-
-          jq -r --arg since "$since" --arg until "$until" '"Default-branch runs finished between \($since) and \($until).\n",
-            if .warnings == [] then "No warnings.\n" else
-              "| Warning | Hits | Jobs | Repositories |", "| --- | --- | --- | --- |",
-              (.warnings[] | "| \(.message | gsub("\\|"; "\\|") | gsub("\n"; " ")) | \(.hits) | \(.jobs | join(", ")) | \(
-                .repos | map("[\(.repo)](\(.url))") | join(", ")) |"), "" end,
-            if .rules == [] then empty else
-              "| Ignore rule | Hidden |", "| --- | --- |",
-              (.rules[] | "| \(.reason) | \(if .hidden == 0 then "0, matched nothing" else .hidden end) |") end' \
-            <<<"$digest" >>"$GITHUB_STEP_SUMMARY"
-
-          delimiter="EOF_$(openssl rand -hex 8)"
-          jq -r --arg delimiter "$delimiter" '
-            (.warnings | length) as $count | ([.rules[].hidden] | add // 0) as $hidden
-            | "count=\($count)",
-              "title=\($count) CI warning\(if $count == 1 then "" else "s" end) on the default branches",
-              "footer=\(if $hidden == 0 then "" else "\($hidden) hidden by ignore rules" end)",
-              "description<<\($delimiter)",
-              (.warnings[] | "**\(.message | split("\n")[0] | if length > 200 then .[0:199] + "…" else . end)**",
-                "-# \(.jobs | map("`\(.)`") | join(", ")) · \(.hits) hit\(if .hits == 1 then "" else "s" end) · \(
-                  .repos | map("[\(.repo | split("/")[1])](\(.url))") | join(", "))"),
-              $delimiter' <<<"$digest" >>"$GITHUB_OUTPUT"
+        id: collect
+        uses: a-novel-kit/workflows/generic-actions/collect-warnings@v1.64.0
+        with:
+          github_token: ${{ steps.token.outputs.token }}
+          ignore: ${{ inputs.ignore }}
 
       - name: Post to the CI channel
-        if: steps.scan.outputs.count != '0'
+        if: steps.collect.outputs.count != '0'
         uses: a-novel-kit/workflows/generic-actions/discord-post@v1.64.0
         with:
           webhook: ${{ secrets.webhook }}
           color: upcoming
-          title: ${{ steps.scan.outputs.title }}
+          title: ${{ steps.collect.outputs.title }}
           url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          description: ${{ steps.scan.outputs.description }}
-          footer: ${{ steps.scan.outputs.footer }}
+          description: ${{ steps.collect.outputs.description }}
+          footer: ${{ steps.collect.outputs.footer }}
           dry_run: ${{ inputs.dry_run }}

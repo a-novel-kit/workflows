@@ -99,6 +99,7 @@ move a tag.
 | `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.           |
 | `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.     |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                         |
+| `collect-warnings`       | Merge the warnings an org's default-branch runs raised in a window into one entry each, minus ignore rules.      |
 | `derive-status`          | Derive the board Status of the issues a PR closes from the PR's current state.                                   |
 | `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
 | `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given.                      |
