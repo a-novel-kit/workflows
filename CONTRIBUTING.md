@@ -35,6 +35,10 @@ the versions in the README and the presets guide. A script
 that several actions share loads through `$GITHUB_ACTION_PATH`, as the security actions load
 `security-actions/run-scan.mjs`.
 
+A third-party action is pinned to its release commit, as `owner/repo@<sha> # vX.Y.Z`, because many
+of these actions run beside an App's private key, and a moved tag must not change what they run.
+`pnpm lint` rejects any other form in an action manifest, and Renovate keeps the pins current.
+
 A change that callers must act on ships with a guide in `docs/migrations/`, added to its index.
 
 ## Scripts and tests

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { violations } from "../.github/scripts/lint-action-manifests.mjs";
+import { unpinned, violations } from "../.github/scripts/lint-action-manifests.mjs";
 import { command, succeeds } from "./helpers.mjs";
 
 const composite = (body) => `runs:\n  using: 'composite'\n  steps:\n    - shell: bash\n      run: |\n        ${body}\n`;
@@ -45,4 +45,31 @@ test("malformed expressions with repeated quotes cannot stall manifest validatio
     succeeds(command(process.execPath, ["--input-type=module", "-e", script], { input: source, timeout: 5000 })),
     "[]"
   );
+});
+
+test("third-party actions are pinned to a commit with their release beside it", () => {
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  const steps = (...refs) => `runs:\n  using: composite\n  steps:\n${refs.map((r) => `    - uses: ${r}\n`).join("")}`;
+  const pinned = [
+    `actions/checkout@${sha} # v7.0.1`,
+    `actions/cache/restore@${sha} # v6.1.0`,
+    `"actions/setup-go@${sha}" # v7.0.0`,
+    "a-novel-kit/workflows/generic-actions/pull-bot@v1.66.0",
+    "./local",
+    "$/.github/actions/local",
+    "docker://alpine:3.22",
+  ];
+  assert.deepEqual(unpinned(steps(...pinned)), []);
+  const unpinnedRefs = [
+    "actions/checkout@v7",
+    "actions/checkout@v7.0.1",
+    `actions/checkout@${sha}`,
+    `actions/checkout@${sha} # v7`,
+    `actions/checkout@${sha.slice(0, 7)} # v7.0.1`,
+    "evil/a-novel-kit/workflows@v1.66.0",
+  ];
+  for (const ref of unpinnedRefs) assert.deepEqual(unpinned(steps(ref)), [{ line: 4, uses: ref.split(" ")[0] }], ref);
+  assert.deepEqual(unpinned(`runs:\n  steps:\n    - name: Token\n      uses: actions/create-github-app-token@v3\n`), [
+    { line: 4, uses: "actions/create-github-app-token@v3" },
+  ]);
 });

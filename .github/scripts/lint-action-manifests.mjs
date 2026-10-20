@@ -29,14 +29,28 @@ export function violations(source) {
   return hits;
 }
 
+/** Find third-party actions not pinned as `owner/repo@<commit> # vX.Y.Z`, the form Renovate keeps current. */
+export function unpinned(source) {
+  return source.split("\n").flatMap((text, index) => {
+    const [, uses, rest] = /^\s*(?:-\s+)?uses:\s*["']?([^\s"']+)["']?(.*)$/.exec(text) ?? [];
+    if (!uses || /^(\.\/|\$\/|docker:\/\/|a-novel-kit\/)/.test(uses)) return [];
+    return /@[0-9a-f]{40}$/.test(uses) && /^\s+#\s*v\d+\.\d+\.\d+\s*$/.test(rest) ? [] : [{ line: index + 1, uses }];
+  });
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const root = resolve(process.argv[2] ?? ".");
   for (const file of globSync("**/action.{yaml,yml}", { cwd: root, exclude: ["**/node_modules/**", "**/.git/**"] })) {
     try {
-      for (const { line, context } of violations(readFileSync(resolve(root, file), "utf8"))) {
+      const source = readFileSync(resolve(root, file), "utf8");
+      for (const { line, context } of violations(source)) {
         console.error(
           `::error file=${file},line=${line}::${context} is unavailable in composite actions; pass it as an input.`
         );
+        process.exitCode = 1;
+      }
+      for (const { line, uses } of unpinned(source)) {
+        console.error(`::error file=${file},line=${line}::pin ${uses} to its release commit, as @<sha> # vX.Y.Z.`);
         process.exitCode = 1;
       }
     } catch (error) {
