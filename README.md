@@ -269,6 +269,7 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | `notify-pr-run`               | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
 | `notify-release-run`          | Announce a published release in Discord with its notes, colored by its bump, gold for a hotfix.                   |
 | `notify-stuck-run`            | Post bots' pull requests that stay green but out of the merge queue to Discord, pinging the repo role.            |
+| `notify-warnings-run`         | Post a daily digest of the org's default-branch CI warnings to Discord, one line per warning.                     |
 | `reconcile-board`             | Per-org fail-safe sweep that repairs the board, the `merge-gate` and `epic-freeze` checks and Epic status tables. |
 | `release-line-run`            | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
 | `release-train-run`           | Admin-gated dispatch of `release-train` for one landed Epic.                                                      |
