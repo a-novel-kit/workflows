@@ -151,6 +151,9 @@ runs:
       with:
         name: ${{ inputs.coverage_artifact }}
         path: ${{ inputs.working_directory || '.' }}/${{ inputs.coverage_file }}
+        # A re-run replaces its earlier upload. download-artifact keeps one artifact per name, the
+        # highest ID, and a re-run's upload can carry a lower ID than an earlier attempt's.
+        overwrite: true
     - name: archive test results
       uses: actions/upload-artifact@v7
       with:
