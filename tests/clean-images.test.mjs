@@ -1,7 +1,13 @@
 // What image cleanups keep: the composed exclusion pattern, build origins, and both CLI modes.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { keepPattern, origin, protectedDigests, provenanceOrigin } from "../build-actions/clean-images/keep.mjs";
+import {
+  keepPattern,
+  latestMinor,
+  origin,
+  protectedDigests,
+  provenanceOrigin,
+} from "../build-actions/clean-images/keep.mjs";
 import { manifest, root, succeeds, workspace } from "./helpers.mjs";
 
 const cleanup = manifest("build-actions/clean-images/action.yaml").runs.steps.find((s) =>
@@ -132,6 +138,13 @@ test("old untagged builds of the default branch, open pull requests or unreadabl
   });
 });
 
+test("the last minor release is the newest vX.Y.0 tag", () => {
+  const tagged = (...tags) => tags.map((tag) => ({ metadata: { container: { tags: [tag] } } }));
+  assert.equal(latestMinor(tagged("v2.9.0", "v2.10.0", "v2.10.1", "v2.10", "v2", "latest", "v3.0.0-rc.1")), "v2.10.0");
+  assert.equal(latestMinor(tagged("v1.9.0", "v2.0.0")), "v2.0.0");
+  assert.equal(latestMinor(tagged("v0.1.4", "master")), undefined);
+});
+
 /** Answers the GitHub and registry calls both CLI modes make, recording each request. */
 function stub(w, { versions, tagged = [] }) {
   return w.write(
@@ -149,6 +162,7 @@ function stub(w, { versions, tagged = [] }) {
       if (url.includes("/pulls")) return json(page === 1 ? [{ number: 5 }] : []);
       if (url.endsWith("/repos/a-novel/service")) return json({ default_branch: "master" });
       if (url.includes("/attestations/")) return json({ message: "Not Found" }, 404);
+      if (url.includes("/commits/v1.4.0")) return json({ commit: { committer: { date: "2026-03-01T00:00:00Z" } } });
       const tag = url.match(/manifests\\/(pr-[0-9]+)$/)?.[1];
       if (tag) return tagged.includes(tag) ? json({ manifests: [] }) : json({}, 404);
       if (url.includes("/manifests/")) return json({ config: { mediaType: "application/vnd.oci.image.config.v1+json", digest: "c" } });
@@ -187,6 +201,46 @@ test("the sweep pages every version, keeps open pull requests' builds and prunes
   assert.equal(Object.keys(cache).length, 100);
   assert.equal(cache["sha256:gone"], undefined);
   assert.match(w.read("summary"), /101 versions; keeps 2 untagged builds of master, of 1 open pull requests/);
+  // Without a minor release, no release commit is looked up.
+  assert(!w.read("requests").includes("/commits/"));
+});
+
+test("the sweep drops the default branch's untagged builds from before the last minor release", (t) => {
+  const w = workspace(t);
+  const version = (c, created, tags = []) => ({
+    id: c,
+    name: digest(c),
+    created_at: created,
+    updated_at: created,
+    metadata: { container: { tags } },
+  });
+  const versions = [
+    version("0", "2026-03-01T00:10:00Z", ["v1.4.0", "v1.4", "v1", "latest"]),
+    version("1", "2026-01-01T00:00:00Z", ["v1.3.0"]),
+    version("a", "2026-02-01T00:00:00Z"),
+    version("b", "2026-03-01T00:00:00Z"),
+    version("c", "2026-04-01T00:00:00Z"),
+    version("d", "2026-02-01T00:00:00Z"),
+  ];
+  w.write(
+    "cache.json",
+    JSON.stringify({ [digest("a")]: "master", [digest("b")]: "master", [digest("c")]: "master", [digest("d")]: "pr-5" })
+  );
+  const fetchStub = stub(w, { versions });
+  succeeds(
+    w.run(process.execPath, ["--import", fetchStub, `${root}build-actions/clean-images/keep.mjs`], {
+      GH_TOKEN: "token",
+      GITHUB_REPOSITORY: "a-novel/service",
+      PACKAGE: "service/rest",
+      MIN_AGE_DAYS: "1",
+      CACHE_FILE: `${w.cwd}/cache.json`,
+    })
+  );
+  // The build of the release commit's own instant stays; an open pull request's build stays at any age.
+  const prefixes = ["b", "c", "d"].map((c) => digest(c).slice(7, 23)).join("|");
+  assert.equal(w.read("output"), `pattern=^(master|pr-5)$|^sha256:(${prefixes})\n`);
+  assert.match(w.read("requests"), /GET https:\/\/api\.github\.com\/repos\/a-novel\/service\/commits\/v1\.4\.0\n/);
+  assert.match(w.read("summary"), /keeps 3 untagged builds of master since v1\.4\.0/);
 });
 
 test("closing a pull request deletes only its single-tagged image, unless rehearsed", (t) => {

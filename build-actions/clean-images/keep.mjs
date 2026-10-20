@@ -1,6 +1,7 @@
-// Decide what a package sweep keeps beyond release tags: the default branch's tag and builds, and the
-// tags and builds of open pull requests. A build's version label names its origin; a build pushed
-// without a tag has none, so its provenance attestation names the pull request it came from.
+// Decide what a package sweep keeps beyond release tags: the default branch's tag and its builds since
+// the last minor release, and the tags and builds of open pull requests. A build's version label names
+// its origin; a build pushed without a tag has none, so its provenance attestation names the pull
+// request it came from.
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -108,22 +109,29 @@ async function cachedOrigin(digest, read, cache) {
 }
 
 /**
- * Untagged versions past the minimum age that a sweep must keep: builds of the default branch or of an
- * open pull request, and builds whose origin cannot be read. Origins never change, so readable ones are
- * cached by digest.
+ * Untagged versions past the minimum age that a sweep must keep: those `kept` accepts from their origin
+ * and version, and builds whose origin cannot be read. Origins never change, so readable ones are cached
+ * by digest.
  */
 export async function protectedDigests(versions, cutoff, kept, read, cache) {
-  const candidates = versions
-    .filter((v) => v.metadata.container.tags.length === 0 && new Date(v.updated_at) < cutoff)
-    .map((v) => v.name);
+  const candidates = versions.filter((v) => v.metadata.container.tags.length === 0 && new Date(v.updated_at) < cutoff);
   const protect = [];
   // A few concurrent reads keep a first run on thousands of versions within minutes.
   for (let next = 0; next < candidates.length; next += 8) {
     const batch = candidates.slice(next, next + 8);
-    const origins = await Promise.all(batch.map((digest) => cachedOrigin(digest, read, cache)));
-    protect.push(...batch.filter((_, i) => origins[i] === null || kept(origins[i])));
+    const origins = await Promise.all(batch.map((v) => cachedOrigin(v.name, read, cache)));
+    protect.push(...batch.filter((v, i) => origins[i] === null || kept(origins[i], v)).map((v) => v.name));
   }
   return protect.sort();
+}
+
+/** The newest `vX.Y.0` tag among the versions: the last minor or major release, if any. */
+export function latestMinor(versions) {
+  const [newest] = versions
+    .flatMap((v) => v.metadata.container.tags.map((tag) => tag.match(/^v(\d+)\.(\d+)\.0$/)))
+    .filter(Boolean)
+    .sort((a, b) => b[1] - a[1] || b[2] - a[2]);
+  return newest?.[0];
 }
 
 /** The exclusion pattern beyond release tags; digests match by a 16-hex prefix to stay short. */
@@ -141,10 +149,15 @@ async function sweep(env) {
   const cache = JSON.parse(await readFile(env.CACHE_FILE, "utf8").catch(() => "{}"));
   const cutoff = new Date(Date.now() - Number(env.MIN_AGE_DAYS) * 86_400_000);
   const versions = await client.pages(client.versionsPath());
+  // The release image supersedes the default branch's untagged builds before it. A build is pushed
+  // after its commit lands, so comparing it with the release commit's date errs toward keeping.
+  const minor = latestMinor(versions);
+  const released =
+    minor && new Date((await client.api(`repos/${env.GITHUB_REPOSITORY}/commits/${minor}`)).commit.committer.date);
   const digests = await protectedDigests(
     versions,
     cutoff,
-    (o) => kept.has(o),
+    (o, v) => (o === defaultBranch ? !released || new Date(v.created_at) >= released : kept.has(o)),
     (d) => origin(client, d),
     cache
   );
@@ -156,7 +169,7 @@ async function sweep(env) {
   await appendFile(env.GITHUB_OUTPUT, `pattern=${keepPattern([...kept], digests)}\n`);
   await appendFile(
     env.GITHUB_STEP_SUMMARY,
-    `\`${env.PACKAGE}\`: ${versions.length} versions; keeps ${digests.length} untagged builds of ${defaultBranch}, of ${pulls.length} open pull requests, or of unreadable origin.\n`
+    `\`${env.PACKAGE}\`: ${versions.length} versions; keeps ${digests.length} untagged builds of ${defaultBranch}${minor ? ` since ${minor}` : ""}, of ${pulls.length} open pull requests, or of unreadable origin.\n`
   );
 }
 

@@ -48,7 +48,7 @@ update. A release that asks callers to change something comes with a
 
 | Action            | Purpose                                                                                                           |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `clean-images`    | Delete a package's images once their branch or pull request is gone; keep releases, `master` builds and open PRs. |
+| `clean-images`    | Delete images once their branch or PR is gone; keep releases, open PRs, and `master` builds since the last minor. |
 | `clean-pr-images` | Delete a closed pull request's `pr-<N>` image from each package that has one.                                     |
 | `docker`          | Build an image, verify that it runs **healthy**, push it and attest its provenance.                               |
 | `docker-job`      | Build an image, verify that its run **exits 0**, push it and attest its provenance.                               |
