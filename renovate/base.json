@@ -72,11 +72,14 @@
       "minimumReleaseAge": null
     },
     {
-      "description": "Bump the main go directive, grouped with the golang base image. Tool modfiles keep their existing compatibility floor until a tool dependency requires a newer Go release.",
+      "description": "Bump the main go directive, grouped with the golang base image, and only to a release that image publishes. go.dev lists a Go release a day or more before Docker Hub's alpine tag exists, and a directive ahead of the image fails every build under the image's GOTOOLCHAIN=local, so the directive reads its versions from the alpine tags. Tool modfiles keep their existing compatibility floor until a tool dependency requires a newer Go release.",
       "matchManagers": ["gomod"],
       "matchDepNames": ["go"],
       "matchDepTypes": ["golang"],
       "matchFileNames": ["/(^|/)go\\.mod$/"],
+      "overrideDatasource": "docker",
+      "overridePackageName": "docker.io/library/golang",
+      "extractVersion": "^(?<version>\\d+\\.\\d+\\.\\d+)-alpine$",
       "rangeStrategy": "bump",
       "groupName": "go toolchain"
     },
