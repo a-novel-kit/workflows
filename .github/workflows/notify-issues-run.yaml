@@ -160,14 +160,14 @@ jobs:
       - name: Resolve the assignees
         id: users
         if: matrix.event.ping && matrix.event.user_ids != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.66.0
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.66.1
         with:
           github_user_ids: ${{ matrix.event.user_ids }}
           bws_access_token: ${{ secrets.bws_access_token }}
           bws_server_url: ${{ inputs.bws_server_url }}
 
       - name: Post to Discord
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.66.0
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.66.1
         with:
           webhook: ${{ secrets.webhook }}
           webhooks: ${{ secrets.webhooks }}
