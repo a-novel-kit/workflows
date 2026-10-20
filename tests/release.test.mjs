@@ -23,12 +23,18 @@ test("release guard treats branch names as data and refuses a cut without the re
   // A rehearsal needs no key; a cut whose job sits outside the release environment reads none.
   const keyOutcomes = [
     ["true", "false", 0],
+    ["yes", "false", 0],
     ["false", "false", 1],
+    [" FALSE ", "false", 1],
   ];
   for (const [dryRun, hasKey, status] of keyOutcomes) {
     const env = { REF_NAME: "master", DEFAULT_BRANCH: "master", DRY_RUN: dryRun, HAS_KEY: hasKey };
     assert.equal(w.bash(guard, env).status, status);
   }
+  // The guard hands later steps its resolved dry_run.
+  w.write("output", "");
+  succeeds(w.bash(guard, { REF_NAME: "master", DEFAULT_BRANCH: "master", DRY_RUN: " FALSE ", HAS_KEY: "true" }));
+  assert.equal(w.read("output"), "dry_run=false\n");
 });
 
 test("release bump updates all package formats and quoted filenames, leaving versionless packages alone", (t) => {

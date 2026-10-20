@@ -18,7 +18,9 @@ on:
         required: false
         type: string
         default: "false"
-        description: When "true", log every post the run would send without sending it. A test_run ignores it.
+        description: >
+          Only "false", ignoring case and whitespace, sends posts. Any other value logs every post the run
+          would send without sending it. A test_run ignores it.
       test_run:
         required: false
         type: boolean
@@ -99,8 +101,10 @@ jobs:
             return 1
           }
 
+          dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          [ "$dry" = false ] || dry=true
           # A test run posts for every token, for real, overriding dry_run.
-          [ "$TEST_RUN" = "true" ] && DRY_RUN=false
+          [ "$TEST_RUN" = "true" ] && dry=false
 
           # Post one Discord payload with a small retry and explicit timeouts. $1 = JSON payload.
           post_discord() {
@@ -224,7 +228,7 @@ jobs:
                 '{embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[]}}')
             fi
 
-            if [ "$DRY_RUN" = "true" ]; then
+            if [ "$dry" = true ]; then
               { echo "[dry-run] would post for ${name} — ${reason} (ping: ${target}):"; printf '%s\n' "$desc"; } | tee -a "$GITHUB_STEP_SUMMARY"
               posted=$((posted + 1)); continue
             fi

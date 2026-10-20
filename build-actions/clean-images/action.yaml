@@ -23,7 +23,9 @@ inputs:
   dry_run:
     required: false
     default: "false"
-    description: When "true", list what would be deleted without deleting it.
+    description: >
+      Only "false", ignoring case and whitespace, deletes. Any other value lists what would be deleted
+      without deleting it.
 
 runs:
   using: composite
@@ -51,6 +53,16 @@ runs:
       with:
         path: ${{ runner.temp }}/clean-images.json
         key: clean-images-v2-${{ inputs.package }}-${{ github.run_id }}
+    - name: Resolve dry_run
+      id: dry
+      shell: bash
+      env:
+        DRY_RUN: ${{ inputs.dry_run }}
+      run: |
+        set -euo pipefail
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
+        echo "dry_run=$dry" >> "$GITHUB_OUTPUT"
     - uses: dataaxiom/ghcr-cleanup-action@v1.2.2
       with:
         token: ${{ inputs.github_token }}
@@ -66,4 +78,4 @@ runs:
         exclude-tags: ^(v[0-9].*|latest|nightly)$|${{ steps.keep.outputs.pattern }}
         older-than: ${{ inputs.min_age_days }} days
         validate: true
-        dry-run: ${{ inputs.dry_run }}
+        dry-run: ${{ steps.dry.outputs.dry_run }}

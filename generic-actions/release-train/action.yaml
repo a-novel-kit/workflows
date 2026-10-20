@@ -50,9 +50,9 @@ inputs:
     required: false
     default: "true"
     description: >
-      When "true" (default), rehearse every repository through its `release.yaml` with dry_run
-      "true", which cuts no tag, and leave the Epic body untouched. Set "false" to rehearse each
-      repository and then cut its release.
+      Only "false", ignoring case and whitespace, rehearses each repository and then cuts its release.
+      Any other value, the default "true" included, rehearses every repository through its
+      `release.yaml` with dry_run "true", which cuts no tag, and leaves the Epic body untouched.
   kill_switch:
     required: false
     default: ""
@@ -151,8 +151,8 @@ runs:
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""; exit 1
         fi
-        # Only "false", in any case, cuts real releases.
-        dry=$(printf '%s' "${DRY_RUN:-true}" | tr '[:upper:]' '[:lower:]')
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
 
         # ---- Per-Epic pause. A failed label read does not block, since the role check already
         # gates the run.

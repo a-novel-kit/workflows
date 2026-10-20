@@ -55,7 +55,9 @@ inputs:
   dry_run:
     required: false
     default: "false"
-    description: When "true", write the payload to the step summary instead of posting it.
+    description: >
+      Only "false", ignoring case and whitespace, posts. Any other value writes the payload to the
+      step summary instead of posting it.
 
 outputs:
   delivered:
@@ -83,6 +85,8 @@ runs:
       run: |
         set -euo pipefail
         echo "delivered=false" >> "$GITHUB_OUTPUT"
+        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$dry" = false ] || dry=true
 
         case "$COLOR" in
           failed) bar=15158332 ;;
@@ -127,7 +131,7 @@ runs:
             }
           + (if $pings == [] then {} else {content: ($pings + [$title] | join(" ") | cut(2000))} end)')
 
-        if [ "$DRY_RUN" = "true" ]; then
+        if [ "$dry" = true ]; then
           printf '[dry-run] would post to Discord:\n```json\n%s\n```\n' "$payload" >> "$GITHUB_STEP_SUMMARY"
           exit 0
         fi

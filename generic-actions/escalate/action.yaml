@@ -128,8 +128,8 @@ inputs:
     required: false
     default: "false"
     description: >
-      When "true", "1" or "yes", in any case, log every intended issue, board and push action
-      without performing it.
+      Only "false", ignoring case and whitespace, acts. Any other value logs every intended issue,
+      board and push action without performing it.
 
 outputs:
   issue_number:
@@ -193,10 +193,9 @@ runs:
         st=$(normalize "${STATE:-open}")
         case "$st" in open | resolve) : ;; *) echo "::error::state must be open|resolve (got \"$st\")"; exit 1 ;; esac
 
-        # dry_run is normalized once, so a "True" or " true " still stays dry. Every later step reads
-        # this value.
+        # dry_run resolves once to "true" or "false", and every later step reads that value.
         dry=$(normalize "${DRY_RUN:-}")
-        case "$dry" in true | 1 | yes) dry=true ;; *) dry=false ;; esac
+        [ "$dry" = false ] || dry=true
 
         for v in SUMMARY DEDUP_KEY PLANNING_REPO; do
           if [ -z "${!v:-}" ]; then echo "::error::$v is required"; exit 1; fi
