@@ -74,13 +74,9 @@ runs:
       run: |
         set -euo pipefail
 
-        if [ -z "${PR:-}" ]; then
-          echo "::error::pull_request_number is required"
-          exit 1
-        fi
-        target="${REPO_FULL}#${PR}"
+        target="${REPO_FULL}#${PR:-}"
 
-        # The org-wide halt is read before anything is armed.
+        # The org-wide halt is read first, so a halt exits 0 even without a pull request number.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
@@ -88,6 +84,11 @@ runs:
             exit 0
             ;;
         esac
+
+        if [ -z "${PR:-}" ]; then
+          echo "::error::pull_request_number is required"
+          exit 1
+        fi
 
         already=$(gh pr view "$PR" --repo "$REPO_FULL" --json autoMergeRequest \
           -q '.autoMergeRequest != null')

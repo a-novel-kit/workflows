@@ -421,6 +421,18 @@ test("escalate keeps a newline in an input from forging another output", (t) => 
   assert.doesNotMatch(result.stdout, /do_push/);
 });
 
+test("enable-auto-merge reads the halt before it requires a pull request number", (t) => {
+  const w = workspace(t);
+  w.stub("gh", "process.exit(1);");
+  const script = step("generic-actions/enable-auto-merge/action.yaml", "Enable auto-merge");
+  const env = { REPO_FULL: "a-novel-kit/x", PR: "", DRY_RUN: "false" };
+  succeeds(w.bash(script, { ...env, KILL_SWITCH: "on" }));
+  assert.match(w.read("summary"), /AGENT_KILL_SWITCH engaged/);
+  const result = w.bash(script, { ...env, KILL_SWITCH: "" });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /pull_request_number is required/);
+});
+
 test("Node actions check out with the workflow token and only audit mints an App token", () => {
   // Every pull request's own workflow can read a key its jobs are handed, so CI holds none.
   const ciActions = [
