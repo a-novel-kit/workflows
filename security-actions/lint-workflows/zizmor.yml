@@ -4,10 +4,10 @@ rules:
   unpinned-uses:
     config:
       policies:
-        # The fleet pins actions by tag: Renovate moves the whole a-novel-kit/workflows
-        # reference set as one grouped update, and a repository sits at one workflows
-        # version. ref-pin accepts a tag and still fails a floating `@master` or a
-        # missing ref.
+        # Accepts tags until every repository's Renovate has pinned its third-party actions to
+        # their release commits. Requiring commit pins first would fail each repository's
+        # grouped a-novel-kit/workflows update (a-novel-kit/workflows#626). ref-pin still fails
+        # a floating `@master` or a missing ref.
         "*": ref-pin
 
   cache-poisoning:
