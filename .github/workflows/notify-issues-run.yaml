@@ -1,13 +1,15 @@
 name: notify-issues (reusable)
 
-# Tells people in Discord when an issue is theirs to pick up. Each org's `.github` repository calls
-# this engine from a workflow a clock dispatches, since GitHub raises no event when a board Status
-# changes. The engine posts each open board issue that entered Ready, and each one whose assignees
-# changed outside Backlog, since the caller's previous successful run. The next run therefore catches
-# up a late or failed one.
+# Tells people in Discord how board issues move through their lifecycle. Each org's `.github`
+# repository calls this engine from a workflow a clock dispatches, since GitHub raises no event when a
+# board Status changes. The engine posts each board issue whose Status changed, and each open one whose
+# assignees changed, since the caller's previous successful run. The next run therefore catches up a
+# late or failed one. Issues in Backlog post nothing.
 #
-# A post goes to its repository's issues channel, or the org's when the repository has none. It pings
-# the assignees through the GitHub-to-Discord map, or the repository's role when nobody is assigned.
+# A post goes to its repository's issues channel, or the org's when the repository has none. Its color
+# names the stage: purple for Triage, blue for Ready, gold for In review and green for the rest. A move
+# into Triage or Ready, and an assignee change, ping the assignees through the GitHub-to-Discord map, or
+# the repository's role when nobody is assigned.
 on:
   workflow_call:
     inputs:
@@ -90,8 +92,8 @@ jobs:
             --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
           [ -n "$since" ] || since="$(date -u -d '-15 minutes' +%Y-%m-%dT%H:%M:%SZ)"
 
-          query='query($project: ID!, $endCursor: String) {
-            node(id: $project) { ... on ProjectV2 { items(first: 100, after: $endCursor) {
+          query='query($project: ID!, $states: [ProjectV2ItemArchivedState!], $filter: String, $endCursor: String) {
+            node(id: $project) { ... on ProjectV2 { items(first: 100, after: $endCursor, archivedStates: $states, query: $filter) {
               pageInfo { hasNextPage endCursor }
               nodes {
                 status: fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name updatedAt } }
@@ -106,21 +108,37 @@ jobs:
               }
             } } }
           }'
-          # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings.
-          events="$(GH_TOKEN="$BOARD_TOKEN" gh api graphql --paginate -f query="$query" -F project="$PROJECT_ID" |
+          scan() {
+            GH_TOKEN="$BOARD_TOKEN" gh api graphql --paginate -f query="$query" -F project="$PROJECT_ID" \
+              -f states="$1" -f filter="$2"
+          }
+          # reconcile-board archives a closed issue within 15 minutes, often before this poll sees it
+          # merge, so archived items count too. Their filter takes whole days in an unstated time zone,
+          # hence a day of margin. An item archived between the two scans appears in both.
+          day="$(date -u -d "${since%T*} -1 day" +%F)"
+          # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings. discord-post
+          # names its colors after CI states: released is purple, started blue, upcoming gold and
+          # succeeded green.
+          events="$({ scan NOT_ARCHIVED ""; scan ARCHIVED "updated:>=$day"; } |
             jq -sc --arg since "$since" '[.[].data.node.items.nodes[]
-              | select(.content.state == "OPEN" and .status != null)
-              | (if .status.name == "Ready" and .status.updatedAt > $since then "Ready for pickup"
-                 elif .status.name != "Backlog" and (.content.timelineItems.nodes[0].createdAt // "") > $since
-                 then "Assignees changed, status \(.status.name)"
-                 else empty end) as $what
+              | select(.content.state != null and .status != null and .status.name != "Backlog")
+              | .status.name as $status
+              | (.content.timelineItems.nodes[0].createdAt // "") as $assigned
+              | (if .status.updatedAt > $since then
+                   {at: .status.updatedAt, ping: ($status == "Triage" or $status == "Ready"),
+                    what: (if $status == "Ready" then "Ready for pickup" else "Moved to \($status)" end)}
+                 elif .content.state == "OPEN" and $assigned > $since then
+                   {at: $assigned, ping: true, what: "Assignees changed, status \($status)"}
+                 else empty end) as $event
               | [.content.assignees.nodes[] | select(.login | endswith("[bot]") | not)] as $assignees
               | {
+                  at: $event.at, ping: $event.ping,
+                  color: ({Triage: "released", Ready: "started", "In review": "upcoming"}[$status] // "succeeded"),
                   repo: .content.repository.nameWithOwner, number: .content.number, title: .content.title,
                   url: .content.url, user_ids: ($assignees | map(.databaseId | tostring) | join(" ")),
-                  description: "\($what) · \(if $assignees == [] then "nobody assigned"
+                  description: "\($event.what) · \(if $assignees == [] then "nobody assigned"
                     else "assigned to \($assignees | map(.login) | join(", "))" end)"
-                }]')"
+                }] | unique_by(.url) | sort_by(.at)')"
           echo "events=$events" >>"$GITHUB_OUTPUT"
           echo "$(jq length <<<"$events") issue(s) to post since $since." >>"$GITHUB_STEP_SUMMARY"
 
@@ -133,7 +151,7 @@ jobs:
       deployment: false
     permissions: {}
     strategy:
-      # One post at a time keeps the channel in board order and under Discord's rate limit.
+      # One post at a time keeps the channel in event order and under Discord's rate limit.
       max-parallel: 1
       matrix:
         event: ${{ fromJSON(needs.scan.outputs.events) }}
@@ -141,7 +159,7 @@ jobs:
       # The posting job resolves the assignees, because masked Discord ids cannot cross a job boundary.
       - name: Resolve the assignees
         id: users
-        if: matrix.event.user_ids != ''
+        if: matrix.event.ping && matrix.event.user_ids != ''
         uses: a-novel-kit/workflows/generic-actions/discord-users@v1.65.1
         with:
           github_user_ids: ${{ matrix.event.user_ids }}
@@ -154,10 +172,10 @@ jobs:
           webhook: ${{ secrets.webhook }}
           webhooks: ${{ secrets.webhooks }}
           repository: ${{ matrix.event.repo }}
-          color: started
+          color: ${{ matrix.event.color }}
           title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
           url: ${{ matrix.event.url }}
           description: ${{ matrix.event.description }}
           mention_users: ${{ steps.users.outputs.discord_ids }}
-          mention_roles: ${{ matrix.event.user_ids == '' && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
+          mention_roles: ${{ matrix.event.ping && matrix.event.user_ids == '' && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
           dry_run: ${{ inputs.dry_run }}
