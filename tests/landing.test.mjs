@@ -304,7 +304,7 @@ test("claim index keeps de-labeled members held and honors paused or unrelated i
     ],
     [{}, { EVENT_PR: "3", EVENT_LABELS: "[]" }, "success"],
     [{ body: "FAIL" }, { EVENT_PR: "3", EVENT_LABELS: '["epic:900"]' }, "success"],
-    [{}, { IN_QUEUE: "sha", MG_HEAD_REF: "unidentifiable" }, "failure"],
+    [{}, { IN_QUEUE: "unidentifiable" }, "failure"],
     [{}, { PR_NUMBER: "" }, "failure"],
   ];
   for (const [changes, env, expected] of verdicts) {

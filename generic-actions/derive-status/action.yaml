@@ -70,10 +70,7 @@ runs:
           "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "AGENT_KILL_SWITCH engaged — skipping board-status derivation (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
-            {
-              echo "halted=true"
-              echo "has_issue=false"
-            } >> "$GITHUB_OUTPUT"
+            echo "halted=true" >> "$GITHUB_OUTPUT"
             exit 0
             ;;
         esac

@@ -93,9 +93,8 @@ runs:
       env:
         VERSION: ${{ inputs.version }}
       run: |
-        v="$VERSION"
-        echo "minor=${v%.*}" >> "$GITHUB_OUTPUT"
-        echo "major=${v%%.*}" >> "$GITHUB_OUTPUT"
+        echo "minor=${VERSION%.*}" >> "$GITHUB_OUTPUT"
+        echo "major=${VERSION%%.*}" >> "$GITHUB_OUTPUT"
     - id: meta
       uses: docker/metadata-action@v6
       with:

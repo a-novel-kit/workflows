@@ -57,24 +57,14 @@ runs:
         pnpm i --no-frozen-lockfile
         pnpm format
     # The commit carries only the files the audit owns, whatever else the format script touched.
-    - name: check diff
-      id: check_diff
-      shell: bash
-      run: |
-        if [ -z "$(git status --porcelain -- pnpm-workspace.yaml pnpm-lock.yaml)" ];
-        then
-          echo "diff=0" >> "$GITHUB_OUTPUT"
-        else
-          echo "diff=1" >> "$GITHUB_OUTPUT"
-        fi
     - name: Open or update the pull request
-      if: steps.check_diff.outputs.diff == '1'
       shell: bash
       env:
         GH_TOKEN: ${{ steps.bot.outputs.token }}
         BRANCH: ${{ inputs.branch }}
       run: |
         set -euo pipefail
+        if [ -z "$(git status --porcelain -- pnpm-workspace.yaml pnpm-lock.yaml)" ]; then exit 0; fi
         # The default branch requires signed commits. GitHub signs a commit the App creates through
         # the API, never one it pushes.
         tree="$(for path in pnpm-workspace.yaml pnpm-lock.yaml; do

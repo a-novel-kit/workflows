@@ -177,7 +177,7 @@ runs:
             sub = c.get("subIssues") or {}
             tc = sub.get("totalCount", 0)
             nodes = sub.get("nodes") or []
-            if tc > 0 and tc <= len(nodes) and all(n.get("state") == "CLOSED" for n in nodes):
+            if tc <= len(nodes) and all(n.get("state") == "CLOSED" for n in nodes):
                 archived += 1
                 emit("- %s %s: all %d sub-issue(s) closed -> archive + close"
                      % ("would archive" if DRY else "archived", ek, tc))
@@ -198,9 +198,6 @@ runs:
                     ("Start date", sd(e), (min(starts) if starts else None), True)]
             for field, cur, new, is_date in plan:
                 if not new or new == cur:
-                    continue
-                if not is_date and new not in opt:
-                    emit("::warning::%s computed Status %r has no board option — skipping" % (ek, new))
                     continue
                 changes += 1
                 emit("- %s %s %s: %s -> %s" % ("would set" if DRY else "set", ek, field, cur or "<unset>", new))

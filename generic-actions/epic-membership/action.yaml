@@ -94,16 +94,15 @@ runs:
           exit 1
         fi
 
-        # --- Activation snapshot -----------------------------------------------------------------
-        # A frozen marker in the Epic body is the member set. Any other marker, or none, falls
-        # through to the live label search.
-        #
         # Guard planning_repo before it becomes an API path component.
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
           exit 1
         fi
-        frozen=""
+
+        # --- Activation snapshot -----------------------------------------------------------------
+        # A frozen marker in the Epic body is the member set. Any other marker, or none, falls
+        # through to the live label search.
         # Fences match whole lines, as in merge-gate's splice, so a fence string inside other text
         # cannot shadow the real region.
         START_M='<!-- epic-membership:snapshot:start -->'
@@ -139,7 +138,7 @@ runs:
         # anyone who can edit the Epic issue can write the marker. The repo pattern excludes quotes and
         # newlines, which could inject fields. The number must be a whole integer, because a value such
         # as 1.5 fails validation for the whole query.
-        [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
+        frozen=$(printf '%s' "$marker" | jq -c '
           select(type == "object" and .status == "frozen" and (.members | type == "array"))
           | .members
           | select(all(.[]; type == "object"
@@ -147,7 +146,7 @@ runs:
               and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
           | unique_by((.repo | ascii_downcase), .number)
           | select(length > 0 and length <= 50)' 2>/dev/null || true)
-        if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
+        if [ -n "$frozen" ]; then
           # Re-read each frozen member's live state, one GraphQL alias per member in a single call.
           # GitHub answers a multi-alias query with partial data and an `errors` array, so the answer
           # must cover every member. An incomplete answer yields [], which merge-gate holds on, so the
@@ -220,7 +219,7 @@ runs:
             # Capture stdout and stderr together, so the final failure can echo a transport, auth,
             # rate-limit or query error. On success gh prints only the response JSON, which jq checks.
             if data=$(gh api graphql "${args[@]}" 2>&1) \
-              && echo "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
+              && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
               printf '%s' "$data"
               return 0
             fi

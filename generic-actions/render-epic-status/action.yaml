@@ -93,7 +93,7 @@ runs:
         # guard and the render share this step, so the exit skips the whole render, and the next run
         # re-derives the table.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "AGENT_KILL_SWITCH engaged — skipping Epic read-model render (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -210,7 +210,7 @@ runs:
         # Drop the "_Rendered … " stamp line and blank lines from stdin, so the compare before a write
         # sees only material content. A new timestamp alone never triggers an edit.
         strip_volatile() {
-          grep -v '^_Rendered ' | sed '/^[[:space:]]*$/d' || true
+          sed -e '/^_Rendered /d' -e '/^[[:space:]]*$/d'
         }
 
         # Replace the managed region in an Epic body with a fresh one and print the new body. A body
@@ -268,19 +268,15 @@ runs:
           local epic="$1"
 
           # A missing or closed Epic issue is left alone, so a finished Epic stops changing.
-          local issue state body
-          if ! issue=$(gh issue view "$epic" --repo "${ORG}/${PLANNING_REPO}" --json state,body 2>/dev/null); then
+          local state
+          if ! state=$(gh issue view "$epic" --repo "${ORG}/${PLANNING_REPO}" --json state --jq .state 2>/dev/null); then
             echo "::warning::Epic ${ORG}/${PLANNING_REPO}#${epic} not found — skipping (display-only)." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
-          state=$(printf '%s' "$issue" | jq -r '.state')
           if [ "$state" = "CLOSED" ]; then
             echo "Epic ${ORG}/${PLANNING_REPO}#${epic} is CLOSED — leaving its body untouched." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
-          # A body edited on the web carries CRLF line endings. Normalizing to LF lets the fences match
-          # and the compare ignore line endings, and the write stores LF.
-          body=$(printf '%s' "$issue" | jq -r '.body // ""' | tr -d '\r')
 
           # The full member set, outside the lookback window too, so older merged members still
           # appear. Each node is tagged with the search bucket it came from.
@@ -318,13 +314,11 @@ runs:
           # Released resolution. Each repository with a merged member gets one latest-tag lookup, and
           # each merged member one compare. The result maps repo#number to its release tag, or to an
           # empty string when unreleased. fd 7 isolates this loop's stdin from the gh calls inside it.
-          local repo_tags='{}' released='{}' merged_repos r t
-          merged_repos=$(printf '%s' "$members" | jq -r '[.[] | select(.bucket=="merged") | .repository.nameWithOwner] | unique | .[]')
+          local repo_tags='{}' released='{}' r t
           while IFS= read -r r <&7; do
-            [ -n "$r" ] || continue
             t=$(latest_tag "$r")
             repo_tags=$(jq -cn --argjson m "$repo_tags" --arg k "$r" --arg v "$t" '$m + {($k): $v}')
-          done 7< <(printf '%s\n' "$merged_repos")
+          done 7< <(printf '%s' "$members" | jq -r '[.[] | select(.bucket=="merged") | .repository.nameWithOwner] | unique | .[]')
 
           local m_repo m_num m_sha m_tag rel
           # Stream the merged members tab-separated from one jq pass. fd 8 keeps this loop's stdin free
@@ -355,12 +349,12 @@ runs:
                  (if ($r | length) > 0 then "merged · released" else "merged" end)
                else "closed (unmerged)" end) as $state
             | (if .bucket == "merged" then (.mergeCommit.oid // "") else (.headRefOid // "") end) as $sha
-            | (if ($sha | length) >= 7 then $sha[0:7] else $sha end) as $short
+            | $sha[0:7] as $short
             | "| \($repo) | #\(.number) | \($state) | `\(if ($short | length) > 0 then $short else "—" end)` | \(if ($r | length) > 0 then $r else "—" end) |"')
           counts=$(printf '%s' "$members" | jq -r --argjson rel "$released" '
             "\(length) member(s) · "
             + "\([.[] | select(.bucket=="merged")] | length) merged "
-            + "(\([.[] | select(.bucket=="merged") | select(($rel["\(.repository.nameWithOwner)#\(.number)"] // "") | length > 0)] | length) released) · "
+            + "(\([$rel[] | select(length > 0)] | length) released) · "
             + "\([.[] | select(.bucket=="open")] | length) open · "
             + "\([.[] | select(.bucket=="closed")] | length) closed-unmerged"')
 
@@ -371,14 +365,13 @@ runs:
           region_inner=$(printf '### Epic status — display-only, derived from live GitHub truth (not authority)\n\n_Rendered %s UTC by the reconcile sweep. A lost or hand-edited table is cosmetic — every decision reads live state._\n\n%s\n\n| Repo | PR | State | SHA | Released |\n|------|----|-------|-----|----------|\n%s' \
             "$ts" "$counts" "$rows")
 
-          # Re-read the body before the compare and the write. The searches and compares above take
-          # seconds, and merge-gate writes its activation snapshot into this body from concurrent jobs.
-          # A splice into the body read at the top can erase a snapshot written since.
-          local fresh
-          if fresh=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${epic}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
-            body="$fresh"
-          else
-            echo "::warning::could not re-read Epic ${ORG}/${PLANNING_REPO}#${epic} — skipping this pass rather than deciding on a stale body." \
+          # The body is read only now, after the searches and compares above, because merge-gate writes
+          # its activation snapshot into this body from concurrent jobs. An earlier read could erase a
+          # snapshot written since. A body edited on the web carries CRLF line endings. Normalizing to
+          # LF lets the fences match and the compare ignore line endings, and the write stores LF.
+          local body
+          if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${epic}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+            echo "::warning::could not read Epic ${ORG}/${PLANNING_REPO}#${epic}'s body — skipping this pass." \
               | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
@@ -408,11 +401,7 @@ runs:
           # the loss, and otherwise its next pass decides again from the restored marker.
           local region_file body_file spliced_file
           region_file=$(mktemp); body_file=$(mktemp); spliced_file=$(mktemp)
-          {
-            printf '%s\n' "$START"
-            printf '%s\n' "$region_inner"
-            printf '%s\n' "$END"
-          } > "$region_file"
+          printf '%s\n' "$START" "$region_inner" "$END" > "$region_file"
           printf '%s\n' "$body" > "$body_file"
           splice "$body_file" "$region_file" > "$spliced_file"
 

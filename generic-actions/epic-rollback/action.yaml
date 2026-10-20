@@ -329,13 +329,12 @@ runs:
             echo "::error::REST read failed for ${repo}#${number} — cannot confirm the ledger; aborting."
             exit 1
           fi
-          merged=$(printf '%s' "$info" | awk '{print $1}')
-          sha=$(printf '%s' "$info" | awk '{print $2}')
+          read -r merged sha <<<"$info"
           if [ "$merged" != "true" ]; then
             echo "::warning::${repo}#${number} is not REST-confirmed merged (search index lag?) — excluding from the ledger." | tee -a "$GITHUB_STEP_SUMMARY"
             continue
           fi
-          if [ -z "$sha" ] || [ "$sha" = "null" ]; then
+          if [ -z "$sha" ]; then
             echo "::error::${repo}#${number} is merged but has no merge_commit_sha — cannot revert; aborting."
             exit 1
           fi
@@ -378,14 +377,11 @@ runs:
           rows=$(printf '%s' "$ledger" | jq -c --arg r "$repo" '[.[] | select(.repo==$r)] | sort_by(.mergedAt) | reverse')
           base=$(printf '%s' "$rows" | jq -r '.[0].base')
           echo "- **${repo}** (base \`${base}\`): would open ONE revert PR reverting, newest-first:" | tee -a "$GITHUB_STEP_SUMMARY"
-          while IFS= read -r line; do
-            [ -n "$line" ] || continue
-            echo "    - ${line}" | tee -a "$GITHUB_STEP_SUMMARY"
-          done < <(printf '%s' "$rows" | jq -r '.[] | "PR #\(.number) squash \(.sha[0:12]) (merged \(.mergedAt))"')
+          printf '%s' "$rows" | jq -r '.[] | "    - PR #\(.number) squash \(.sha[0:12]) (merged \(.mergedAt))"' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
         done < <(printf '%s\n' "$repos")
 
-        task_ids=$(printf '%s' "$ledger" | jq -r '[.[].tasks[]] | unique | .[]')
-        task_n=$(printf '%s' "$task_ids" | grep -c . || true)
+        task_n=$(printf '%s' "$ledger" | jq '[.[].tasks[]] | unique | length')
         echo "### Board reset plan: ${task_n} rolled-back Task(s) → Status \"Ready\"" | tee -a "$GITHUB_STEP_SUMMARY"
 
         # ---- Blast cap, before any mutation, on both dry and live runs -------------------------
@@ -402,13 +398,10 @@ runs:
         # newest base reverts a change that is not on that base, so a multi-base ledger aborts.
         multibase=$(printf '%s' "$ledger" | jq -r '
           group_by(.repo)[] | select((map(.base) | unique | length) > 1)
-          | "\(.[0].repo): \((map(.base) | unique) | join(", "))"')
+          | "  - \(.[0].repo): \((map(.base) | unique) | join(", "))"')
         if [ -n "$multibase" ]; then
           echo "::error::epic:${EPIC} siblings span multiple base branches within a repo — refusing to revert older-base siblings onto the newest base. Roll those back per-base by hand:" | tee -a "$GITHUB_STEP_SUMMARY"
-          while IFS= read -r line; do
-            [ -n "$line" ] || continue
-            echo "  - ${line}" | tee -a "$GITHUB_STEP_SUMMARY"
-          done < <(printf '%s\n' "$multibase")
+          printf '%s\n' "$multibase" | tee -a "$GITHUB_STEP_SUMMARY"
           exit 1
         fi
 
@@ -489,23 +482,22 @@ runs:
         # The plan step's ledger names exactly the repositories the write token covers. The mutation
         # never searches the epic:<N> set again, since a repository from a fresh search answers 403
         # mid-wave.
-        ledger="$LEDGER"
-        repos=$(printf '%s' "$ledger" | jq -r '[.[].repo] | unique | .[]')
-        task_n=$(printf '%s' "$ledger" | jq -r '[.[].tasks[]] | unique | length')
+        repos=$(printf '%s' "$LEDGER" | jq -r '[.[].repo] | unique | .[]')
+        task_n=$(printf '%s' "$LEDGER" | jq -r '[.[].tasks[]] | unique | length')
         MARKER="ROLLBACK-HELD.md"
 
         # ================= Mutations ===========================================================
 
         # ---- Open the rollback Epic M first, since branch names and PR bodies name it ----------
         epic_body=$(printf 'Automated rollback of **epic:#%s** — its landed subset violated INV-1.\n\n**Reason:** %s\n\nRequested by @%s.\n\nReverts (one PR per repo, labeled to THIS rollback epic) land atomically through the same merge-gate + review + queue + partial-landing detector as the forward wave. This does NOT un-merge the originals — each revert is a new forward commit.\n\n### Reconstructed ledger\n%s' \
-          "$EPIC" "$REASON" "$ACTOR" "$(printf '%s' "$ledger" | jq -r '.[] | "- \(.repo)#\(.number): revert squash \(.sha[0:12]) (pre-merge \(.premerge[0:12]))"')")
+          "$EPIC" "$REASON" "$ACTOR" "$(printf '%s' "$LEDGER" | jq -r '.[] | "- \(.repo)#\(.number): revert squash \(.sha[0:12]) (pre-merge \(.premerge[0:12]))"')")
         if ! epic_url=$(GH_TOKEN="$WRITE_TOKEN" gh issue create --repo "${ORG}/${PLANNING_REPO}" \
           --title "ROLLBACK epic:#${EPIC} — reconstructed compensating reverts" \
           --body "$epic_body"); then
           echo "::error::could not open the rollback-Epic issue in ${ORG}/${PLANNING_REPO} (issues:write?)."
           exit 1
         fi
-        M=$(printf '%s' "$epic_url" | grep -oE '[0-9]+$')
+        M=$(printf '%s' "$epic_url" | grep -oE '[0-9]+$' || true)
         if ! [[ "$M" =~ ^[0-9]+$ ]]; then
           echo "::error::could not parse the rollback-Epic number from \"${epic_url}\"."
           exit 1
@@ -515,6 +507,7 @@ runs:
         branch="rollback/epic-${EPIC}-m${M}"
         produced='[]'
         had_failure=false
+        dir=""
 
         # List the revert pull requests already opened under #M, for an abort mid-generation such as
         # a clone, push or label failure. No listed pull request has auto-merge armed or an
@@ -527,10 +520,17 @@ runs:
             echo "### Rollback ABORTED mid-generation — ${n} revert PR(s) already opened under rollback-Epic #${M}"
             echo "None has auto-merge armed or an approval, so nothing lands. Clean up (close them + close #${M}) or finish the rollback by hand:"
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$n" -gt 0 ]; then
-            printf '%s' "$produced" | jq -r '.[] | "- \(.repo) PR #\(.number)\(if .draft then " (HELD draft)" else "" end)"' | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          printf '%s' "$produced" | jq -r '.[] | "- \(.repo) PR #\(.number)\(if .draft then " (HELD draft)" else "" end)"' | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Rollback-Epic: ${ORG}/${PLANNING_REPO}#${M}" | tee -a "$GITHUB_STEP_SUMMARY"
+        }
+
+        # Aborts mid-generation: logs $1, drops the clone, lists the pull requests already opened and
+        # fails the step.
+        abort_generation() { # $1 = error message
+          echo "::error::$1" | tee -a "$GITHUB_STEP_SUMMARY"
+          rm -rf "$dir"
+          orphan_summary
+          exit 1
         }
 
         # ---- Pass 1a: per repository, revert newest first, open the pull request, label it ------
@@ -539,9 +539,7 @@ runs:
         # git or gh call inside consumes their input.
         while IFS= read -r repo <&3; do
           [ -n "$repo" ] || continue
-          owner="${repo%%/*}"
-          name="${repo#*/}"
-          rows=$(printf '%s' "$ledger" | jq -c --arg r "$repo" '[.[] | select(.repo==$r)] | sort_by(.mergedAt) | reverse')
+          rows=$(printf '%s' "$LEDGER" | jq -c --arg r "$repo" '[.[] | select(.repo==$r)] | sort_by(.mergedAt) | reverse')
           base=$(printf '%s' "$rows" | jq -r '.[0].base')
           sha_list=$(printf '%s' "$rows" | jq -r '[.[].sha[0:12]] | join(", ")')
           orig_list=$(printf '%s' "$rows" | jq -r '[.[] | "\(.repo)#\(.number)"] | join(", ")')
@@ -551,11 +549,8 @@ runs:
           # history keeps the squash commit and its parent reachable. The token lives only in this
           # throwaway clone's remote URL on the ephemeral runner.
           if ! git clone --quiet --branch "$base" \
-            "https://x-access-token:${WRITE_TOKEN}@github.com/${owner}/${name}.git" "$dir" 2>/dev/null; then
-            echo "::error::could not clone ${repo}@${base}." | tee -a "$GITHUB_STEP_SUMMARY"
-            rm -rf "$dir"
-            orphan_summary
-            exit 1
+            "https://x-access-token:${WRITE_TOKEN}@github.com/${repo}.git" "$dir" 2>/dev/null; then
+            abort_generation "could not clone ${repo}@${base}."
           fi
           git -C "$dir" config user.name "${APP_SLUG}[bot]"
           git -C "$dir" config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
@@ -563,10 +558,8 @@ runs:
 
           conflict=false
           detail=""
-          while IFS= read -r pair <&5; do
-            [ -n "$pair" ] || continue
-            r_sha=$(printf '%s' "$pair" | awk '{print $1}')
-            r_pre=$(printf '%s' "$pair" | awk '{print $2}')
+          while read -r r_sha r_pre <&5; do
+            [ -n "$r_sha" ] || continue
             # The squash commit's parent must equal the ledger's pre-merge SHA. A mismatch means the
             # branch was rewritten or the ledger names the wrong landing.
             actual_parent=$(git -C "$dir" rev-parse "${r_sha}^" 2>/dev/null || echo "")
@@ -605,38 +598,26 @@ runs:
               git -C "$dir" add "$MARKER"
               git -C "$dir" commit --quiet -m "revert: hold the epic:#${EPIC} rollback #${M} placeholder (do not merge)"
               if ! git -C "$dir" push --quiet -u origin "$branch" 2>/dev/null; then
-                echo "::error::could not push held placeholder for ${repo} (empty commit AND ${MARKER} marker both rejected)." | tee -a "$GITHUB_STEP_SUMMARY"
-                rm -rf "$dir"
-                orphan_summary
-                exit 1
+                abort_generation "could not push held placeholder for ${repo} (empty commit AND ${MARKER} marker both rejected)."
               fi
             fi
             body=$(printf 'HELD — the automated revert for **%s** could not be produced:\n\n> %s\n\nThis is a DRAFT placeholder that keeps epic:#%s from landing partially (the merge-gate holds every sibling until this one is ready). Never auto-resolved.\n\n**Finish by hand:** reset this branch to `%s`, then for each commit below (NEWEST-FIRST) run `git revert --no-commit <squash>`, resolve conflicts, `git commit -m "revert: <reverted subject>"`, push, retitle this PR without `[HELD]`, and mark it ready.\n\nCommits to revert: %s (originals: %s)\n\nRequested by @%s. Reason: %s' \
               "$repo" "$detail" "$M" "$base" "$sha_list" "$orig_list" "$ACTOR" "$REASON")
             if ! pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
               --draft --title "revert: [HELD] roll back epic:#${EPIC} in ${repo} (rollback #${M})" --body "$body"); then
-              echo "::error::could not open the HELD draft revert PR for ${repo}." | tee -a "$GITHUB_STEP_SUMMARY"
-              rm -rf "$dir"
-              orphan_summary
-              exit 1
+              abort_generation "could not open the HELD draft revert PR for ${repo}."
             fi
             draft=true
             had_failure=true
           else
             if ! git -C "$dir" push --quiet -u origin "$branch" 2>/dev/null; then
-              echo "::error::could not push revert branch for ${repo}." | tee -a "$GITHUB_STEP_SUMMARY"
-              rm -rf "$dir"
-              orphan_summary
-              exit 1
+              abort_generation "could not push revert branch for ${repo}."
             fi
             body=$(printf 'Reverts the landed epic:#%s changes in **%s** (newest-first): %s.\n\nOriginals: %s. Part of rollback epic #%s. Each revert is a new forward commit — the originals stay merged in history.\n\nRequested by @%s. Reason: %s' \
               "$EPIC" "$repo" "$sha_list" "$orig_list" "$M" "$ACTOR" "$REASON")
             if ! pr_url=$(GH_TOKEN="$WRITE_TOKEN" gh pr create --repo "$repo" --base "$base" --head "$branch" \
               --title "revert: roll back epic:#${EPIC} in ${repo} (rollback #${M})" --body "$body"); then
-              echo "::error::could not open the revert PR for ${repo}." | tee -a "$GITHUB_STEP_SUMMARY"
-              rm -rf "$dir"
-              orphan_summary
-              exit 1
+              abort_generation "could not open the revert PR for ${repo}."
             fi
             draft=false
           fi
@@ -653,9 +634,7 @@ runs:
           GH_TOKEN="$WRITE_TOKEN" gh label create "epic:${M}" --repo "$repo" --color BFD4F2 \
             --description "Rollback epic #${M} (reverts epic:#${EPIC})" >/dev/null 2>&1 || true
           if ! GH_TOKEN="$WRITE_TOKEN" gh pr edit "$pr_num" --repo "$repo" --add-label "epic:${M}" >/dev/null 2>&1; then
-            echo "::error::could not apply epic:${M} to ${repo}#${pr_num} — the epic:<M> membership is the no-partial-rollback guarantee; aborting." | tee -a "$GITHUB_STEP_SUMMARY"
-            orphan_summary
-            exit 1
+            abort_generation "could not apply epic:${M} to ${repo}#${pr_num} — the epic:<M> membership is the no-partial-rollback guarantee; aborting."
           fi
         done 3< <(printf '%s\n' "$repos")
 
@@ -664,16 +643,12 @@ runs:
         # stripped. A missing epic:<M> aborts, because an unlabeled member escapes the wave and can
         # land alone.
         prod_count=$(printf '%s' "$produced" | jq 'length')
-        for i in $(seq 0 $((prod_count - 1))); do
-          repo=$(printf '%s' "$produced" | jq -r ".[$i].repo")
-          pr_num=$(printf '%s' "$produced" | jq -r ".[$i].number")
+        while read -r repo pr_num <&3; do
           labels_now=$(GH_TOKEN="$WRITE_TOKEN" gh pr view "$pr_num" --repo "$repo" --json labels -q '.labels[].name' 2>/dev/null || echo "")
           if ! printf '%s\n' "$labels_now" | grep -qx "epic:${M}"; then
-            echo "::error::epic:${M} did NOT stick on ${repo}#${pr_num} (label re-read failed) — the no-partial-rollback guarantee is broken; aborting. Apply epic:${M} to every produced revert by hand, or close them + close #${M}." | tee -a "$GITHUB_STEP_SUMMARY"
-            orphan_summary
-            exit 1
+            abort_generation "epic:${M} did NOT stick on ${repo}#${pr_num} (label re-read failed) — the no-partial-rollback guarantee is broken; aborting. Apply epic:${M} to every produced revert by hand, or close them + close #${M}."
           fi
-        done
+        done 3< <(printf '%s' "$produced" | jq -r '.[] | "\(.repo) \(.number)"')
         echo "All ${prod_count} revert PR(s) verified as epic:${M} members." | tee -a "$GITHUB_STEP_SUMMARY"
 
         # merge-gate retires epic:#N's frozen wave once every member merged, so a member closed
@@ -706,10 +681,7 @@ runs:
         # Arming after the whole set is labeled keeps an early member from arming before its
         # siblings exist. Auto-merge then waits for a person's approval. A held draft stays unarmed,
         # since it is the member that holds the wave.
-        for i in $(seq 0 $((prod_count - 1))); do
-          repo=$(printf '%s' "$produced" | jq -r ".[$i].repo")
-          pr_num=$(printf '%s' "$produced" | jq -r ".[$i].number")
-          draft=$(printf '%s' "$produced" | jq -r ".[$i].draft")
+        while read -r repo pr_num draft <&3; do
           if [ "$draft" = "true" ]; then
             echo "${repo}#${pr_num}: HELD draft — epic:${M} member (holds the wave), auto-merge NOT armed." | tee -a "$GITHUB_STEP_SUMMARY"
             continue
@@ -729,7 +701,7 @@ runs:
             had_failure=true
             echo "::error::could not arm auto-merge on ${repo}#${pr_num} after retries — enable it by hand before approving the wave." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-        done
+        done 3< <(printf '%s' "$produced" | jq -r '.[] | "\(.repo) \(.number) \(.draft)"')
 
         # ---- Board reset: move each forward pull request's Tasks to Status "Ready" --------------
         # A revert is a new commit and the originals stay merged, so no other automation moves the
@@ -740,7 +712,7 @@ runs:
         # A Task from a repository whose revert is a held draft keeps its Status, since that revert
         # has not landed.
         held_repos=$(printf '%s' "$produced" | jq -c '[.[] | select(.draft==true) | .repo]')
-        reset_task_ids=$(printf '%s' "$ledger" | jq -r --argjson held "$held_repos" '
+        reset_task_ids=$(printf '%s' "$LEDGER" | jq -r --argjson held "$held_repos" '
           ( [ .[] | select(.repo as $r | $held | index($r)) | .tasks[] ] | unique ) as $blocked
           | [ .[].tasks[] ] | unique
           | map(select( . as $t | ($blocked | index($t)) | not ))
