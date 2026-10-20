@@ -11,9 +11,9 @@ description: >
   wave. The snapshot fixes who the members are, and each member's state is read live on every run.
   A `pending` or `retired` marker counts as no snapshot, so the live label set applies.
 
-  The action only reads. It fails when it cannot read the Epic issue or complete the label search,
-  and it reports an empty set when it cannot re-read every frozen member. The caller decides
-  whether either outcome holds or passes.
+  The action only reads. A missing Epic issue counts as no snapshot. The action fails when any other
+  read of the Epic issue fails or the label search cannot complete, and it reports an empty set when
+  it cannot re-read every frozen member. The caller decides whether either outcome holds or passes.
 
 inputs:
   epic_number:
@@ -94,16 +94,15 @@ runs:
           exit 1
         fi
 
-        # --- Activation snapshot -----------------------------------------------------------------
-        # A frozen marker in the Epic body is the member set. Any other marker, or none, falls
-        # through to the live label search.
-        #
         # Guard planning_repo before it becomes an API path component.
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
           echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
           exit 1
         fi
-        frozen=""
+
+        # --- Activation snapshot -----------------------------------------------------------------
+        # A frozen marker in the Epic body is the member set. Any other marker, or none, falls
+        # through to the live label search.
         # Fences match whole lines, as in merge-gate's splice, so a fence string inside other text
         # cannot shadow the real region.
         START_M='<!-- epic-membership:snapshot:start -->'
@@ -132,14 +131,14 @@ runs:
           | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
           | sed -n '/^[[:space:]]*[{[]/,$p' \
           | jq -s -c '.[0] // empty' 2>/dev/null || true)
-        # Only a frozen marker with a valid member list counts. A pending, malformed or misshapen
-        # marker leaves `frozen` empty, and the live search applies.
+        # Only a frozen marker listing 1 to 50 valid members counts, the cap merge-gate writes with. A
+        # pending, malformed or misshapen marker leaves `frozen` empty, and the live search applies.
         #
         # The guards are strict because `.repo` and `.number` go into the GraphQL document below, and
         # anyone who can edit the Epic issue can write the marker. The repo pattern excludes quotes and
         # newlines, which could inject fields. The number must be a whole integer, because a value such
         # as 1.5 fails validation for the whole query.
-        [ -n "$marker" ] && frozen=$(printf '%s' "$marker" | jq -c '
+        frozen=$(printf '%s' "$marker" | jq -c '
           select(type == "object" and .status == "frozen" and (.members | type == "array"))
           | .members
           | select(all(.[]; type == "object"
@@ -147,7 +146,7 @@ runs:
               and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
           | unique_by((.repo | ascii_downcase), .number)
           | select(length > 0 and length <= 50)' 2>/dev/null || true)
-        if [ -n "$frozen" ] && [ "$frozen" != "null" ]; then
+        if [ -n "$frozen" ]; then
           # Re-read each frozen member's live state, one GraphQL alias per member in a single call.
           # GitHub answers a multi-alias query with partial data and an `errors` array, so the answer
           # must cover every member. An incomplete answer yields [], which merge-gate holds on, so the
@@ -220,7 +219,7 @@ runs:
             # Capture stdout and stderr together, so the final failure can echo a transport, auth,
             # rate-limit or query error. On success gh prints only the response JSON, which jq checks.
             if data=$(gh api graphql "${args[@]}" 2>&1) \
-              && echo "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
+              && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
               printf '%s' "$data"
               return 0
             fi

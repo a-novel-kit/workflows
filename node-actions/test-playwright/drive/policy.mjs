@@ -6,6 +6,11 @@ export const LABEL = "allow-screenshot-change";
 export const APPROVAL = "visual-change-approval";
 export const COMPARISON = "visual-comparison";
 
+/** Whether a workflow run is a run of main that tested the given pull request head. */
+function testsHead(run, sha) {
+  return run.head_sha === sha && HEAD_EVENTS.includes(run.event) && run.path === ".github/workflows/main.yaml";
+}
+
 /** Verify human approval and the trusted workflow receipt for each compared head. */
 export class Policy {
   constructor(github) {
@@ -242,12 +247,7 @@ export class Policy {
       `actions/workflows/main.yaml/runs?head_sha=${pr.head.sha}&per_page=100`
     );
     const run = runs
-      .filter(
-        (candidate) =>
-          candidate.head_sha === pr.head.sha &&
-          HEAD_EVENTS.includes(candidate.event) &&
-          candidate.path === ".github/workflows/main.yaml"
-      )
+      .filter((candidate) => testsHead(candidate, pr.head.sha))
       .sort((a, b) => a.run_number - b.run_number)
       .at(-1);
     // A run still in progress is refreshed by its completion event.

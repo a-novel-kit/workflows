@@ -25,12 +25,13 @@ from the stack's repocfg templates. Change them there.
 
 ## Versioning
 
-One `v*` tag releases every action, workflow and preset together. Releases are cut from the Actions tab
-(release ▸ pick a bump type ▸ Run), which runs `publish-actions/release-core` in the protected `release`
-environment.
+One `v*` tag releases every action, workflow and preset together. A maintainer cuts a release from
+**Actions** → **release** → **Run workflow** with a bump type. The run executes
+`publish-actions/release-core` in the protected `release` environment.
 
 An action that calls a sibling references it by tag, as `a-novel-kit/workflows/<group>/<name>@<tag>`,
-so a release always runs its own siblings. The release rewrites those pins to its new tag. A script
+so a release always runs its own siblings. The release rewrites those pins to its new tag, together with
+the versions in the README and the presets guide. A script
 that several actions share loads through `$GITHUB_ACTION_PATH`, as the security actions load
 `security-actions/run-scan.mjs`.
 
@@ -50,12 +51,26 @@ pnpm exec playwright install chromium
 a-novel test --type=pnpm -y
 ```
 
-On a host without Chromium's system libraries, run `tests/drive-browser.test.mjs` in the
-`mcr.microsoft.com/playwright` image that matches the pinned `playwright` version.
+On a host without Chromium's system libraries, run the browser suite in the Playwright image of the
+pinned version. The runner under test calls pnpm, so the container installs the pinned one first:
+
+```bash
+playwright="$(node -p "require('./package.json').devDependencies.playwright")"
+pnpm="$(node -p "require('./package.json').packageManager")"
+podman run --rm -v "$PWD:$PWD:z" -w "$PWD" -e PNPM="$pnpm" \
+  "mcr.microsoft.com/playwright:v$playwright-noble" \
+  sh -c 'npm install --global "$PNPM" && node --test tests/drive-browser.test.mjs'
+```
 
 `pnpm lint` checks formatting and that no composite manifest names a context it cannot read. CI also
-shellchecks the Bash every run block ships (`lint-shell`) and audits the workflows with zizmor
-(`lint-workflows`).
+audits the workflows with zizmor (`lint-workflows`) and shellchecks the Bash every run block ships
+(`lint-shell`), which extracts each block into its own file first:
+
+```bash
+shell_dir="$(mktemp -d)"
+node .github/scripts/extract-shell.mjs "$shell_dir"
+shellcheck "$shell_dir"/*.sh
+```
 
 `tests/helpers.mjs` reads run blocks from the parsed YAML and gives each test an isolated workspace and
 command stubs. Prefer tests of a complete step's behavior, and extract a function only when the full

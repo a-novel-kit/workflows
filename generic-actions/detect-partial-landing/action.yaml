@@ -80,8 +80,8 @@ inputs:
     required: false
     default: "true"
     description: >
-      When "true" (default), log every intended check post and re-enqueue without writing to GitHub.
-      Only "false" posts check-runs and re-enqueues.
+      Only "false", in any letter case, posts check-runs and re-enqueues. Any other value, the default
+      "true" included, logs every intended check post and re-enqueue without writing to GitHub.
   planning_repo:
     required: false
     default: .github
@@ -105,8 +105,8 @@ inputs:
       disabled, compared lowercased with whitespace removed. Any other value halts it, so a mistyped
       value stops automation. The flag resolves with no API call and is acted on before any
       evaluation. When halted, per-PR mode posts a `failure` hold on the head, because a skipped or
-      neutral required check passes. The sweep does nothing, because merge-gate holds every pull
-      request while halted.
+      neutral required check passes. The sweep posts and re-enqueues nothing, because merge-gate holds
+      every pull request while halted.
 
 runs:
   using: composite
@@ -228,13 +228,14 @@ runs:
     - name: Detect + reconcile partial landings
       shell: bash
       env:
-        # GH_TOKEN is the read token. The checks and write tokens are applied inline at the two
-        # mutating calls, so no read helper holds a write scope. WRITE_TOKEN is empty when its mint
-        # was skipped.
+        # GH_TOKEN is the read token. freeze_post and reenqueue apply the checks and write tokens
+        # inline, so no read helper holds a write scope. WRITE_TOKEN is empty when its mint was
+        # skipped.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         CHECKS_TOKEN: ${{ steps.checks.outputs.token }}
         WRITE_TOKEN: ${{ steps.write.outputs.token }}
-        # The open pull requests the scope step saved. Empty in per-PR mode or when its read failed.
+        # Path to the file of open pull requests the scope step saved. Empty in per-PR mode or when its
+        # read failed.
         OPEN_PRS: ${{ steps.scope.outputs.open_prs }}
         MODE: ${{ steps.mode.outputs.mode }}
         ORG: ${{ inputs.org }}
@@ -243,15 +244,13 @@ runs:
         MAX_FREEZE_REPOS: ${{ inputs.max_freeze_repos }}
         DRY_RUN: ${{ inputs.dry_run }}
         KILL_SWITCH: ${{ inputs.kill_switch }}
-        # Per-PR inputs, read only in per-PR mode. OWNER and REPO_FULL derive from `org`, the owner
-        # the tokens are minted for.
-        OWNER: ${{ inputs.org }}
+        # Per-PR inputs, read only in per-PR mode. REPO_FULL derives from `org`, the owner the tokens
+        # are minted for.
         REPO: ${{ inputs.repo }}
         REPO_FULL: ${{ inputs.org }}/${{ inputs.repo }}
         HEAD_SHA: ${{ inputs.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
         IN_QUEUE: ${{ inputs.merge_group_head_ref }}
-        MG_HEAD_REF: ${{ inputs.merge_group_head_ref }}
         # The number and labels of the pull request in a pull_request event payload. They let per-PR
         # mode classify that pull request with no API call.
         EVENT_PR: ${{ github.event.pull_request.number }}
@@ -412,7 +411,7 @@ runs:
         fetch_pr_labels() { # $1 = pr number
           local data
           for attempt in 1 2 3; do
-            if data=$(gh api graphql -f query="$PR_LABELS_Q" -F owner="$OWNER" -F repo="$REPO" -F num="$1" 2>&1) \
+            if data=$(gh api graphql -f query="$PR_LABELS_Q" -F owner="$ORG" -F repo="$REPO" -F num="$1" 2>&1) \
               && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not) and (.data.repository.pullRequest != null)' >/dev/null 2>&1; then
               printf '%s' "$data" | jq -c '[(.data.repository.pullRequest.labels.nodes // [])[].name]'
               return 0
@@ -446,16 +445,14 @@ runs:
         # decides nothing.
         #
         # Prints the response. Returns 0 when read, 2 when the Epic issue does not exist, and 1 when the
-        # read failed. EPIC_ISSUE_ERR holds the last attempt's error text.
+        # read failed. The last attempt's error text is cached as <N>.err.
         epic_issue() { # $1 = epic number
           local f="${EPIC_CACHE}/$1.json" rcf="${EPIC_CACHE}/$1.rc" ef="${EPIC_CACHE}/$1.err"
-          local resp errf attempt rc=1
+          local resp err="" errf attempt rc=1
           if [ -f "$rcf" ]; then
-            EPIC_ISSUE_ERR=$(cat "$ef" 2>/dev/null || true)
             cat "$f" 2>/dev/null || true
             return "$(cat "$rcf")"
           fi
-          EPIC_ISSUE_ERR=''
           errf=$(mktemp)
           for attempt in 1 2 3; do
             # stdout carries the payload and stderr the diagnosis, so a `gh` notice never lands inside
@@ -465,14 +462,14 @@ runs:
               rc=0
               break
             fi
-            EPIC_ISSUE_ERR=$(cat "$errf" 2>/dev/null || true)
+            err=$(cat "$errf" 2>/dev/null || true)
             # A missing Epic issue is not retried.
-            case "$EPIC_ISSUE_ERR" in *"HTTP 404"*) rc=2; break ;; esac
+            case "$err" in *"HTTP 404"*) rc=2; break ;; esac
             [ "$attempt" -lt 3 ] && sleep 2
           done
           rm -f "$errf"
           [ "$rc" = 0 ] && printf '%s' "$resp" > "$f"
-          printf '%s' "$EPIC_ISSUE_ERR" > "$ef"
+          printf '%s' "$err" > "$ef"
           printf '%s' "$rc" > "$rcf"
           [ "$rc" = 0 ] && printf '%s' "$resp"
           return "$rc"
@@ -511,13 +508,13 @@ runs:
               | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
-          # --paginate prints one JSON array per page, and `-s add` merges them. A parse failure leaves
-          # the index empty.
-          nodes=$(printf '%s' "$pages" | jq -s -c 'add // []' 2>/dev/null) || nodes='[]'
-          total=$(printf '%s' "$nodes" | jq '[.[] | select(has("pull_request") | not)] | length' 2>/dev/null || echo 0)
+          # --paginate prints one JSON array per page, and `-s add` merges them. The list endpoint
+          # returns pull requests too, which carry a `pull_request` key and are dropped. A parse failure
+          # leaves the index empty.
+          nodes=$(printf '%s' "$pages" | jq -s -c 'add // [] | map(select(has("pull_request") | not))' 2>/dev/null) || nodes='[]'
+          total=$(printf '%s' "$nodes" | jq 'length' 2>/dev/null || echo 0)
           # fd 4 keeps the loop body's commands off this feed. The loop runs in this shell, so
-          # CLAIM_EPICS and CLAIM_MEMBERS persist. The list endpoint returns pull requests too, which
-          # carry a `pull_request` key. jq -c puts each issue on one line.
+          # CLAIM_EPICS and CLAIM_MEMBERS persist. jq -c puts each issue on one line.
           while IFS= read -r elem <&4; do
             n=$(printf '%s' "$elem" | jq -r '.number')
             # Prime epic_issue's cache with this issue.
@@ -534,12 +531,12 @@ runs:
               # A member without a string repo and a numeric number matches no pull request and is
               # skipped. The Epic number comes from the issue, never from its body.
               CLAIM_MEMBERS=$(jq -c -n --argjson idx "$CLAIM_MEMBERS" --argjson epic "$n" \
-                --argjson members "$(printf '%s' "$marker" | jq -c '.members')" '
-                $idx + [ $members[]
+                --argjson marker "$marker" '
+                $idx + [ $marker.members[]
                   | select((.repo | type) == "string" and (.number | type) == "number")
                   | {epic: $epic, repo: (.repo | ascii_downcase), number} ]' 2>/dev/null || printf '%s' "$CLAIM_MEMBERS")
             fi
-          done 4< <(printf '%s' "$nodes" | jq -c '.[] | select(has("pull_request") | not)' 2>/dev/null)
+          done 4< <(printf '%s' "$nodes" | jq -c '.[]' 2>/dev/null)
           echo "Claim index: ${total} open issue(s) in ${ORG}/${PLANNING_REPO}, ${added} carrying a frozen snapshot." \
             | tee -a "$GITHUB_STEP_SUMMARY"
         }
@@ -561,8 +558,8 @@ runs:
         # Fills SNAP_MERGED, SNAP_CLOSED and SNAP_OPEN in search_prs' node shape, and SNAP_SINCE with
         # any valid wave boundary, a `retired` tombstone's included. Returns 0 when the frozen set
         # resolved, 2 when there is no usable snapshot and the live floor stands alone, and 1 when a
-        # frozen set exists but did not resolve. On 1, EV_DECISION stays error. The sweep then posts
-        # nothing, so a standing freeze stays, and per-PR mode fails open on its head.
+        # frozen set exists, or might, and did not resolve. On 1, EV_DECISION stays error. The sweep
+        # then posts nothing, so a standing freeze stays, and per-PR mode fails open on its head.
         snapshot_buckets() { # $1 = epic number
           SNAP_MERGED='[]'
           SNAP_CLOSED='[]'
@@ -579,7 +576,7 @@ runs:
             return 2
           fi
           if [ "$rc" != 0 ]; then
-            echo "::error::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 after 3 attempts, so it is unknown whether a snapshot exists — deciding nothing this pass: ${EPIC_ISSUE_ERR:-}"
+            echo "::error::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 after 3 attempts, so it is unknown whether a snapshot exists — deciding nothing this pass: $(cat "${EPIC_CACHE}/$1.err" 2>/dev/null || true)"
             return 1
           fi
           # GitHub stores bodies with CRLF, and the fences match only without \r.
@@ -618,8 +615,8 @@ runs:
           fi
 
           [ -n "$marker" ] || return 2
-          # Only a well-formed frozen marker counts. A pending, hand-edited or misshapen marker falls
-          # back to the live floor.
+          # Only a well-formed frozen marker counts. A pending or misshapen marker falls back to the live
+          # floor.
           #
           # The guards are strict because `.repo` and `.number` are interpolated into the GraphQL
           # document below, and anyone with write access to the planning repo can edit the body. The
@@ -635,7 +632,7 @@ runs:
                 and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
             | unique_by((.repo | ascii_downcase), .number)
             | select(length > 0 and length <= 50)' 2>/dev/null || true)
-          { [ -n "$frozen" ] && [ "$frozen" != "null" ]; } || return 2
+          [ -n "$frozen" ] || return 2
           want=$(printf '%s' "$frozen" | jq 'length')
 
           # One aliased GraphQL call re-reads every member's live state, all or nothing. GitHub answers a
@@ -740,11 +737,16 @@ runs:
 
         # ---- Post helpers, dry-run aware, on the checks token ----------------------------
 
-        # Posts an epic-freeze check-run. jq builds the payload, so quotes and newlines cannot break the
-        # JSON. The POST is checked explicitly because sweep_epic runs under `||`, which disables
-        # `set -e`. A failed post is a warning in the sweep, which moves to the next target, and an
-        # error in per-PR mode, which fails the run so it can be retried.
-        post_check() { # $1=owner/repo $2=sha $3=conclusion $4=summary
+        # Posts an epic-freeze check-run, or only logs it unless dry_run is "false". jq builds the
+        # payload, so quotes and newlines cannot break the JSON. The POST is checked explicitly because
+        # sweep_epic runs under `||`, which disables `set -e`. A failed post is a warning in the sweep,
+        # which moves to the next target, and an error in per-PR mode, which fails the run so it can be
+        # retried.
+        freeze_post() { # $1=owner/repo $2=sha $3=conclusion $4=summary
+          if [ "$dry" != "false" ]; then
+            echo "would post epic-freeze=$3 @ $1 ${2:0:12} — $4 (DRY RUN)" | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
+          fi
           local payload
           payload=$(jq -n --arg sha "$2" --arg concl "$3" --arg summary "$4" \
             '{name: "epic-freeze", head_sha: $sha, status: "completed", conclusion: $concl,
@@ -759,16 +761,6 @@ runs:
           fi
           echo "::error::failed to post epic-freeze=$3 @ $1 ${2:0:12}"
           return 1
-        }
-
-        # The dry-run gate around post_check. It returns post_check's status, so a per-PR POST failure
-        # fails the run.
-        freeze_post() { # $1=owner/repo $2=sha $3=conclusion $4=summary
-          if [ "$dry" != "false" ]; then
-            echo "would post epic-freeze=$3 @ $1 ${2:0:12} — $4 (DRY RUN)" | tee -a "$GITHUB_STEP_SUMMARY"
-            return 0
-          fi
-          post_check "$1" "$2" "$3" "$4"
         }
 
         # Re-enqueues a stray by enabling auto-merge when it is off, with the write token. A failure is a
@@ -861,29 +853,25 @@ runs:
           # Reads the live queue of every repo and base among the open members. Git forbids spaces in
           # ref names, so a space-joined pair splits safely. fd 4 keeps the gh calls inside the loop off
           # its input.
-          local queue='[]' repos_bases rb_repo rb_base owner_only repo_only entries
-          repos_bases=$(printf '%s' "$open" | jq -r '[.[] | "\(.repository.nameWithOwner) \(.baseRefName)"] | unique | .[]')
+          local queue='[]' rb_repo rb_base entries
           while read -r rb_repo rb_base <&4; do
             [ -n "$rb_repo" ] || continue
-            owner_only="${rb_repo%%/*}"
-            repo_only="${rb_repo#*/}"
-            if ! entries=$(merge_queue_entries "$owner_only" "$repo_only" "$rb_base"); then return 0; fi
-            entries=$(printf '%s' "$entries" | jq -c --arg repo "$rb_repo" '[.[] | . + {repo: $repo}]')
-            queue=$(jq -s '.[0] + .[1]' <(printf '%s' "$queue") <(printf '%s' "$entries"))
-          done 4< <(printf '%s\n' "$repos_bases")
+            if ! entries=$(merge_queue_entries "${rb_repo%%/*}" "${rb_repo#*/}" "$rb_base"); then return 0; fi
+            queue=$(printf '%s' "$entries" | jq -c --argjson acc "$queue" --arg repo "$rb_repo" '$acc + map(. + {repo: $repo})')
+          done 4< <(printf '%s' "$open" | jq -r '[.[] | "\(.repository.nameWithOwner) \(.baseRefName)"] | unique | .[]')
 
           # The queues hold unrelated pull requests too. Only open members' entries are kept, so no
           # non-member is dequeued.
           queue=$(printf '%s' "$queue" | jq -c --argjson open "$open" '
             [ .[] | . as $e
-              | select( ($open | map(select(.repository.nameWithOwner == $e.repo and .number == $e.number)) | length) > 0 ) ]')
+              | select(any($open[]; .repository.nameWithOwner == $e.repo and .number == $e.number)) ]')
           EV_QUEUE="$queue"
 
           # A candidate stray is an open member with no live queue entry.
           local raw_strays
           raw_strays=$(printf '%s' "$open" | jq -c --argjson q "$queue" '
             [ .[] | . as $pr
-              | select( ($q | map(select(.repo == $pr.repository.nameWithOwner and .number == $pr.number)) | length) == 0 ) ]')
+              | select(any($q[]; .repo == $pr.repository.nameWithOwner and .number == $pr.number) | not) ]')
 
           # A candidate counts only when REST reads it as "open false", so a lagging index cannot invent
           # a stray. A REST error leaves EV_DECISION at error. The full node is kept so the roll-forward
@@ -901,8 +889,6 @@ runs:
             done 4< <(printf '%s' "$raw_strays" | jq -r '.[] | "\(.repository.nameWithOwner) \(.number)"')
             EV_STRAYS=$(printf '%s' "$raw_strays" | jq -c --argjson keys "$confirmed_keys" '
               [ .[] | . as $pr | select( any($keys[]; .repo == $pr.repository.nameWithOwner and .number == $pr.number) ) ]')
-          else
-            EV_STRAYS='[]'
           fi
           EV_STRAY_COUNT=$(printf '%s' "$EV_STRAYS" | jq 'length')
 
@@ -1031,7 +1017,7 @@ runs:
           local targets
           targets=$(jq -cn --argjson open "$EV_OPEN" --argjson queue "$EV_QUEUE" '
             ( [ $open[]  | {repo: .repository.nameWithOwner, sha: .headRefOid} ]
-            + [ $queue[] | select(.headOid != null) | {repo: .repo, sha: .headOid} ] )
+            + [ $queue[] | {repo: .repo, sha: .headOid} ] )
             | map(select(.sha != null))
             | unique_by(.repo + " " + .sha)')
 
@@ -1053,8 +1039,9 @@ runs:
           done 5< <(printf '%s' "$targets" | jq -r '.[] | "\(.repo) \(.sha)"')
         }
 
+        # Evaluates one Epic and posts its decision. A paused Epic gets no post and no roll-forward, so
+        # its landing is under manual control.
         sweep_epic() { # $1 = epic
-          # A paused Epic gets no post and no roll-forward, so its landing is under manual control.
           if epic_paused "$1"; then
             echo "epic #$1: automation:paused — skipping (no freeze / roll-forward this sweep)." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
@@ -1074,8 +1061,7 @@ runs:
           local standalone count s_repo s_sha
           standalone=$(printf '%s' "$all_open" | jq -c '
             [ .[]
-              | select(.number != null)
-              | select( ([(.labels.nodes // [])[].name] | map(test("^epic:[0-9]+$")) | any) | not )
+              | select([(.labels.nodes // [])[].name] | any(test("^epic:[0-9]+$")) | not)
               | {repo: .repository.nameWithOwner, sha: .headRefOid} ]
             | map(select(.sha != null))
             | unique_by(.repo + " " + .sha)')
@@ -1088,6 +1074,8 @@ runs:
           done 5< <(printf '%s' "$standalone" | jq -r '.[] | "\(.repo) \(.sha)"')
         }
 
+        # Runs the standalone backstop, then evaluates every active Epic in the org. Fails the run when
+        # enumeration fails or a freeze exceeded max_freeze_repos.
         sweep_main() {
           # sweep_post_freeze sets this when a freeze exceeds max_freeze_repos.
           blast_cap_tripped=false
@@ -1101,7 +1089,7 @@ runs:
             exit 1
           fi
 
-          # The jq `test` keeps only numeric `epic:<N>` labels, and the loop re-checks each number.
+          # The jq `test` keeps only numeric `epic:<N>` labels.
           local label_epics epics
           label_epics=$(printf '%s' "$all_open" | jq -r '
             [ .[] | (.labels.nodes // [])[].name | select(test("^epic:[0-9]+$")) | ltrimstr("epic:") ]
@@ -1109,7 +1097,8 @@ runs:
 
           # Epics reached through their frozen snapshot join the set, so an Epic whose last labeled pull
           # request was de-labeled is still evaluated. build_claim_index also primes the issue cache
-          # the loop reads.
+          # the loop reads. Each number feeds a `label:"epic:<N>"` search qualifier, so grep keeps only
+          # all-digit lines.
           build_claim_index
           epics=$(printf '%s\n%s\n' "$label_epics" "$CLAIM_EPICS" | grep -E '^[0-9]+$' | sort -un || true)
 
@@ -1124,12 +1113,6 @@ runs:
             # so blast_cap_tripped survives it.
             local EPIC
             while IFS= read -r EPIC <&3; do
-              [ -n "$EPIC" ] || continue
-              # The number feeds a `label:"epic:<N>"` search qualifier.
-              if ! [[ "$EPIC" =~ ^[0-9]+$ ]]; then
-                echo "::warning::skipping non-numeric epic token \"$EPIC\""
-                continue
-              fi
               sweep_epic "$EPIC" || echo "::warning::epic #$EPIC aborted unexpectedly (fail-closed); next sweep re-derives"
             done 3< <(printf '%s\n' "$epics")
           else
@@ -1150,21 +1133,16 @@ runs:
         # The next sweep re-derives every head. Failure is posted for a confirmed partial landing, and
         # for a head no pull request can be tied to.
         per_pr_main() {
-          if [ -z "${HEAD_SHA:-}" ]; then
-            echo "::error::detect-partial-landing (per-PR) needs a head SHA (pull_request or merge_group event); none provided."
-            exit 1
-          fi
-
           # On a merge_group event, the group ref encodes the queued pull request (…/pr-<N>-<sha>). A
           # batch names one pull request, and its Epic is evaluated.
           local classify_pr=""
           if [ -n "${IN_QUEUE:-}" ]; then
-            classify_pr=$(printf '%s' "${MG_HEAD_REF:-}" | grep -oE 'pr-[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
+            [[ "$IN_QUEUE" =~ pr-([0-9]+) ]] && classify_pr="${BASH_REMATCH[1]}"
             if [ -z "$classify_pr" ]; then
               # Failure on an unidentifiable group's head dequeues it, as merge-gate does. The sweep
               # re-checks the pull request's own head.
               freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
-                "merge_group head_ref \"${MG_HEAD_REF:-}\" — couldn't identify the queued PR to check its Epic; posting failure (dequeues) rather than passing blind. The sweep re-checks the PR head."
+                "merge_group head_ref \"${IN_QUEUE}\" — couldn't identify the queued PR to check its Epic; posting failure (dequeues) rather than passing blind. The sweep re-checks the PR head."
               return 0
             fi
           elif [ -n "${PR_NUMBER:-}" ]; then
@@ -1182,19 +1160,17 @@ runs:
           # GraphQL. A failed read posts success, because merge-gate holds a pull request whose labels
           # it cannot read, and the sweep re-derives.
           local labels=""
-          if [ -n "${EVENT_PR:-}" ] && [ "$classify_pr" = "${EVENT_PR}" ]; then
-            labels=$(printf '%s' "${EVENT_LABELS:-[]}")
-          else
-            if ! labels=$(fetch_pr_labels "$classify_pr"); then
-              freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
-                "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — failing open (success); merge-gate holds independently and the reconcile sweep re-derives."
-              return 0
-            fi
+          if [ "$classify_pr" = "${EVENT_PR:-}" ]; then
+            labels="${EVENT_LABELS:-[]}"
+          elif ! labels=$(fetch_pr_labels "$classify_pr"); then
+            freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
+              "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — failing open (success); merge-gate holds independently and the reconcile sweep re-derives."
+            return 0
           fi
 
           # The first `epic:<N>` label names the Epic, since a pull request belongs to one Epic.
           local epic
-          epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty' | grep -oE '[0-9]+' || true)
+          epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty | ltrimstr("epic:")' || true)
 
           if [ -z "$epic" ]; then
             # A frozen snapshot can still claim an unlabeled pull request as a member de-labeled

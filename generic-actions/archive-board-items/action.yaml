@@ -77,8 +77,7 @@ runs:
       run: |
         set -euo pipefail
 
-        proj_id="$PROJECT_ID"
-        if [ -z "$proj_id" ]; then
+        if [ -z "$PROJECT_ID" ]; then
           echo "::error::project_id is required (the org \"Tasks\" board node id)"
           exit 1
         fi
@@ -101,7 +100,7 @@ runs:
         matches=$(mktemp)
         cursor=""
         while :; do
-          args=(-F proj="$proj_id")
+          args=(-F proj="$PROJECT_ID")
           [ -n "$cursor" ] && args+=(-F cursor="$cursor")
           resp=$(gh api graphql -f query="$items_q" "${args[@]}")
           echo "$resp" | jq -c --arg repo "$REPO_FULL" --arg status "$STATUS" --arg closed "$ARCHIVE_CLOSED" '
@@ -126,16 +125,16 @@ runs:
         # Archive each match and close its issue, or report it under dry_run.
         archive_m='mutation($proj:ID!,$item:ID!){
           archiveProjectV2Item(input:{projectId:$proj,itemId:$item}){ item{ id } } }'
+        verb=$([ "$CLOSE" = "true" ] && echo "archive+close" || echo "archive")
         while IFS= read -r row; do
           id=$(echo "$row" | jq -r '.id')
           num=$(echo "$row" | jq -r '.number')
           url=$(echo "$row" | jq -r '.url')
           rp=$(echo "$row" | jq -r '.repo')
-          verb=$([ "$CLOSE" = "true" ] && echo "archive+close" || echo "archive")
           if [ "$DRY_RUN" = "true" ]; then
             echo "- [dry-run] would $verb #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            gh api graphql -f query="$archive_m" -F proj="$proj_id" -F item="$id" >/dev/null
+            gh api graphql -f query="$archive_m" -F proj="$PROJECT_ID" -F item="$id" >/dev/null
             # The close is best-effort, since a pull request or draft item has no issue to close.
             if [ "$CLOSE" = "true" ] && [ -n "$num" ] && [ "$num" != "null" ] && [ -n "$rp" ] && [ "$rp" != "null" ]; then
               gh issue close "$num" --repo "$rp" --reason completed >/dev/null 2>&1 || true

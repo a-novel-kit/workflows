@@ -55,8 +55,6 @@ outputs:
 runs:
   using: composite
   steps:
-    # A hotfix runs on its release line, so the cut asserts a released baseline tag instead of the
-    # default branch.
     - name: Mint push token
       id: token
       if: ${{ inputs.dry_run != 'true' }}

@@ -6,6 +6,22 @@ import { stripVTControlCharacters } from "node:util";
 const ROLES = { reference: "expected", actual: "actual", diff: "diff" };
 const MISSING = "No existing reference screenshot found";
 
+/**
+ * The name Vitest gives a declared screenshot's attachment copy: the SHA-1 of its path in the
+ * snapshot directory.
+ */
+function copyName(snapshot) {
+  return createHash("sha1").update(resolve(process.env.PLAYWRIGHT_SNAPSHOT_DIR, snapshot)).digest("hex");
+}
+
+/** A failed toMatchScreenshot artifact as a report comparison, named after its declared screenshot. */
+function screenshotComparison({ message, attachments }, declared) {
+  const images = Object.fromEntries(attachments.map(({ name, path }) => [ROLES[name], path]));
+  const copy = basename(images.expected ?? "");
+  // A mismatch carries the actual image; a missing reference or an unstable capture does not.
+  return { name: declared.get(basename(copy, extname(copy))) ?? copy, images, drift: Boolean(images.actual), message };
+}
+
 /** One test's entry in the report runner.mjs inspects, built from Vitest's public reporter API. */
 function entry(testCase) {
   const result = testCase.result();
@@ -14,29 +30,13 @@ function entry(testCase) {
     .annotations()
     .filter((annotation) => annotation.type === "visual-snapshot")
     .map((annotation) => annotation.message);
-  // Vitest copies each attachment to a file named after the SHA-1 of its original path, so hashing
-  // the declared paths names the screenshot again for the review page.
-  const declared = new Map(
-    snapshots.map((name) => [
-      createHash("sha1").update(resolve(process.env.PLAYWRIGHT_SNAPSHOT_DIR, name)).digest("hex"),
-      name,
-    ])
-  );
+  // Hashing the declared paths names each attachment copy's screenshot again for the review page.
+  const declared = new Map(snapshots.map((name) => [copyName(name), name]));
   // Vitest records a toMatchScreenshot artifact only when the assertion fails.
   const comparisons = testCase
     .artifacts()
     .filter((artifact) => artifact.type === "internal:toMatchScreenshot")
-    .map(({ message, attachments }) => {
-      const images = Object.fromEntries(attachments.map(({ name, path }) => [ROLES[name], path]));
-      const copy = basename(images.expected ?? "");
-      // A mismatch carries the actual image; a missing reference or an unstable capture does not.
-      return {
-        name: declared.get(basename(copy, extname(copy))) ?? copy,
-        images,
-        drift: Boolean(images.actual),
-        message,
-      };
-    });
+    .map((artifact) => screenshotComparison(artifact, declared));
   const visual = comparisons.filter((comparison) => comparison.drift || comparison.message.startsWith(MISSING));
   return {
     id: testCase.id,

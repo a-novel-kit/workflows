@@ -4,8 +4,8 @@ description: >
   check and approval is satisfied. The caller enables it once and moves on.
 
   GitHub accepts the request while a required check is still failing or pending, and merges once the
-  branch goes green. A landing coordinator therefore enables auto-merge on each sibling once the
-  sibling is ready, and lets the gate hold it.
+  branch goes green. A landing coordinator therefore enables auto-merge on each sibling as soon as it
+  leaves draft, and lets the gate hold it until the whole set is ready.
 
   The action is idempotent. It reads the pull request's auto-merge state and does nothing when
   auto-merge is already on. It passes `--squash`, the only method the require-approval ruleset

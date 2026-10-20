@@ -6,7 +6,7 @@ Choose the same class as `a-novel repo`: `service`, `platform`, `library`, `infr
 ```json
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>a-novel-kit/workflows//renovate/service#v1.63.0"]
+  "extends": ["github>a-novel-kit/workflows//renovate/service#v1.66.0"]
 }
 ```
 
@@ -71,8 +71,8 @@ beside its class, pinned to the same release:
 ```json
 {
   "extends": [
-    "github>a-novel-kit/workflows//renovate/service#v1.63.0",
-    "github>a-novel-kit/workflows//renovate/protobuf#v1.63.0"
+    "github>a-novel-kit/workflows//renovate/service#v1.66.0",
+    "github>a-novel-kit/workflows//renovate/protobuf#v1.66.0"
   ]
 }
 ```
@@ -89,7 +89,7 @@ The shared action loads its operator settings from `generic-actions/renovate/con
 `repository_config` when adopting a class preset:
 
 ```yaml
-- uses: a-novel-kit/workflows/generic-actions/renovate@v1.63.0
+- uses: a-novel-kit/workflows/generic-actions/renovate@v1.66.0
   with:
     repository_config: "true"
     github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -104,7 +104,8 @@ update policy. Adopt the preset and the input together.
 The environment supplies credentials, the current repository, logging and the caller's overrides.
 The runner JSON holds the install behavior, the credential-forwarding templates and the default
 command allowlist. `allowed_commands` replaces that allowlist: an empty input keeps the default, and
-`[]` disables post-upgrade commands.
+`[]` disables post-upgrade commands. Presets request regeneration tasks, and the allowlist decides
+which of them run.
 
 ## Local configuration
 
@@ -124,8 +125,6 @@ The database preset points APK lookups in `builds/database.apko.yaml` at
 The rule stays inactive until a service adopts the Wolfi image, and other APK files keep their own
 registries. A consumer on another registry or architecture overrides `registryUrls` for that file and
 datasource, with `arch=aarch64` for ARM64.
-
-Presets request regeneration tasks; the runner's allowlist grants permission to execute them.
 
 ## Validation
 

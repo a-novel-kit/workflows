@@ -100,8 +100,6 @@ jobs:
           }
 
           # A test run posts for every token, for real, overriding dry_run.
-          TEST_RUN=$(printf '%s' "${TEST_RUN:-false}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-          [ "$TEST_RUN" = "true" ] || TEST_RUN=false
           [ "$TEST_RUN" = "true" ] && DRY_RUN=false
 
           # Post one Discord payload with a small retry and explicit timeouts. $1 = JSON payload.
@@ -191,10 +189,9 @@ jobs:
             elif [ "$days" -le 14 ]; then color=15105570
             elif [ "$days" -le 30 ]; then color=15844367
             else color=3066993; fi
-            # Scope and permissions come from the live per-token API data, followed by the same regen
-            # recipe the notify action's message uses: masked link, owner, scope, permissions and the
-            # `gh secret set` block. SECRET_NAME is a fill-in: the org PAT API exposes the token's own
-            # name, and the Actions-secret name it is stored under is unavailable there.
+            # The regen recipe follows: a masked link, then the owner, scope and permissions from the
+            # live per-token API data, then the `gh secret set` block. SECRET_NAME is a fill-in, since
+            # the org PAT API exposes the token's own name and not the Actions secret that stores it.
             case "$repo_sel" in
               all)      scope="All repositories" ;;
               selected) scope="Selected repositories" ;;
@@ -212,9 +209,9 @@ jobs:
             desc=$(printf '%s' "$desc" | head -c 3900)
             desc=$(printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc")
 
-            # The admin @mention lives in `content`, fail-soft: with no admin configured the embed
-            # posts unpinged, matching the notify action's own payload. users:[id] allows that one
-            # admin alone, and parse:[] blocks @everyone, @here and roles.
+            # The admin @mention lives in `content`, fail-soft: with no admin configured, the embed
+            # posts unpinged. users:[id] allows that one admin alone, and parse:[] blocks @everyone,
+            # @here and roles.
             did="${DEFAULT_MENTION:-}"; target="admin"
             if [ -n "$did" ]; then
               echo "::add-mask::$did"   # defensive: keep the admin id out of logs

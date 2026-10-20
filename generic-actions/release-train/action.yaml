@@ -126,8 +126,9 @@ runs:
     - name: Reconstruct the Epic, derive bumps, drive each release.yaml
       shell: bash
       env:
-        # Every bare `gh` call reads with the read token. The dispatch and issue tokens apply inline
-        # at their call sites, so a read never holds a write scope.
+        # Every bare `gh` call reads with the read token. The dispatch token applies inline to the
+        # dispatches and to the run reads, which need Actions access, and the issue token to the
+        # receipt write.
         GH_TOKEN: ${{ steps.read.outputs.token }}
         DISPATCH_TOKEN: ${{ steps.dispatch.outputs.token }}
         ISSUE_TOKEN: ${{ steps.issue.outputs.token }}
@@ -155,8 +156,8 @@ runs:
 
         # ---- Per-Epic pause. A failed label read does not block, since the role check already
         # gates the run.
-        paused=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.labels[].name' 2>/dev/null || echo "")
-        if printf '%s\n' "$paused" | grep -qx 'automation:paused'; then
+        labels=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.labels[].name' 2>/dev/null || echo "")
+        if printf '%s\n' "$labels" | grep -qx 'automation:paused'; then
           echo "::error::epic:#${EPIC} is automation:paused — remove the \`automation:paused\` label from the Epic issue before releasing it."
           exit 1
         fi
@@ -240,12 +241,12 @@ runs:
         }
 
         # Does a published GitHub Release exist for <tag>? A botched cut leaves a tag without one.
-        # `--silent` hides whether a failure is a 404 or a transient error, so every failure is
-        # retried, and a persistent one returns 1. The caller then reports a botched cut, which a
-        # re-dispatch clears once the read succeeds.
+        # gh exits 1 on a 404 and on a transient error alike, so every failure is retried, and a
+        # persistent one returns 1. The caller then reports a botched cut, which a re-dispatch clears
+        # once the read succeeds.
         release_exists() { # $1=owner/repo $2=tag
           for attempt in 1 2 3; do
-            if gh api "repos/$1/releases/tags/$2" --silent >/dev/null 2>&1; then return 0; fi
+            if gh api "repos/$1/releases/tags/$2" >/dev/null 2>&1; then return 0; fi
             [ "$attempt" -lt 3 ] && sleep 1
           done
           return 1
@@ -254,13 +255,10 @@ runs:
         # Print a jq filter's output for an API path, paginated on request, retrying transient
         # errors. Returns 1 when every attempt fails.
         commit_messages() { # $1=api path  $2=jq filter  $3=paginate(true|false)
-          local out attempt
+          local out attempt page=()
+          [ "$3" = "true" ] && page=(--paginate)
           for attempt in 1 2 3; do
-            if [ "$3" = "true" ]; then
-              out=$(gh api "$1" --paginate --jq "$2" 2>/dev/null) && { printf '%s' "$out"; return 0; }
-            else
-              out=$(gh api "$1" --jq "$2" 2>/dev/null) && { printf '%s' "$out"; return 0; }
-            fi
+            out=$(gh api "$1" "${page[@]}" --jq "$2" 2>/dev/null) && { printf '%s' "$out"; return 0; }
             [ "$attempt" -lt 3 ] && sleep 2
           done
           return 1
@@ -311,20 +309,20 @@ runs:
         # hide the run from that filter.
         #
         # Inputs travel as strings, which the dispatches API takes whatever an input's declared type.
-        # release.yaml and release-core compare the string.
-        dispatch_release() { # $1=owner/repo $2=default_branch $3=release_type $4=run_dry(true|false) $5=since_ts
-          local repo="$1" ref="$2" rt="$3" rdry="$4" ts="$5" body resp run_id enc
-          body=$(jq -n --arg ref "$ref" --arg rt "$rt" --arg dry "$rdry" \
-            '{ref:$ref, inputs:{release_type:$rt, dry_run:$dry}, return_run_details:true}')
-          resp=$(printf '%s' "$body" | GH_TOKEN="$DISPATCH_TOKEN" gh api \
-            "repos/$repo/actions/workflows/release.yaml/dispatches" --method POST --input - 2>/dev/null || echo "")
+        # release.yaml declares dry_run a boolean, so "true" and "false" reach it as booleans.
+        dispatch_release() { # $1=owner/repo $2=default_branch $3=release_type $4=run_dry(true|false)
+          local repo="$1" ref="$2" rt="$3" rdry="$4" ts resp run_id
+          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          resp=$(jq -n --arg ref "$ref" --arg rt "$rt" --arg dry "$rdry" \
+            '{ref:$ref, inputs:{release_type:$rt, dry_run:$dry}, return_run_details:true}' \
+            | GH_TOKEN="$DISPATCH_TOKEN" gh api \
+              "repos/$repo/actions/workflows/release.yaml/dispatches" --method POST --input - 2>/dev/null || echo "")
           run_id=$(printf '%s' "$resp" | jq -r '.workflow_run_id // empty' 2>/dev/null || echo "")
           if [ -z "$run_id" ]; then
-            enc=$(printf '%s' "$ts" | sed 's/:/%3A/g')
             for attempt in 1 2 3 4 5; do
               sleep 3
               run_id=$(GH_TOKEN="$DISPATCH_TOKEN" gh api \
-                "repos/$repo/actions/workflows/release.yaml/runs?event=workflow_dispatch&actor=${APP_SLUG}%5Bbot%5D&created=%3E%3D${enc}&per_page=5" \
+                "repos/$repo/actions/workflows/release.yaml/runs?event=workflow_dispatch&actor=${APP_SLUG}%5Bbot%5D&created=%3E%3D${ts//:/%3A}&per_page=5" \
                 --jq "[.workflow_runs[] | select(.head_branch==\"${ref}\")][0].id // empty" 2>/dev/null || echo "")
               [ -n "$run_id" ] && break
             done
@@ -336,7 +334,8 @@ runs:
         # Poll a run to completion and print its conclusion. A cut waits up to an hour at the protected
         # `release` environment for a person's approval. A rehearsal runs outside that environment, so
         # a rehearsal waiting there prints "blocked" at once, as does a cut nobody approves within the
-        # hour. A blocked run can still complete on approval, so the caller records it as parked.
+        # hour. A blocked run can still complete on approval, so the caller records it as parked. A
+        # run that keeps running past about 30 minutes prints "timeout".
         poll_run() { # $1=owner/repo $2=run_id $3=approval(true|false)
           local repo="$1" run_id="$2" approval="$3" polls=0 waits=0 st cc
           while [ "$polls" -lt 180 ]; do   # ~30 min of running at 10s (release-core can go install + build on a cold runner)
@@ -365,7 +364,7 @@ runs:
           printf 'timeout'; return 0
         }
 
-        # Snapshot a repo's v* / <dir>/v* tag set (one per line, sorted for `comm`).
+        # Snapshot a repository's `vX…` and `<dir>/vX…` tags, one per line, sorted for `comm`.
         tag_set() { # $1=owner/repo
           gh api "repos/$1/git/matching-refs/tags" --paginate --jq '.[].ref' 2>/dev/null \
             | sed 's|refs/tags/||' | grep -E '(^|/)v[0-9]' | sort -u || true
@@ -381,7 +380,7 @@ runs:
           sl=$(printf '%s\n' "$body" | grep -nxF "$s" | head -1 | cut -d: -f1)
           el=$(printf '%s\n' "$body" | grep -nxF "$e" | head -1 | cut -d: -f1)
           # BLK arrives through ENVIRON, so awk does not interpret its backslash escapes.
-          if [ "$ns" = "1" ] && [ "$ne" = "1" ] && [ -n "$sl" ] && [ -n "$el" ] && [ "$sl" -lt "$el" ]; then
+          if [ "$ns" = "1" ] && [ "$ne" = "1" ] && [ "$sl" -lt "$el" ]; then
             printf '%s\n' "$body" | BLK="$block" awk -v s="$s" -v e="$e" '
               $0==s { print ENVIRON["BLK"]; skip=1; next } $0==e { skip=0; next } !skip { print }'
           else
@@ -404,13 +403,12 @@ runs:
         ledger='[]'
         repo_n0=$(printf '%s' "$newest" | jq 'length')
         for i in $(seq 0 $((repo_n0 - 1))); do
-          [ "$repo_n0" -gt 0 ] || break
           repo=$(printf '%s' "$newest" | jq -r ".[$i].repo")
           number=$(printf '%s' "$newest" | jq -r ".[$i].number")
           if ! info=$(rest_pr_merge "$repo" "$number"); then
             echo "::error::REST read failed for ${repo}#${number} — cannot confirm the Epic; aborting."; exit 1
           fi
-          merged=$(printf '%s' "$info" | awk '{print $1}'); sha=$(printf '%s' "$info" | awk '{print $2}')
+          read -r merged sha <<<"$info"
           [ "$merged" = "true" ] && [ -n "$sha" ] || continue
           ledger=$(jq -cn --argjson acc "$ledger" --arg r "$repo" --arg s "$sha" '$acc + [{repo:$r, sha:$s}]')
         done
@@ -421,8 +419,16 @@ runs:
         echo "### ${repo_n} repo(s) in epic:#${EPIC}" | tee -a "$GITHUB_STEP_SUMMARY"
 
         # ================= 2. Per repo: resume-skip → derive bump → rehearse → cut → receipt =======
-        receipts='[]'   # [{repo, tag, status}]  status: shipped|rehearsed|skipped|nochange|botched|parked|failed:*
+        receipts='[]'
         had_failure=false
+
+        # Appends the current $repo's receipt. $1 is its status: shipped, rehearsed, skipped, nochange,
+        # botched, parked or failed:<why>. $2 is the cut tag, or the bump for a rehearsal, and empty
+        # records a null tag.
+        receipt() { # $1=status $2=tag
+          receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg s "$1" --arg t "${2:-}" \
+            '$a + [{repo:$r, tag:(if $t == "" then null else $t end), status:$s}]')
+        }
         for i in $(seq 0 $((repo_n - 1))); do
           repo=$(printf '%s' "$ledger" | jq -r ".[$i].repo")
           merge_sha=$(printf '%s' "$ledger" | jq -r ".[$i].sha")
@@ -435,7 +441,7 @@ runs:
           done
           if [ -z "$default_branch" ]; then
             had_failure=true
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:read"}]')
+            receipt failed:read
             echo "- ❌ **${repo}** — could not read the default branch; skipping." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
 
@@ -443,7 +449,7 @@ runs:
           last=$(latest_tag "$repo")
           if [ "$last" = "__ERR__" ]; then
             had_failure=true
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:tagread"}]')
+            receipt failed:tagread
             echo "- ❌ **${repo}** — tag read failed after retries; skipping (fail-closed, never assume first-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ -n "$last" ]; then
@@ -452,13 +458,13 @@ runs:
             tc=0; tag_contains "$repo" "$last" "$merge_sha" || tc=$?
             if [ "$tc" -eq 2 ]; then
               had_failure=true
-              receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:compare"}]')
+              receipt failed:compare
               echo "- ❌ **${repo}** — could not compare \`${last}\` to the Epic merge; skipping (fail-closed)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
             fi
             if [ "$tc" -eq 0 ]; then
               if release_exists "$repo" "$last"; then
                 echo "- ⏭️  **${repo}** already shipped epic:#${EPIC} in \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
-                receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"skipped"}]')
+                receipt skipped "$last"
                 continue
               fi
               # A tag at or after the merge without a published Release is a botched cut. release-core
@@ -466,7 +472,7 @@ runs:
               # contents:write to create it, and a re-cut orphans this tag under a higher one. The
               # repository fails for manual repair, which publishes the Release or deletes the tag.
               had_failure=true
-              receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$last" '$a + [{repo:$r, tag:$t, status:"botched"}]')
+              receipt botched "$last"
               echo "::error::${repo} — tag \`${last}\` exists (contains the Epic merge) but has NO published Release — a botched cut. Publish the Release for \`${last}\`, or delete the tag to let a re-dispatch re-cut it. Not skipping, not re-cutting." | tee -a "$GITHUB_STEP_SUMMARY"
               continue
             fi
@@ -476,53 +482,51 @@ runs:
           bump=$(derive_bump "$repo" "$last" "$default_branch")
           if [ "$bump" = "__ERR__" ]; then
             had_failure=true
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:bumpread"}]')
+            receipt failed:bumpread
             echo "- ❌ **${repo}** — commit-range read failed after retries; skipping (fail-closed, never assume nothing-to-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ "$bump" = "none" ]; then
             echo "- ⏭️  **${repo}** has nothing new since \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"nochange"}]')
+            receipt nochange
             continue
           fi
 
           # -- Rehearse: release.yaml with dry_run=true must succeed --------------------------------
-          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" true "$ts"); then
+          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" true); then
             had_failure=true
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:dispatch"}]')
+            receipt failed:dispatch
             echo "- ❌ **${repo}** — could not dispatch the rehearsal." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           concl=$(poll_run "$repo" "$rid" false)
           if [ "$concl" = "blocked" ]; then
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
+            receipt parked
             had_failure=true
             echo "- ⏸️  **${repo}** — rehearsal parked at the release environment; its release.yaml runs the rehearsal inside that environment." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           if [ "$concl" != "success" ]; then
             had_failure=true
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg c "$concl" '$a + [{repo:$r, tag:null, status:("failed:"+$c)}]')
+            receipt "failed:${concl}"
             echo "- ❌ **${repo}** — rehearsal (${bump}) did not pass (${concl}); not cutting." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
 
           if [ "$dry" != "false" ]; then
             echo "- 🧪 **${repo}** — rehearsed **${bump}** OK (dry-run; no tag cut)." | tee -a "$GITHUB_STEP_SUMMARY"
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg b "$bump" '$a + [{repo:$r, tag:$b, status:"rehearsed"}]')
+            receipt rehearsed "$bump"
             continue
           fi
 
           # -- Cut: snapshot tags, dispatch live, poll, recover the new tag from the tag-set diff -----
           before=$(tag_set "$repo")
-          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" false "$ts"); then
+          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" false); then
             had_failure=true
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"failed:dispatch"}]')
+            receipt failed:dispatch
             echo "- ❌ **${repo}** — could not dispatch the live release." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
           concl=$(poll_run "$repo" "$rid" true)
           if [ "$concl" = "blocked" ]; then
             # Recorded as parked, since the run can still cut the tag on approval. A re-dispatch
             # before that run clears starts a second cut, and both release once approved.
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"parked"}]')
+            receipt parked
             had_failure=true
             echo "- ⏸️  **${repo}** — live release not approved within the hour (pending). Approve the run, then re-dispatch to record the receipt." | tee -a "$GITHUB_STEP_SUMMARY"; continue
           fi
@@ -530,21 +534,21 @@ runs:
           newtag=""
           for attempt in 1 2 3 4; do
             after=$(tag_set "$repo")
-            newtag=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep -E '(^|/)v[0-9]' | sort -V | tail -n1 || true)
+            newtag=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sort -V | tail -n1 || true)
             [ -n "$newtag" ] && break; sleep 5
           done
           if [ "$concl" = "success" ] && [ -n "$newtag" ]; then
             echo "- ✅ **${repo}** — released \`${newtag}\` (${bump})." | tee -a "$GITHUB_STEP_SUMMARY"
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg t "$newtag" '$a + [{repo:$r, tag:$t, status:"shipped"}]')
+            receipt shipped "$newtag"
           elif [ "$concl" = "success" ]; then
             # The run succeeded, so a tag was cut, but the lagging ref index does not show it yet.
             # Success is recorded with a null tag, and a resume confirms the tag from live tags. The
             # run conclusion alone decides, since a first release has no earlier tag to compare.
             echo "- ✅ **${repo}** — release ${bump} ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" '$a + [{repo:$r, tag:null, status:"shipped"}]')
+            receipt shipped
           else
             had_failure=true
-            receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg c "$concl" '$a + [{repo:$r, tag:null, status:("failed:"+$c)}]')
+            receipt "failed:${concl}"
             echo "::error::${repo} — live release ${bump} did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A tag it left without a published Release blocks a re-dispatch until someone publishes that Release or deletes the tag." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
         done

@@ -34,7 +34,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.63.0
+      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.66.0
 ```
 
 Pin every reference to a release tag. The repository ships as one unit, so every reference in a
@@ -87,11 +87,11 @@ move a tag.
 
 | Action                   | Purpose                                                                                                          |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `approve-bot`            | Record a fresh PR approval on every invocation; trusted users only.                                              |
+| `approve-bot`            | Approve a PR as the token's identity, optionally bound to one head commit; it applies no policy of its own.      |
 | `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.              |
 | `approve-pr`             | Admin or maintainer escape hatch: approve a PR as the [Agent] App.                                               |
 | `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                |
-| `archive-board-items`    | Archive the repository's "Awaiting release" board items on release.                                              |
+| `archive-board-items`    | Archive the board items in a terminal Status, or whose issue is closed, and close their issues.                  |
 | `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                          |
 | `board-write`            | Set one single-select or date board field on issues or PRs, writing only on a change.                            |
 | `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                      |
@@ -105,7 +105,7 @@ move a tag.
 | `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given.                      |
 | `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked and fail-soft.                          |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App, so it queues once green.                                    |
-| `epic-membership`        | Resolve an Epic's authorized member set: the open PRs labeled `epic:<N>`.                                        |
+| `epic-membership`        | Resolve an Epic's member set: its frozen activation snapshot, else the open PRs labeled `epic:<N>`.              |
 | `epic-rollback`          | Revert a landed Epic's merged PRs through a new rollback Epic that lands the reverts together.                   |
 | `escalate`               | File or update a deduplicated escalation ticket, drive its board Status, and page a SEV1 through a webhook.      |
 | `lint-dockerfile`        | Run hadolint over the repository's Dockerfiles, advisory or gating; a repository without one passes.             |
@@ -138,7 +138,7 @@ check-migration-snapshots:
         fetch-depth: 0
         persist-credentials: false
 
-    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.63.0
+    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.66.0
       with:
         path: internal/models/migrations
         base: ${{ github.event.pull_request.base.sha }}
@@ -232,7 +232,7 @@ repository on its own cadence without waiting on a workflows release. Annotate i
 resolve the datasource:
 
 ```yaml
-- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.63.0
+- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.66.0
   with:
     # renovate: datasource=github-releases depName=gitleaks/gitleaks
     version: "8.30.1"

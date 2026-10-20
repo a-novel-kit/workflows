@@ -38,7 +38,7 @@ inputs:
     default: "true"
     description: >
       When "true" (default), add a content that is not on the board yet, so a derived write never
-      silently skips it. When "false", a missing item fails the run.
+      silently skips it. Any other value makes a missing item fail the run.
   only_if_empty:
     required: false
     default: "false"
@@ -165,25 +165,29 @@ runs:
             ;;
         esac
 
+        # The documents the loop sends for each content. An item carries the field's current value for
+        # the compare below, and projectItems pages because a content can sit on many boards.
+        item_sel="id project{ id } fieldValueByName(name:\$field){ $cur_frag }"
+        item_q="query(\$c:ID!,\$cursor:String,\$field:String!){ node(id:\$c){
+          ... on Issue{ projectItems(first:100, after:\$cursor){
+            pageInfo{ hasNextPage endCursor } nodes{ $item_sel } } }
+          ... on PullRequest{ projectItems(first:100, after:\$cursor){
+            pageInfo{ hasNextPage endCursor } nodes{ $item_sel } } } } }"
+        add_m="mutation(\$proj:ID!,\$c:ID!,\$field:String!){
+          addProjectV2ItemById(input:{projectId:\$proj,contentId:\$c}){ item{ $item_sel } } }"
+        write_m="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{
+          projectId:\$proj, itemId:\$item, fieldId:\$field, value: $value_frag }){ projectV2Item{ id } } }"
+
         # content_id may name several contents, since a pull request can close more than one issue.
         # The loop lives here because a composite action cannot loop a `uses:` step.
         read -r -a content_ids <<<"$(printf '%s' "$CONTENT_ID" | tr '\n' ' ')"
 
         any_changed=false
-        last_item=""
+        item_id=""
 
         for content_id in "${content_ids[@]}"; do
-          [ -n "$content_id" ] || continue
-
-          # 2. Find the content's item on this board, paging projectItems because a content can sit
-          #    on many boards. The item carries the field's current value for the compare below. A
-          #    missing item is added when add_if_missing allows it.
-          item_sel="id project{ id } fieldValueByName(name:\$field){ $cur_frag }"
-          item_q="query(\$c:ID!,\$cursor:String,\$field:String!){ node(id:\$c){
-            ... on Issue{ projectItems(first:100, after:\$cursor){
-              pageInfo{ hasNextPage endCursor } nodes{ $item_sel } } }
-            ... on PullRequest{ projectItems(first:100, after:\$cursor){
-              pageInfo{ hasNextPage endCursor } nodes{ $item_sel } } } } }"
+          # 2. Find the content's item on this board. A missing item is added when add_if_missing
+          #    allows it.
           item=""
           cursor=""
           while :; do
@@ -207,15 +211,12 @@ runs:
                 | tee -a "$GITHUB_STEP_SUMMARY"
               continue
             fi
-            add_m="mutation(\$proj:ID!,\$c:ID!,\$field:String!){
-              addProjectV2ItemById(input:{projectId:\$proj,contentId:\$c}){ item{ $item_sel } } }"
             item=$(gh api graphql -f query="$add_m" -F proj="$PROJECT_ID" -F c="$content_id" -F field="$FIELD" \
               | jq -c '.data.addProjectV2ItemById.item')
             echo "Added content to the board (item $(echo "$item" | jq -r '.id'))." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
           item_id=$(echo "$item" | jq -r '.id')
-          last_item="$item_id"
 
           # 3. Compare before writing. An equal value, from a re-run or an overlapping trigger, writes
           #    nothing.
@@ -238,14 +239,12 @@ runs:
             continue
           fi
 
-          write_m="mutation(\$proj:ID!,\$item:ID!,\$field:ID!){ updateProjectV2ItemFieldValue(input:{
-            projectId:\$proj, itemId:\$item, fieldId:\$field, value: $value_frag }){ projectV2Item{ id } } }"
           gh api graphql -f query="$write_m" -F proj="$PROJECT_ID" -F item="$item_id" -F field="$field_id" >/dev/null
           echo "Set \"$FIELD\" = \"$VALUE\" on item $item_id (was \"${cur:-<unset>}\")." | tee -a "$GITHUB_STEP_SUMMARY"
           any_changed=true
         done
 
         {
-          echo "item_id=$last_item"
+          echo "item_id=$item_id"
           echo "changed=$any_changed"
         } >> "$GITHUB_OUTPUT"

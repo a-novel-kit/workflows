@@ -1,8 +1,8 @@
 name: escalate
 description: >
   Bring a person in when governance automation reaches a state it cannot resolve on its own. The
-  action files a deduplicated ticket, an issue whose board Status it sets because closing an issue
-  leaves its board item in place. A SEV1 also posts a page to a Discord webhook. The severity picks
+  action files a deduplicated ticket, an issue in `planning_repo`, and sets its Status on a Projects
+  v2 board. A SEV1 also posts a page to a Discord webhook. The severity picks
   the channels:
 
     SEV1  org inconsistent    → ticket + @mention + page
@@ -69,7 +69,7 @@ inputs:
   epic:
     required: false
     default: ""
-    description: Epic reference for context, as a number rendered #N, or a URL.
+    description: Epic reference for context, as a number or a URL. The ticket renders a bare number as #N.
   run_url:
     required: false
     default: ""
@@ -127,7 +127,9 @@ inputs:
   dry_run:
     required: false
     default: "false"
-    description: When "true", log every intended issue/board/push action without performing it.
+    description: >
+      When "true", "1" or "yes", in any case, log every intended issue, board and push action
+      without performing it.
 
 outputs:
   issue_number:
@@ -151,8 +153,9 @@ outputs:
 runs:
   using: composite
   steps:
-    # Validate every input before a token is minted, so a bad severity or dedup_key fails with
-    # nothing done. The step also picks the channels and the target board Status.
+    # Validate the routing inputs before a token is minted, so a bad severity, state, dedup_key or
+    # planning_repo fails with nothing done. The step also picks the channels and the target board
+    # Status.
     - name: Resolve inputs and routing
       id: resolve
       shell: bash
@@ -175,7 +178,10 @@ runs:
       run: |
         set -euo pipefail
 
-        sev=$(printf '%s' "${SEVERITY:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        # Lowercase $1 and drop its whitespace, so " SEV1 " and "sev1" read the same.
+        normalize() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'; }
+
+        sev=$(normalize "${SEVERITY:-}")
         case "$sev" in
           sev1 | 1) sev=sev1; sevlabel="SEV1 — org inconsistent" ;;
           sev2 | 2) sev=sev2; sevlabel="SEV2 — one repo blocked" ;;
@@ -183,12 +189,12 @@ runs:
           *) echo "::error::severity must be sev1|sev2|sev3 (got \"${SEVERITY:-}\")"; exit 1 ;;
         esac
 
-        st=$(printf '%s' "${STATE:-open}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        st=$(normalize "${STATE:-open}")
         case "$st" in open | resolve) : ;; *) echo "::error::state must be open|resolve (got \"${STATE:-}\")"; exit 1 ;; esac
 
         # dry_run is normalized once, so a "True" or " true " still stays dry. Every later step reads
         # this value.
-        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        dry=$(normalize "${DRY_RUN:-}")
         case "$dry" in true | 1 | yes) dry=true ;; *) dry=false ;; esac
 
         for v in SUMMARY DEDUP_KEY PLANNING_REPO; do
@@ -199,10 +205,8 @@ runs:
         # exact first body line. A newline or a "-->" breaks the marker.
         case "$DEDUP_KEY" in
           *"-->"*) echo "::error::dedup_key must not contain the literal \"-->\""; exit 1 ;;
+          *$'\n'*) echo "::error::dedup_key must not contain a newline"; exit 1 ;;
         esac
-        if [ "$(printf '%s' "$DEDUP_KEY" | wc -l | tr -d '[:space:]')" != "0" ]; then
-          echo "::error::dedup_key must not contain a newline"; exit 1
-        fi
 
         powner=${PLANNING_REPO%%/*}
         pname=${PLANNING_REPO#*/}
@@ -210,15 +214,15 @@ runs:
           echo "::error::planning_repo must be owner/name (got \"$PLANNING_REPO\")"; exit 1
         fi
 
-        # Collapse newlines in the free text that reaches a title or a log line, so it cannot inject
-        # a ::workflow-command:: or break the single-line title. The body keeps its newlines, since
-        # it is Markdown written only to a --body-file.
+        # These values reach GITHUB_OUTPUT as key=value lines, where a newline would end the value and
+        # forge another output such as do_push. Collapsing newlines also keeps the title on one line
+        # and keeps a ::workflow-command:: out of the log lines that echo them. The body keeps its
+        # newlines, since the ticket step reads it from the input and writes it only to a --body-file.
         clean_summary=$(printf '%s' "$SUMMARY" | tr -d '\r' | tr '\n' ' ')
         clean_mention=$(printf '%s' "${MENTION:-}" | tr -d '\r' | tr '\n' ' ')
         clean_push_mention=$(printf '%s' "${PUSH_MENTION:-}" | tr -d '\r' | tr '\n' ' ')
 
-        run_url="${RUN_URL:-}"
-        [ -z "$run_url" ] && run_url="${SERVER_URL}/${REPO_FULL}/actions/runs/${RUN_ID}"
+        run_url="${RUN_URL:-${SERVER_URL}/${REPO_FULL}/actions/runs/${RUN_ID}}"
 
         # Only a raised SEV1 with a webhook pages, and only a raised SEV1 or SEV2 mentions.
         do_push=false
@@ -285,13 +289,11 @@ runs:
         now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
         # A bare Epic number links as #N, and any other reference passes through.
-        epic_render=""
-        if [ -n "${EPIC:-}" ]; then
-          case "$EPIC" in
-            *[!0-9]*) epic_render="$EPIC" ;;
-            *) epic_render="#$EPIC" ;;
-          esac
-        fi
+        case "${EPIC:-}" in
+          "") epic_render="" ;;
+          *[!0-9]*) epic_render="$EPIC" ;;
+          *) epic_render="#$EPIC" ;;
+        esac
 
         # Regenerate the whole body. The dedup marker must be the first line, so a marker pasted into
         # prose never matches. Hidden markers carry the first-seen time and the count to the next
@@ -341,7 +343,7 @@ runs:
         # ---- resolve: close every ticket carrying the key, duplicates from a create race included.
         #      The board step moves the first, the newest, to the resolved Status. ----
         if [ "$STATE" = "resolve" ]; then
-          matches=$(printf '%s' "$existing_json" | jq -c --arg m "$marker" "$pred")
+          matches=$(printf '%s' "$existing_json" | jq -r --arg m "$marker" "$pred | [.number, .url, .state, .id] | @tsv")
           if [ -z "$matches" ]; then
             echo "Nothing to resolve — no escalation for key \"$DEDUP_KEY\"." | tee -a "$GITHUB_STEP_SUMMARY"
             emit noop false "" "" ""; exit 0
@@ -349,11 +351,7 @@ runs:
           n=$(printf '%s\n' "$matches" | grep -c '' || true)
           [ "$n" -gt 1 ] && echo "::warning::$n tickets share dedup_key \"$DEDUP_KEY\" (a create race) — resolving all; set a caller concurrency group to prevent it."
           first_num=""; first_url=""; first_node=""
-          while IFS= read -r row; do
-            [ -z "$row" ] && continue
-            num=$(printf '%s' "$row" | jq -r '.number')
-            url=$(printf '%s' "$row" | jq -r '.url')
-            istate=$(printf '%s' "$row" | jq -r '.state')
+          while IFS=$'\t' read -r num url istate node; do
             if [ "$DRY_RUN" = "true" ]; then
               echo "[dry-run] would close #$num (state=$istate) and drive board Status → \"$TARGET_STATUS\"." | tee -a "$GITHUB_STEP_SUMMARY"
             elif [ "$istate" = "OPEN" ]; then
@@ -363,10 +361,7 @@ runs:
             else
               echo "#$num already closed — re-driving its board Status." | tee -a "$GITHUB_STEP_SUMMARY"
             fi
-            if [ -z "$first_num" ]; then
-              first_num="$num"; first_url="$url"
-              first_node=$(printf '%s' "$row" | jq -r '.id')
-            fi
+            if [ -z "$first_num" ]; then first_num="$num"; first_url="$url"; first_node="$node"; fi
           done <<< "$matches"
           emit resolved "$([ "$DRY_RUN" = "true" ] && echo false || echo true)" "$first_num" "$first_node" "$first_url"
           exit 0
@@ -420,17 +415,15 @@ runs:
         # Editing the body notifies nobody, so SEV1 and SEV2 notify again with a comment. SEV3 stays a
         # body edit.
         if [ "$DO_MENTION" = "true" ]; then
-          ping=""
-          [ -n "${MENTION:-}" ] && ping=" cc ${MENTION}"
           gh issue comment "$num" --repo "$PLANNING_REPO" \
-            --body "🔁 Recurred (occurrence ${count}) — ${RUN_URL}.${ping}" >/dev/null
+            --body "🔁 Recurred (occurrence ${count}) — ${RUN_URL}.${MENTION:+ cc ${MENTION}}" >/dev/null
         fi
         echo "Updated escalation #$num (occurrence $count)." | tee -a "$GITHUB_STEP_SUMMARY"
         emit updated true "$num" "$node" "$url"
 
     # The SEV1 page is the most critical output, so it runs before the board write, and `always()`
-    # runs it even when the ticket or token step failed. do_push is false unless the `resolve` step
-    # set it. A page that fails after the ticket is filed fails the run.
+    # runs it even when the token or ticket step failed. A failed `resolve` step leaves do_push
+    # unset, so an invalid input never pages. A failed page fails the run.
     - name: SEV1 push
       id: push
       if: ${{ always() && steps.resolve.outputs.do_push == 'true' }}
@@ -448,7 +441,6 @@ runs:
       run: |
         set -euo pipefail
 
-        # Discord's `content` caps at 2000 characters.
         content="🚨 **[SEV1] ${SUMMARY}**"
         content="${content}"$'\n'"repo: ${REPO}"
         [ -n "${EPIC:-}" ] && content="${content} · epic: ${EPIC}"
@@ -456,7 +448,8 @@ runs:
         [ -n "${RUNBOOK:-}" ] && content="${content}"$'\n'"runbook: ${RUNBOOK}"
         [ -n "${ISSUE_URL:-}" ] && content="${content}"$'\n'"ticket: ${ISSUE_URL}"
         [ -n "${PUSH_MENTION:-}" ] && content="${content}"$'\n'"cc ${PUSH_MENTION}"
-        # head -c cuts the whole message to 1900 bytes, well under the limit. `iconv -c` then drops a
+        # Discord's `content` caps at 2000 characters, and head -c cuts the whole message to 1900
+        # bytes, well under that limit. `iconv -c` then drops a
         # multibyte character the cut split, since Discord answers 400 to invalid UTF-8.
         content=$(printf '%s' "$content" | head -c 1900)
         content=$(printf '%s' "$content" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
@@ -478,10 +471,9 @@ runs:
         # webhook that never answers. Discord answers 204 on success, 429 when rate limited and 5xx
         # transiently. curl runs without --fail, so the loop reads each code and retries.
         max=3
-        code=000
         for attempt in $(seq 1 "$max"); do
-          # The fallback sits outside the substitution. curl already prints "000" through -w on
-          # failure, so an `|| echo 000` inside would yield "000000".
+          # curl prints "000" through -w on a transport failure and exits non-zero. The fallback sits
+          # outside the substitution, so it only stops `set -e` and the code stays three digits.
           code=$(curl -sS --connect-timeout 5 --max-time 15 \
             -o "$RUNNER_TEMP/esc_push_resp" -w '%{http_code}' \
             -X POST -H 'Content-Type: application/json' --data "$payload" "$PUSH_WEBHOOK") || code=000
@@ -494,7 +486,7 @@ runs:
           [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
         done
 
-        echo "::error::SEV1 push FAILED after $max attempts (last HTTP $code). The ticket was filed, but the loud page did not deliver — treat this as an escalation-channel outage and check the webhook."
+        echo "::error::SEV1 push FAILED after $max attempts (last HTTP $code). The loud page did not deliver — treat this as an escalation-channel outage and check the webhook."
         echo "pushed=false" >> "$GITHUB_OUTPUT"
         exit 1
 

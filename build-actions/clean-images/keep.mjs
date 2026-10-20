@@ -100,23 +100,28 @@ export async function origin(client, digest) {
   }
 }
 
+/** A digest's origin from the cache, else read and cached. An unreadable origin is null and stays uncached. */
+async function cachedOrigin(digest, read, cache) {
+  const found = cache[digest] ?? (await read(digest));
+  if (found !== null) cache[digest] = found;
+  return found;
+}
+
 /**
  * Untagged versions past the minimum age that a sweep must keep: builds of the default branch or of an
  * open pull request, and builds whose origin cannot be read. Origins never change, so readable ones are
  * cached by digest.
  */
 export async function protectedDigests(versions, cutoff, kept, read, cache) {
+  const candidates = versions
+    .filter((v) => v.metadata.container.tags.length === 0 && new Date(v.updated_at) < cutoff)
+    .map((v) => v.name);
   const protect = [];
-  async function classify({ name }) {
-    const found = cache[name] ?? (await read(name));
-    if (found !== null) cache[name] = found;
-    if (found === null || kept(found)) protect.push(name);
-  }
-
-  const candidates = versions.filter((v) => v.metadata.container.tags.length === 0 && new Date(v.updated_at) < cutoff);
   // A few concurrent reads keep a first run on thousands of versions within minutes.
   for (let next = 0; next < candidates.length; next += 8) {
-    await Promise.all(candidates.slice(next, next + 8).map(classify));
+    const batch = candidates.slice(next, next + 8);
+    const origins = await Promise.all(batch.map((digest) => cachedOrigin(digest, read, cache)));
+    protect.push(...batch.filter((_, i) => origins[i] === null || kept(origins[i])));
   }
   return protect.sort();
 }

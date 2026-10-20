@@ -154,22 +154,14 @@ jobs:
           ORG: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:100, after:$cursor){
+          q='query($q:String!,$endCursor:String){ search(query:$q, type:ISSUE, first:100, after:$endCursor){
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number headRefOid repository{ name }
               labels(first:20){ nodes{ name } }
               closingIssuesReferences(first:5){ nodes{ number } } } } } }'
-          # A fail-safe cannot stop at the first 100 pull requests, so the loop pages through all.
-          nodes='[]'
-          cursor=""
-          while :; do
-            args=(-F q="org:$ORG is:pr is:open")
-            [ -n "$cursor" ] && args+=(-F cursor="$cursor")
-            page=$(gh api graphql -f query="$q" "${args[@]}")
-            nodes=$(jq -cn --argjson a "$nodes" --argjson b "$(echo "$page" | jq -c '.data.search.nodes')" '$a + $b')
-            [ "$(echo "$page" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
-            cursor=$(echo "$page" | jq -r '.data.search.pageInfo.endCursor')
-          done
+          # A fail-safe cannot stop at the first 100 pull requests, so gh pages through all of them.
+          nodes=$(gh api graphql --paginate -f query="$q" -F q="org:$ORG is:pr is:open" |
+            jq -sc '[.[].data.search.nodes[]]')
           # tasks holds the open pull requests that close an issue, whose Status is re-derived.
           # Status derivation follows the same closing reference.
           tasks=$(echo "$nodes" | jq -c '[.[]

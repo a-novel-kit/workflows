@@ -7,8 +7,8 @@ description: >
   A pull request belongs to Epic N when it carries the `epic:<N>` label. Applying a label needs
   triage access, so the label is a permission-gated claim. A `Closes` keyword is author-controlled,
   and the gate uses it only to suggest the label. A pull request without an `epic:<N>` label is
-  standalone and passes. On a pull_request event its labels come from the payload, so an ordinary
-  pull request passes without an API read. An Epic member passes only when every member of its set,
+  standalone and passes. On a pull_request event its labels come from the payload, so a GraphQL
+  outage cannot hold an ordinary pull request. An Epic member passes only when every member of its set,
   resolved through epic-membership, is non-draft, approved and passing `review-gate`. The set's
   cross-repo pull requests therefore land together.
 
@@ -105,8 +105,9 @@ runs:
         permission-pull-requests: read
 
     # Post the verdict for every case that needs no member set: the halt, a misconfigured caller, a
-    # paused Epic, unreadable labels and a standalone pull request. An Epic member emits its Epic
-    # number for the resolve and evaluate steps instead.
+    # merge group that names no pull request, unreadable or truncated labels, a paused Epic and a
+    # standalone pull request. An Epic member emits its Epic number for the resolve and evaluate
+    # steps instead.
     - name: Classify PR (standalone vs Epic member)
       id: discover
       shell: bash
@@ -120,7 +121,6 @@ runs:
         HEAD_SHA: ${{ inputs.head_sha }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
         IN_QUEUE: ${{ inputs.merge_group_head_ref }}
-        MG_HEAD_REF: ${{ inputs.merge_group_head_ref }}
         # The triggering pull request's labels from the event payload. A run without a pull_request
         # payload, such as a merge group or a dispatch, leaves them empty.
         EVENT_PR: ${{ github.event.pull_request.number }}
@@ -152,7 +152,7 @@ runs:
         # The switch fails toward halting, so only an explicit off-token runs the gate. The halt
         # precedes every other verdict, so it holds every pull request and dequeues every merge group.
         case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-          "" | 0 | off | false | no | disabled) : ;;  # explicit off-token / unset → running
+          "" | 0 | off | false | no | disabled) : ;;
           *)
             post_check failure "Automation halted org-wide by AGENT_KILL_SWITCH — holding this PR. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to resume; the next event or reconcile sweep re-evaluates."
             emit ""
@@ -179,9 +179,8 @@ runs:
         }
 
         # Read a pull request's labels and its `Closes` parent in one query, retrying transient
-        # GraphQL errors. Prints the response JSON, or prints nothing and returns 1, and the caller
-        # chooses between holding and passing. A null `pullRequest` also counts as a failure, which
-        # lets the caller post its hold.
+        # GraphQL errors. Prints the response JSON, or prints nothing and returns 1 on an error or a
+        # null `pullRequest`. The label read then holds, and the hint read drops the hint.
         fetch_pr() { # $1=pr number
           local q data
           q='query($owner:String!,$repo:String!,$num:Int!){ repository(owner:$owner,name:$repo){
@@ -190,7 +189,7 @@ runs:
                  closingIssuesReferences(first:5){ nodes{ parent{ number } } } } } }'
           for attempt in 1 2 3; do
             if data=$(gh api graphql -f query="$q" -F owner="$OWNER" -F repo="$REPO" -F num="$1" 2>/dev/null) \
-              && echo "$data" | jq -e 'has("data") and (has("errors") | not) and (.data.repository.pullRequest != null)' >/dev/null 2>&1; then
+              && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not) and (.data.repository.pullRequest != null)' >/dev/null 2>&1; then
               printf '%s' "$data"
               return 0
             fi
@@ -211,11 +210,12 @@ runs:
         # ref (refs/heads/gh-readonly-queue/<base>/pr-<N>-<sha>), and the gate evaluates that pull
         # request's Epic. Off the queue it is the pull_request_number input.
         if [ -n "${IN_QUEUE:-}" ]; then
-          classify_pr=$(printf '%s' "${MG_HEAD_REF:-}" | grep -oE 'pr-[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
+          classify_pr=""
+          [[ "$IN_QUEUE" =~ pr-([0-9]+) ]] && classify_pr="${BASH_REMATCH[1]}"
           if [ -z "$classify_pr" ]; then
             # The group ref names no pull request, so the gate holds. A failing required check
             # dequeues the group, and the pull request returns to the pool to re-enqueue.
-            post_check failure "merge_group head_ref \"${MG_HEAD_REF:-}\" — couldn't identify the queued PR to re-check its Epic; holding (dequeues) rather than passing blind."
+            post_check failure "merge_group head_ref \"${IN_QUEUE}\" — couldn't identify the queued PR to re-check its Epic; holding (dequeues) rather than passing blind."
             emit ""
             exit 0
           fi
@@ -224,29 +224,25 @@ runs:
         fi
 
         # Read the labels, which decide membership, and the `Closes` parent, which only hints. A
-        # pull_request event carries the labels in its payload, so that path makes no API read and a
-        # GraphQL outage cannot hold it. Other runs read the labels through the API, and a read that
-        # cannot complete holds.
-        labels=""
-        parent=""
+        # pull_request event carries the labels in its payload, so that path reads no labels through
+        # the API, and a GraphQL outage cannot hold it. Other runs read the labels through the API,
+        # and a read that cannot complete holds.
+        data=""
         labels_truncated=false
         if [ -n "${EVENT_PR:-}" ] && [ "$classify_pr" = "${EVENT_PR}" ]; then
-          labels=$(printf '%s' "${EVENT_LABELS:-[]}")
+          labels="${EVENT_LABELS:-[]}"
+        elif data=$(fetch_pr "$classify_pr"); then
+          labels=$(printf '%s' "$data" | jq -c '[.data.repository.pullRequest.labels.nodes[].name]')
+          labels_truncated=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.labels.pageInfo.hasNextPage')
         else
-          if data=$(fetch_pr "$classify_pr"); then
-            labels=$(printf '%s' "$data" | jq -c '[.data.repository.pullRequest.labels.nodes[].name]')
-            labels_truncated=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.labels.pageInfo.hasNextPage')
-            parent=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
-          else
-            post_check failure "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — holding rather than passing a required check blind; the reconcile sweep re-checks."
-            emit ""
-            exit 0
-          fi
+          post_check failure "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — holding rather than passing a required check blind; the reconcile sweep re-checks."
+          emit ""
+          exit 0
         fi
 
         # The first `epic:<N>` label wins, since a pull request belongs to one Epic by convention.
         # Matching digits only keeps the value safe for the later steps.
-        epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty' | grep -oE '[0-9]+' || true)
+        epic=$(printf '%s' "$labels" | jq -r 'map(select(test("^epic:[0-9]+$")))[0] // empty | ltrimstr("epic:")' || true)
 
         # The API read stops at 100 labels. A truncated page without `epic:<N>` does not prove the pull
         # request standalone, so the gate holds. The payload path reads the full label set.
@@ -272,13 +268,10 @@ runs:
         fi
 
         # No `epic:<N>` label means standalone, which passes. When the closing issue has a parent
-        # Epic, the summary suggests the label. The payload path skipped the API read above, so it
-        # reads the hint here, and a failed read only drops the hint.
-        if [ -n "${EVENT_PR:-}" ] && [ "$classify_pr" = "${EVENT_PR}" ]; then
-          if data=$(fetch_pr "$classify_pr"); then
-            parent=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
-          fi
-        fi
+        # Epic, the summary suggests the label. The payload path has no response yet, so it reads the
+        # hint here, and a failed read only drops the hint.
+        if [ -z "$data" ]; then data=$(fetch_pr "$classify_pr") || true; fi
+        parent=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
 
         if [ -n "$parent" ]; then
           post_check success "PR #${classify_pr} closes an issue under epic #${parent} but has no \`epic:${parent}\` label — treated as standalone. Add the \`epic:${parent}\` label to gate it for atomic cross-repo landing."
@@ -422,6 +415,18 @@ runs:
         STUCK_WAVE_HOURS: "72"
       run: |
         set -euo pipefail
+        START='<!-- epic-membership:snapshot:start -->'
+        END='<!-- epic-membership:snapshot:end -->'
+
+        # The Epic body. A body edited on the web carries CRLF line endings, so \r is stripped for the
+        # fence match.
+        read_body() { gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' | tr -d '\r'; }
+
+        # Prints true when the Epic carries the `rolled-back` label, false otherwise.
+        rolled_back_label() {
+          gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '[.labels[].name] | index("rolled-back") != null' 2>/dev/null
+        }
+
         # The marker JSON in body $1, or empty when there is none or it does not parse. The region
         # holds a note and then the JSON, so parsing starts at the first line that opens a value.
         # epic-membership, detect-partial-landing and epic-rollback extract the marker the same way.
@@ -448,16 +453,7 @@ runs:
             then .since else empty end' 2>/dev/null || true
         }
 
-        START='<!-- epic-membership:snapshot:start -->'
-        END='<!-- epic-membership:snapshot:end -->'
-
-        # Capture runs in two phases, because a lagging label index can make a short set look
-        # all-ready. The first all-ready pass writes a `pending` marker with a timestamp. A later pass
-        # promotes it to `frozen` once the set has stayed unchanged for STABILIZE_SECONDS, and a
-        # changed set restarts the clock. Readers treat only `frozen` as the set.
-        #
-        # A body edited on the web carries CRLF line endings, so \r is stripped for the fence match.
-        body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' | tr -d '\r')
+        body=$(read_body)
 
         # Whether every member of the wave merged. A member closed unmerged keeps the wave frozen until
         # epic-rollback resolves it. The snapshot is the only record that the wave failed, and a
@@ -475,8 +471,7 @@ runs:
         rolled_back=false
         if [ "$all_landed" != true ] && printf '%s' "$MEMBERS" | jq -e \
              '(length > 0) and all(.[]; .state == "MERGED" or .state == "CLOSED")' >/dev/null 2>&1 \
-          && gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '[.labels[].name] | index("rolled-back") != null' \
-               2>/dev/null | grep -qx true; then
+          && rolled_back_label | grep -qx true; then
           rolled_back=true
         fi
 
@@ -503,7 +498,7 @@ runs:
         # frozen marker that fails to parse is overwritten with the live set, losing any de-labeled
         # member it held.
         marker=$(current_marker "$body")
-        if [ -z "$marker" ] || ! printf '%s' "$marker" | jq empty 2>/dev/null; then marker=null; fi
+        [ -n "$marker" ] || marker=null
         now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
         # The boundary this pass inherits. splice replaces the whole fenced region, so a boundary
@@ -511,6 +506,11 @@ runs:
         # tombstone's instant forward, which keeps the retired wave's merges out of the new history.
         inherited_since=$(since_of "$marker")
 
+        # Capture runs in two phases, because a lagging label index can make a short set look
+        # all-ready. The first all-ready pass writes a `pending` marker with a timestamp. A later pass
+        # promotes it to `frozen` once the set has stayed unchanged for STABILIZE_SECONDS, and a
+        # changed set restarts the clock. Readers treat only `frozen` as the set.
+        #
         # A frozen marker retires once its wave has landed or been rolled back, and is otherwise
         # skipped. A valid pending marker resets when the members changed, promotes when unchanged and
         # aged, and otherwise waits. Anything else gets a fresh pending, including no marker, a
@@ -536,10 +536,10 @@ runs:
           # else says why. Past STUCK_WAVE_HOURS the gate names what the wave waits on. An open member
           # is late. A member closed unmerged means the wave did not land, and it retires only after
           # epic-rollback.
-          if [ "$(printf '%s' "$marker" | jq -r 'if type == "object" then (.status // "") else "" end' 2>/dev/null || true)" = "frozen" ] \
-            && printf '%s' "$marker" | jq -e --arg now "$now" --argjson hrs "${STUCK_WAVE_HOURS}" \
-                 '(.at | try (fromdateiso8601 | true) catch false)
-                  and (($now | fromdateiso8601) - (.at | fromdateiso8601)) >= ($hrs * 3600)' >/dev/null 2>&1; then
+          if printf '%s' "$marker" | jq -e --arg now "$now" --argjson hrs "${STUCK_WAVE_HOURS}" \
+               'type == "object" and .status == "frozen"
+                and (.at | try (fromdateiso8601 | true) catch false)
+                and (($now | fromdateiso8601) - (.at | fromdateiso8601)) >= ($hrs * 3600)' >/dev/null 2>&1; then
             late=$(printf '%s' "$MEMBERS" | jq -r '[.[] | select(.state == "OPEN" or .state == null)
               | "\(.repo)#\(.number)"] | join(", ")' 2>/dev/null || true)
             abandoned=$(printf '%s' "$MEMBERS" | jq -r '[.[] | select(.state == "CLOSED")
@@ -576,15 +576,16 @@ runs:
           # both membership readers select on `status == "frozen"`, so they read it as no marker.
           payload=$(jq -cn --arg since "$now" '{status: "retired", since: $since}')
           note="_Epic membership, RETIRED — the wave frozen here has $([ "$all_landed" = true ] && echo "fully landed" || echo "been rolled back"). The instant below separates its history from the next wave's; the next ready set captures its own. Do not edit._"
-        elif [ "$do" = "frozen" ]; then
-          # `at` records the freeze, and STUCK_WAVE_HOURS measures a stuck wave from it.
-          payload=$(printf '%s' "$cur" | jq -c --arg at "$now" --arg since "$inherited_since" \
-            '{status: "frozen", at: $at, members: .} + (if $since == "" then {} else {since: $since} end)')
-          note="_Epic membership, FROZEN at activation by the merge-gate. The authoritative set for this landing — a later de-label, close, or relabel does not change it. Do not edit._"
         else
-          payload=$(printf '%s' "$cur" | jq -c --arg at "$now" --arg since "$inherited_since" \
-            '{status: "pending", at: $at, members: .} + (if $since == "" then {} else {since: $since} end)')
-          note="_Epic membership, PENDING — stabilizing before it freezes (the label index is eventually consistent). Do not edit._"
+          # `at` starts a pending marker's stabilization clock and records a frozen marker's freeze,
+          # which STUCK_WAVE_HOURS measures from.
+          payload=$(printf '%s' "$cur" | jq -c --arg status "$do" --arg at "$now" --arg since "$inherited_since" \
+            '{status: $status, at: $at, members: .} + (if $since == "" then {} else {since: $since} end)')
+          if [ "$do" = "frozen" ]; then
+            note="_Epic membership, FROZEN at activation by the merge-gate. The authoritative set for this landing — a later de-label, close, or relabel does not change it. Do not edit._"
+          else
+            note="_Epic membership, PENDING — stabilizing before it freezes (the label index is eventually consistent). Do not edit._"
+          fi
         fi
 
         # The same splice as render-epic-status. One START line before one END line is rewritten in
@@ -623,14 +624,14 @@ runs:
           echo "$END"
         } > "$regionf"
 
-        # Read-modify-verify. Writers overlap, because the reconcile sweep runs this gate for many
-        # members at once and render-epic-status edits the same body. The issues API has no
-        # conditional update, so each attempt splices into a fresh read, writes, and confirms the
-        # write survived. A losing writer retries against whatever landed.
-        #
-        # The decision ($do and $payload) came from an earlier read, and a peer may have moved the set
-        # since. Each attempt therefore re-checks the decision against the marker it finds. The tests
-        # drive write_marker against a stubbed gh.
+        # Whether two markers agree on status, members and wave boundary. `at` differs per writer and
+        # stays out of the comparison, while `since` is inherited content and counts.
+        same_marker() { # $1 = marker json, $2 = marker json
+          [ -n "$1" ] && [ -n "$2" ] \
+            && jq -e -n --argjson a "$1" --argjson b "$2" \
+              '($a.status == $b.status) and (($a.members // []) == ($b.members // []))' >/dev/null 2>&1 \
+            && [ "$(since_of "$1")" = "$(since_of "$2")" ]
+        }
 
         # Whether live marker $1 already carries payload $2 and can make progress. Both the entry
         # short-circuit and the post-write verify call this, so a clobbered repair never reads as
@@ -643,25 +644,23 @@ runs:
             frozen | retired) return 0 ;;
           esac
           # A pending marker whose `at` cannot be parsed never ages, so it stays unsettled however
-          # equal its members look. The decision step routes it to a repairing write.
+          # equal its members look. The decision above routes it to a repairing write.
           printf '%s' "$1" | jq -e '.at | try (fromdateiso8601 | true) catch false' >/dev/null 2>&1
         }
 
-        # Whether two markers agree on status, members and wave boundary. `at` differs per writer and
-        # stays out of the comparison, while `since` is inherited content and counts.
-        same_marker() { # $1 = marker json, $2 = marker json
-          [ -n "$1" ] && [ -n "$2" ] \
-            && jq -e -n --argjson a "$1" --argjson b "$2" \
-              '($a.status == $b.status) and (($a.members // []) == ($b.members // []))' >/dev/null 2>&1 \
-            && [ "$(since_of "$1")" = "$(since_of "$2")" ]
-        }
-
+        # Read-modify-verify. Writers overlap, because the reconcile sweep runs this gate for many
+        # members at once and render-epic-status edits the same body. The issues API has no
+        # conditional update, so each attempt splices into a fresh read, writes, and confirms the
+        # write survived. A losing writer retries against whatever landed.
+        #
+        # The decision ($do and $payload) came from an earlier read, and a peer may have moved the set
+        # since. Each attempt therefore re-checks the decision against the marker it finds.
         write_marker() { # $1 = region file, $2 = the marker the decision read. 0 = in place, 2 = yielded, 1 = gave up
           local regionf="$1" decided="$2" bodyf outf attempt body marker err rc=1
           bodyf=$(mktemp); outf=$(mktemp)
           for attempt in 1 2 3; do
             # Re-read every attempt, the first included.
-            if ! body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r'); then
+            if ! body=$(read_body 2>/dev/null); then
               # A read failure has no diagnostic of its own, so `err` records it for the give-up
               # message when the last attempts fail here.
               err="could not read ${ORG}/${PLANNING_REPO}#${EPIC} (attempt ${attempt})"
@@ -733,7 +732,7 @@ runs:
             # Verify the write, since a peer write can land after it and the edit's exit code cannot
             # show that. The comparison is semantic and scoped to the region, so an orphaned payload
             # line that splice's repair path leaves behind as prose does not match.
-            if body=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>/dev/null | tr -d '\r') \
+            if body=$(read_body 2>/dev/null) \
               && marker_settled "$(current_marker "$body")" "$payload"; then
               rc=0
               break
@@ -763,7 +762,7 @@ runs:
         # before freezing this one, or this wave could later retire on a closed member without a
         # rollback of its own. If the label cannot be read or cleared, freezing waits for a later pass.
         if [ "$do" = "frozen" ]; then
-          if ! stale=$(gh api "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}" --jq '[.labels[].name] | index("rolled-back") != null' 2>/dev/null) \
+          if ! stale=$(rolled_back_label) \
             || { [ "$stale" = true ] && ! gh api -X DELETE "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}/labels/rolled-back" >/dev/null 2>&1; }; then
             echo "::warning::Epic #${EPIC}: could not confirm that no earlier wave's rolled-back label remains — freezing on a later pass." \
               | tee -a "$GITHUB_STEP_SUMMARY"
