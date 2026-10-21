@@ -31,8 +31,9 @@ One `v*` tag releases every action, workflow and preset together. A maintainer c
 
 An action that calls a sibling references it by tag, as `a-novel-kit/workflows/<group>/<name>@<tag>`,
 so a release always runs its own siblings. The release rewrites those pins to its new tag, together with
-the versions in the README and the presets guide. A script
-that several actions share loads through `$GITHUB_ACTION_PATH`, as the security actions load
+the versions in the README and the presets guide.
+
+A script that several actions share loads through `$GITHUB_ACTION_PATH`, as the security actions load
 `security-actions/run-scan.mjs`.
 
 A third-party action is pinned to its release commit, as `owner/repo@<sha> # vX.Y.Z`, because many

@@ -55,10 +55,10 @@ inputs:
     required: false
     default: ""
     description: >
-      Organization-wide halt. The action runs only when the value, lowercased with whitespace
-      removed, is empty, `0`, `off`, `false`, `no` or `disabled`. Any other value halts it, so a
-      mistyped value halts too. A halted run edits no Epic and succeeds. A composite action cannot
-      read the `vars` context, so the caller passes the switch in as an input.
+      Organization-wide halt. The action runs only on an explicit off value: empty, `0`, `off`,
+      `false`, `no` or `disabled`, compared lowercased with whitespace removed. Any other value
+      halts it, so a mistyped value halts too. A halted run edits no Epic and succeeds. A composite
+      action cannot read the `vars` context, so the caller passes the switch in as an input.
 
 runs:
   using: composite
@@ -295,13 +295,16 @@ runs:
           local base_q open merged closed members
           base_q="label:\"epic:${epic}\" org:${ORG}"
           if ! open=$(search_prs "is:pr is:open $base_q"); then
-            echo "::warning::could not resolve open epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"; return 0
+            echo "::warning::could not resolve open epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
           fi
           if ! merged=$(search_prs "is:pr is:merged $base_q"); then
-            echo "::warning::could not resolve merged epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"; return 0
+            echo "::warning::could not resolve merged epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
           fi
           if ! closed=$(search_prs "is:pr is:closed is:unmerged $base_q"); then
-            echo "::warning::could not resolve closed epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"; return 0
+            echo "::warning::could not resolve closed epic:${epic} members — skipping this sweep." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
           fi
           # A pull request that changes state between the three searches appears in two buckets.
           # Deduplicating by repo and number keeps merged over closed over open, so a just-merged
@@ -412,7 +415,9 @@ runs:
           # overwritten with the marker the body held before. merge-gate retries when its verify sees
           # the loss, and otherwise its next pass decides again from the restored marker.
           local region_file body_file spliced_file
-          region_file=$(mktemp); body_file=$(mktemp); spliced_file=$(mktemp)
+          region_file=$(mktemp)
+          body_file=$(mktemp)
+          spliced_file=$(mktemp)
           printf '%s\n' "$START" "$region_inner" "$END" > "$region_file"
           printf '%s\n' "$body" > "$body_file"
           splice "$body_file" "$region_file" > "$spliced_file"

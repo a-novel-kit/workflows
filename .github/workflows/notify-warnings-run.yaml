@@ -1,8 +1,8 @@
 name: notify-warnings (reusable)
 
 # Posts one daily digest of the CI warnings an org's default branches raised to its Discord CI
-# channel, one line per warning whatever the number of repositories raising it, and nothing on a
-# clean day. `collect-warnings` reads the runs that finished since the caller's previous successful
+# channel. The digest holds one line per warning, however many repositories raised it, and a clean
+# day posts nothing. `collect-warnings` reads the runs that finished since the caller's previous successful
 # run, so the next run catches up a late or failed one.
 #
 # The caller's ignore rules hide expected warnings. Each rule needs a reason, and the step summary

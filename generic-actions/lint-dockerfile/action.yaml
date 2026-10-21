@@ -48,11 +48,13 @@ runs:
           mapfile -t files < <(git ls-files \
             | grep -E '(^|/)[Dd]ockerfile$|\.[Dd]ockerfile$|(^|/)Dockerfile\.[^/]+$')
         fi
+
         if [ ${#files[@]} -eq 0 ]; then
           echo "No Dockerfiles to lint."
           printf '## hadolint\n\nNo Dockerfiles found — nothing to lint.\n' >> "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
+
         bin="$RUNNER_TEMP/hadolint"
         # The check gates, so the download retries. `--retry-all-errors` also retries a
         # transport-level reset (curl exit 35), which plain `--retry` leaves fatal.
@@ -63,12 +65,15 @@ runs:
           exit 1
         fi
         chmod +x "$bin"
+
         "$bin" "${files[@]}" > "$RUNNER_TEMP/hadolint.txt" 2>&1
         rc=$?
         cat "$RUNNER_TEMP/hadolint.txt"
+
         total=$(grep -cE 'DL[0-9]+|SC[0-9]+' "$RUNNER_TEMP/hadolint.txt")
         printf '## hadolint\n\n**%s** finding(s) across %s Dockerfile(s).\n' \
           "${total:-0}" "${#files[@]}" >> "$GITHUB_STEP_SUMMARY"
+
         if [ "$ADVISORY" = "true" ]; then
           echo "Advisory mode: findings reported without gating."
           exit 0

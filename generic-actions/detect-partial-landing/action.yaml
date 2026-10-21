@@ -173,28 +173,34 @@ runs:
       run: |
         set -euo pipefail
         if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
-          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""; exit 1
+          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
+          exit 1
         fi
+
         Q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:100, after:$cursor){
           pageInfo{ hasNextPage endCursor }
           nodes{ ... on PullRequest{
             number headRefOid mergedAt baseRefName isDraft
             repository{ nameWithOwner }
             labels(first:100){ nodes{ name } } } } } }'
-        cursor=""; prs='[]'; failed=0
+        cursor=""
+        prs='[]'
+        failed=0
         while :; do
           args=(-f query="$Q" -f q="org:${ORG} is:pr is:open")
           [ -n "$cursor" ] && args+=(-f cursor="$cursor")
           # A 200 carrying data and errors is a partial page, so it fails the read as search_prs does.
           if ! data=$(gh api graphql "${args[@]}" 2>/dev/null) \
             || ! printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
-            failed=1; break
+            failed=1
+            break
           fi
           prs=$(jq -cs '.[0] + [(.[1].data.search.nodes // [])[] | select(.number != null)]' \
             <(printf '%s' "$prs") <(printf '%s' "$data"))
           [ "$(printf '%s' "$data" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
           cursor=$(printf '%s' "$data" | jq -r '.data.search.pageInfo.endCursor')
         done
+
         if [ "$failed" = 1 ]; then
           # A partial scope makes reenqueue fail in every uncovered repository, so a failed discovery
           # mints no enqueue token. Freeze detection still runs, because sweep_main enumerates again
@@ -504,7 +510,7 @@ runs:
           CLAIM_EPICS=''
           # Repos are case-folded, because GitHub resolves repository names case-insensitively.
           CLAIM_MEMBERS='[]'
-          local pages nodes n elem body marker total=0 added=0
+          local pages nodes n fenced elem body marker total=0 added=0
           if ! pages=$(gh api --paginate "repos/${ORG}/${PLANNING_REPO}/issues?state=open&per_page=100" 2>/dev/null); then
             echo "::warning::could not list open issues in ${ORG}/${PLANNING_REPO} — reaching Epics through live labels only this pass; a de-labeled Epic is not rescued." \
               | tee -a "$GITHUB_STEP_SUMMARY"
@@ -515,14 +521,17 @@ runs:
           # leaves the index empty.
           nodes=$(printf '%s' "$pages" | jq -s -c 'add // [] | map(select(has("pull_request") | not))' 2>/dev/null) || nodes='[]'
           total=$(printf '%s' "$nodes" | jq 'length' 2>/dev/null || echo 0)
-          # fd 4 keeps the loop body's commands off this feed. The loop runs in this shell, so
-          # CLAIM_EPICS and CLAIM_MEMBERS persist. jq -c puts each issue on one line.
-          while IFS= read -r elem <&4; do
-            n=$(printf '%s' "$elem" | jq -r '.number')
+          # One jq pass prints each issue on one line, as its number, whether its body holds the
+          # snapshot's start fence, and the issue itself. Only a fenced body can carry a marker, so
+          # the other issues only prime the cache. fd 4 keeps the loop body's commands off this feed.
+          # The loop runs in this shell, so CLAIM_EPICS and CLAIM_MEMBERS persist.
+          while read -r n fenced elem <&4; do
             # Prime epic_issue's cache with this issue.
             printf '%s' "$elem" > "${EPIC_CACHE}/$n.json"
             : > "${EPIC_CACHE}/$n.err"
             printf '0' > "${EPIC_CACHE}/$n.rc"
+            [ "$fenced" = true ] || continue
+
             body=$(printf '%s' "$elem" | jq -r '.body // ""' | tr -d '\r')
             marker=$(extract_marker "$body")
             if printf '%s' "$marker" | jq -e \
@@ -538,7 +547,8 @@ runs:
                   | select((.repo | type) == "string" and (.number | type) == "number")
                   | {epic: $epic, repo: (.repo | ascii_downcase), number} ]' 2>/dev/null || printf '%s' "$CLAIM_MEMBERS")
             fi
-          done 4< <(printf '%s' "$nodes" | jq -c '.[]' 2>/dev/null)
+          done 4< <(printf '%s' "$nodes" | jq -r --arg fence '<!-- epic-membership:snapshot:start -->' \
+            '.[] | "\(.number) \((.body // "") | contains($fence)) \(tojson)"' 2>/dev/null)
           echo "Claim index: ${total} open issue(s) in ${ORG}/${PLANNING_REPO}, ${added} carrying a frozen snapshot." \
             | tee -a "$GITHUB_STEP_SUMMARY"
         }

@@ -23,10 +23,10 @@ inputs:
   client_id:
     required: true
     description: >
-      Client ID of a GitHub App installed on the org. The action mints three tokens from it: an
-      org-wide read token for issues, pull requests and contents, a write token for contents, pull
-      requests and issues scoped to the ledger's repositories and `planning_repo`, and an
-      organization Projects write token for the board reset. A dry run mints the read token only.
+      Client ID of a GitHub App installed on the org. The action mints three tokens from it. An
+      org-wide read token reads issues, pull requests and contents. A write token for contents, pull
+      requests and issues covers the ledger's repositories and `planning_repo`. An organization
+      Projects write token resets the board. A dry run mints the read token only.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -75,9 +75,9 @@ inputs:
     default: ""
     description: >
       Org-level halt, passed in by the caller because a composite action cannot read the `vars`
-      context. The action runs only when the value, lowercased and stripped of whitespace, is empty,
-      0, off, false, no or disabled. Any other value engages the halt, and the action fails in its
-      first step, before the role check or any token mint.
+      context. The action runs only on an explicit off value: empty, 0, off, false, no or disabled,
+      compared lowercased with whitespace removed. Any other value engages the halt, and the action
+      fails in its first step, before the role check or any token mint.
 
 runs:
   using: composite
@@ -317,16 +317,15 @@ runs:
         # Confirm each candidate through REST, take its squash SHA, require a single parent, and
         # record the pre-merge parent and the Task ids. A row REST reports as unmerged is left out. A
         # commit with two parents means the ledger is wrong and aborts the run.
+        #
+        # One jq pass prints each candidate's fields on a line, unit-separated so an empty field keeps
+        # its place. fd 3 keeps the REST reads in the loop off its input.
+        candidate_rows=$(printf '%s' "$candidates" | jq -r '.[]
+          | [ (.repository.nameWithOwner | tostring), (.number | tostring), (.baseRefName | tostring),
+              (.mergedAt | tostring), (.mergeCommit.oid // ""), ([.closingIssuesReferences.nodes[] | .id] | tojson) ]
+          | join("\u001f")')
         ledger='[]'
-        for i in $(seq 0 $((cand_count - 1))); do
-          row=$(printf '%s' "$candidates" | jq -c ".[$i]")
-          repo=$(printf '%s' "$row" | jq -r '.repository.nameWithOwner')
-          number=$(printf '%s' "$row" | jq -r '.number')
-          base=$(printf '%s' "$row" | jq -r '.baseRefName')
-          merged_at=$(printf '%s' "$row" | jq -r '.mergedAt')
-          search_oid=$(printf '%s' "$row" | jq -r '.mergeCommit.oid // ""')
-          tasks=$(printf '%s' "$row" | jq -c '[.closingIssuesReferences.nodes[] | .id]')
-
+        while IFS=$'\x1f' read -r repo number base merged_at search_oid tasks <&3; do
           if ! info=$(rest_pr_merge "$repo" "$number"); then
             echo "::error::REST read failed for ${repo}#${number} — cannot confirm the ledger; aborting."
             exit 1
@@ -359,7 +358,7 @@ runs:
             --arg base "$base" --arg mergedAt "$merged_at" --arg sha "$sha" --arg pre "$premerge" \
             --argjson tasks "$tasks" \
             '$acc + [{repo:$repo, number:$number, base:$base, mergedAt:$mergedAt, sha:$sha, premerge:$pre, tasks:$tasks}]')
-        done
+        done 3< <(printf '%s\n' "$candidate_rows")
 
         ledger_count=$(printf '%s' "$ledger" | jq 'length')
         if [ "$ledger_count" -eq 0 ]; then
@@ -428,10 +427,10 @@ runs:
         fi
         echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-    # Write token, minted only on a live run that cleared every gate, and scoped to the Epic's
-    # repositories plus the planning repo. contents pushes the revert branches, pull-requests opens,
-    # labels and arms the reverts, and issues writes the rollback Epic, the epic:<M> labels and Epic
-    # N's `rolled-back` label.
+    # Write token, minted only on a live run that cleared every gate. Its scope is the Epic's
+    # repositories plus the planning repo. Contents write pushes the revert branches. Pull requests
+    # write opens, labels and arms the reverts. Issues write files the rollback Epic, the epic:<M>
+    # labels and Epic N's `rolled-back` label.
     - name: Mint scoped write token
       id: write
       if: ${{ steps.plan.outputs.proceed == 'true' }}

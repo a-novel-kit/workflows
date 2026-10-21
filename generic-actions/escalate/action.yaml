@@ -217,7 +217,8 @@ runs:
         powner=${PLANNING_REPO%%/*}
         pname=${PLANNING_REPO#*/}
         if [ -z "$powner" ] || [ -z "$pname" ] || [ "$powner" = "$PLANNING_REPO" ]; then
-          echo "::error::planning_repo must be owner/name (got \"$PLANNING_REPO\")"; exit 1
+          echo "::error::planning_repo must be owner/name (got \"$PLANNING_REPO\")"
+          exit 1
         fi
 
         # Collapse $1's newlines to spaces. The free-text values below reach GITHUB_OUTPUT as key=value

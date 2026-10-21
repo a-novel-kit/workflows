@@ -36,9 +36,9 @@ inputs:
     default: ""
     description: >
       Org-level halt, passed in by the caller because a composite action cannot read the `vars`
-      context. The action runs only when the value, lowercased and stripped of whitespace, is empty,
-      0, off, false, no or disabled. Any other value engages the halt. The action then writes
-      nothing and exits 0.
+      context. The action runs only on an explicit off value: empty, 0, off, false, no or disabled,
+      compared lowercased with whitespace removed. Any other value engages the halt. The action then
+      writes nothing and exits 0.
 
 runs:
   using: composite

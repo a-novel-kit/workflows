@@ -19,9 +19,10 @@ inputs:
     required: false
     default: ""
     description: >
-      Org-wide halt switch. The action runs only when the value, lowercased and stripped of
-      whitespace, is empty, 0, off, false, no or disabled. Any other value halts it, so a mistyped
-      value fails safe. A halt fails the step before the role check, the token mint and the approval.
+      Org-wide halt switch. The action runs only on an explicit off value: empty, 0, off, false, no
+      or disabled, compared lowercased with whitespace removed. Any other value halts it, so a
+      mistyped value fails safe. A halt fails the step before the role check, the token mint and the
+      approval.
 
 runs:
   using: composite

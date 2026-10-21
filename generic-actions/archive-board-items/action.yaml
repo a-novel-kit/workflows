@@ -89,7 +89,9 @@ runs:
         [ "$dry" = false ] || dry=true
 
         # Page the board and keep the unarchived items that match. Skipping archived items makes a
-        # re-run or an overlapping trigger a no-op.
+        # re-run or an overlapping trigger a no-op. Each match is one line of unit-separated fields,
+        # so the archive loop reads them without a jq call per field. A pull request or draft item
+        # without a number or URL prints "null" in that field.
         items_q='
           query($proj:ID!,$cursor:String){ node(id:$proj){ ... on ProjectV2{
             items(first:100, after:$cursor){
@@ -107,7 +109,7 @@ runs:
           args=(-f proj="$PROJECT_ID")
           [ -n "$cursor" ] && args+=(-f cursor="$cursor")
           resp=$(gh api graphql -f query="$items_q" "${args[@]}")
-          echo "$resp" | jq -c --arg repo "$REPO_FULL" --arg status "$STATUS" --arg closed "$ARCHIVE_CLOSED" '
+          echo "$resp" | jq -r --arg repo "$REPO_FULL" --arg status "$STATUS" --arg closed "$ARCHIVE_CLOSED" '
             ($status | split(",") | map(gsub("^\\s+|\\s+$";""))) as $statuses
             | .data.node.items.nodes[]
             | select(
@@ -116,7 +118,8 @@ runs:
                      then (.content.state == "CLOSED")
                      else ((.status.name // "") as $sn | ($statuses | any(. == $sn))) end)
                 and ($repo == "*" or (.content.repository.nameWithOwner // "") == $repo))
-            | {id, number: .content.number, url: .content.url, repo: (.content.repository.nameWithOwner // "")}' >> "$matches"
+            | [.id, (.content.number | tostring), (.content.url | tostring), (.content.repository.nameWithOwner // "")]
+            | join("\u001f")' >> "$matches"
           [ "$(echo "$resp" | jq -r '.data.node.items.pageInfo.hasNextPage')" = "true" ] || break
           cursor=$(echo "$resp" | jq -r '.data.node.items.pageInfo.endCursor')
         done
@@ -130,19 +133,16 @@ runs:
         archive_m='mutation($proj:ID!,$item:ID!){
           archiveProjectV2Item(input:{projectId:$proj,itemId:$item}){ item{ id } } }'
         verb=$([ "$CLOSE" = "true" ] && echo "archive+close" || echo "archive")
-        while IFS= read -r row; do
-          id=$(echo "$row" | jq -r '.id')
-          num=$(echo "$row" | jq -r '.number')
-          url=$(echo "$row" | jq -r '.url')
-          rp=$(echo "$row" | jq -r '.repo')
+        while IFS=$'\x1f' read -r id num url rp; do
           if [ "$dry" = true ]; then
             echo "- [dry-run] would $verb #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            gh api graphql -f query="$archive_m" -f proj="$PROJECT_ID" -f item="$id" >/dev/null
-            # The close is best-effort, since a pull request or draft item has no issue to close.
-            if [ "$CLOSE" = "true" ] && [ -n "$num" ] && [ "$num" != "null" ] && [ -n "$rp" ] && [ "$rp" != "null" ]; then
-              gh issue close "$num" --repo "$rp" --reason completed >/dev/null 2>&1 || true
-            fi
-            echo "- ${verb}d #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
+            continue
           fi
+
+          gh api graphql -f query="$archive_m" -f proj="$PROJECT_ID" -f item="$id" >/dev/null
+          # The close is best-effort, since a pull request or draft item has no issue to close.
+          if [ "$CLOSE" = "true" ] && [ -n "$num" ] && [ "$num" != "null" ] && [ -n "$rp" ] && [ "$rp" != "null" ]; then
+            gh issue close "$num" --repo "$rp" --reason completed >/dev/null 2>&1 || true
+          fi
+          echo "- ${verb}d #$num ($url)" | tee -a "$GITHUB_STEP_SUMMARY"
         done < "$matches"
