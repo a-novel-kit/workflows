@@ -33,14 +33,6 @@ inputs:
     description: >
       Extended regular expression over package import paths. The packages it matches are skipped.
       Empty skips none.
-  filter_patterns:
-    required: false
-    default: ""
-    description: Deprecated, use include and exclude. A shell pipeline over the package list.
-  filter_extra_patterns:
-    required: false
-    default: ""
-    description: Deprecated, use include and exclude. A shell pipeline appended to filter_patterns.
   modfile:
     required: false
     description: The go.mod file to use.
@@ -89,9 +81,7 @@ runs:
         PACKAGES: ${{ runner.temp }}/go-test-packages.txt
         INCLUDE: ${{ inputs.include }}
         EXCLUDE: ${{ inputs.exclude }}
-      # The deprecated filter_patterns and filter_extra_patterns are shell pipelines by contract
-      # (`| grep /internal`), so they expand into the script. Only the caller's workflow sets them.
-      run: | # zizmor: ignore[template-injection]
+      run: |
         # Lists the packages of every module from `go list -m`, since one `go list ./...` reaches a
         # single module of a Go workspace.
         #
@@ -122,7 +112,7 @@ runs:
             # overall fails, below.
             [ -n "$packages" ] || continue
 
-            printf '%s\n' "$packages" ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }} >>"$PACKAGES"
+            printf '%s\n' "$packages" >>"$PACKAGES"
           done
 
           # An empty pattern filters nothing: `.` keeps every path, and `^$` drops none.

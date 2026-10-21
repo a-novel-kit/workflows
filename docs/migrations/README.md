@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [v1.70.0](./v1.70.0.md) | `test-go` drops `filter_patterns` and `filter_extra_patterns`; set `include` or `exclude` instead.                              |
 | [v1.69.0](./v1.69.0.md) | `test-go` selects packages with `include` and `exclude` patterns; `filter_patterns` and `filter_extra_patterns` are deprecated. |
 | [v1.68.0](./v1.68.0.md) | Bot PRs merge a first-party version only with its release proof; reconcile the caller and pin action-default images by digest.  |
 | [v1.67.2](./v1.67.2.md) | `publish-actions/npm` attests its tarballs; its job grants `attestations: write` and `id-token: write`.                         |

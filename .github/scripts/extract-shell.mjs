@@ -15,8 +15,6 @@ for (const file of globSync(["*-actions/*/action.yaml", ".github/workflows/*.{ya
     const environment = new Set(Object.keys(step.env ?? {}));
     let expressionIndex = 0;
     const source = step.run.replace(/\$\{\{\s*([^]*?)\s*\}\}/g, (_, expression) => {
-      const input = expression.match(/^inputs\.(filter_patterns|filter_extra_patterns)$/)?.[1];
-      if (input) return data.inputs[input].default;
       const name = `GITHUB_EXPRESSION_${expressionIndex++}`;
       environment.add(name);
       return `\${${name}}`;
