@@ -90,19 +90,29 @@ inputs:
 runs:
   using: composite
   steps:
-    # The token spans the organization. The check posts to whichever repository `repo` names, and
-    # the pause label and the `Closes` hint's parent Epic live in the planning repo. epic-membership
-    # mints its own token.
+    # The read token spans the organization: the pause label and the `Closes` hint's parent Epic live
+    # in the planning repo. epic-membership mints its own token.
     - name: Mint token
       id: token
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
-        owner: ${{ github.repository_owner }}
-        permission-checks: write
+        owner: ${{ github.repository_owner }} # zizmor: ignore[github-app] read-only, across the org
         permission-issues: read
         permission-pull-requests: read
+
+    # The check posts to the repository `repo` names, so its write access stops there: a leaked token
+    # cannot pass the required merge-gate check anywhere else.
+    - name: Mint checks token
+      id: checks
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ inputs.repo }}
+        permission-checks: write
 
     # Post the verdict for every case that needs no member set: the halt, a misconfigured caller, a
     # merge group that names no pull request, unreadable or truncated labels, a paused Epic and a
@@ -113,6 +123,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
+        CHECKS_TOKEN: ${{ steps.checks.outputs.token }}
         REPO_FULL: ${{ github.repository_owner }}/${{ inputs.repo }}
         OWNER: ${{ github.repository_owner }}
         REPO: ${{ inputs.repo }}
@@ -140,7 +151,7 @@ runs:
           jq -n --arg sha "$HEAD_SHA" --arg concl "$1" --arg summary "$2" \
             '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: $concl,
               output: {title: "merge-gate", summary: $summary}}' \
-            | gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
+            | GH_TOKEN="$CHECKS_TOKEN" gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
           echo "merge-gate=$1 @ ${HEAD_SHA:0:12} — $2" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
@@ -304,6 +315,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
+        CHECKS_TOKEN: ${{ steps.checks.outputs.token }}
         REPO_FULL: ${{ github.repository_owner }}/${{ inputs.repo }}
         HEAD_SHA: ${{ inputs.head_sha }}
         EPIC: ${{ steps.discover.outputs.epic_number }}
@@ -317,7 +329,7 @@ runs:
           jq -n --arg sha "$HEAD_SHA" --arg concl "$1" --arg summary "$2" \
             '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: $concl,
               output: {title: "merge-gate", summary: $summary}}' \
-            | gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
+            | GH_TOKEN="$CHECKS_TOKEN" gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
           echo "merge-gate=$1 @ ${HEAD_SHA:0:12} — $2" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
