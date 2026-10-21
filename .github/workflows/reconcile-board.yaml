@@ -34,23 +34,15 @@ on:
         description: >
           When "true", the partial-landing detector only logs. "false" posts `epic-freeze` checks and
           re-arms auto-merge on stray Epic members.
-      render_dry_run:
-        required: false
-        type: string
-        default: "true"
-        description: >
-          When "true", the render pass only logs the status table it would write. "false" rewrites the
-          table into each active Epic's issue body.
       planning_repo:
         required: false
         type: string
         default: .github
         description: >
           Name of the org repository holding the Epic issues, where the sweep reads the
-          `automation:paused` marker and the activation snapshot and renders the status table. The
-          regate, detect and render passes share this one value, since merge-gate writes the snapshot
-          where detect-partial-landing reads it. A mismatch silently degrades every Epic to live label
-          membership.
+          `automation:paused` marker and the activation snapshot. The regate and detect passes share
+          this one value, since merge-gate writes the snapshot where detect-partial-landing reads it.
+          A mismatch silently degrades every Epic to live label membership.
       regate_snapshot_dry_run:
         required: false
         type: string
@@ -264,22 +256,4 @@ jobs:
           dry_run: ${{ inputs.detect_dry_run }}
           # A halted detector does nothing, since regate holds every pull request. max_freeze_repos
           # keeps its default of 5. An over-wide Epic is frozen anyway and only turns the sweep red.
-          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
-
-  # Rewrites each active Epic's derived status table into its issue body. One org-wide invocation
-  # enumerates the active Epics and their members itself. No landing decision reads the table, so a
-  # lost table is cosmetic, and a read or write error only warns.
-  render:
-    runs-on: ubuntu-latest
-    environment:
-      name: governance
-      deployment: false
-    permissions: {}
-    steps:
-      - uses: a-novel-kit/workflows/generic-actions/render-epic-status@v1.70.0
-        with:
-          client_id: ${{ inputs.client_id }}
-          planning_repo: ${{ inputs.planning_repo }}
-          app_private_key: ${{ secrets.private_key }}
-          dry_run: ${{ inputs.render_dry_run }}
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}

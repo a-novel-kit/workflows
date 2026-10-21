@@ -601,9 +601,9 @@ runs:
           fi
         fi
 
-        # The same splice as render-epic-status. One START line before one END line is rewritten in
-        # place. Any other shape has every fence line removed and one fresh region appended. Text
-        # outside the fences survives both paths.
+        # The same splice as release-train's receipt. One START line before one END line is
+        # rewritten in place. Any other shape has every fence line removed and one fresh region
+        # appended. Text outside the fences survives both paths.
         splice() { # $1 = body file, $2 = region file (already wrapped in the markers)
           local bodyf="$1" regionf="$2" ns ne sl el wellformed=false
           ns=$(grep -cxF -- "$START" "$bodyf" || true)
@@ -662,9 +662,9 @@ runs:
         }
 
         # Read-modify-verify. Writers overlap, because the reconcile sweep runs this gate for many
-        # members at once and render-epic-status edits the same body. The issues API has no
-        # conditional update, so each attempt splices into a fresh read, writes, and confirms the
-        # write survived. A losing writer retries against whatever landed.
+        # members at once and a release train writes its receipt into the same body. The issues API
+        # has no conditional update, so each attempt splices into a fresh read, writes, and confirms
+        # the write survived. A losing writer retries against whatever landed.
         #
         # The decision ($do and $payload) came from an earlier read, and a peer may have moved the set
         # since. Each attempt therefore re-checks the decision against the marker it finds.

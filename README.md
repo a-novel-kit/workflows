@@ -117,7 +117,6 @@ move a tag.
 | `refresh-apko-locks`     | Re-resolve apko locks on a schedule and open or update one pull request listing the package changes.             |
 | `relay-context`          | Resolve a relayed review or merge group for a privileged `workflow_run` gate; any other run wakes nothing.       |
 | `release-train`          | Release every repository a landed Epic merged into, by dispatching each one's own `release.yaml`.                |
-| `render-epic-status`     | Rewrite each active Epic's display-only status table in its issue body, from live state.                         |
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                             |
 | `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                           |
 | `review-gate`            | Required check: a maintainer or admin approved the head and applied every privileged label last.                 |
@@ -274,7 +273,7 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | `notify-release-run`          | Announce a published release in Discord with its notes, colored by its bump, gold for a hotfix.                   |
 | `notify-stuck-run`            | Post bots' pull requests that stay green but out of the merge queue to Discord, pinging the repo role.            |
 | `notify-warnings-run`         | Post a daily digest of the org's default-branch CI warnings to Discord, one line per warning.                     |
-| `reconcile-board`             | Per-org fail-safe sweep that repairs the board, the `merge-gate` and `epic-freeze` checks and Epic status tables. |
+| `reconcile-board`             | Per-org fail-safe sweep that repairs the board and the `merge-gate` and `epic-freeze` checks.                     |
 | `release-line-run`            | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
 | `release-train-run`           | Admin-gated dispatch of `release-train` for one landed Epic.                                                      |
 | `token-expiry`                | Post an organization's fine-grained personal access tokens to Discord as they near expiry.                        |
