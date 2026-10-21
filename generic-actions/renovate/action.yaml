@@ -29,12 +29,21 @@ runs:
   using: "composite"
   steps:
     # Renovate reads the repository through the API and its config from this action's folder, so
-    # the run needs the bot token and no checkout.
+    # the run needs the bot token and no checkout. The token asks for exactly what Renovate uses: it
+    # pushes branches, edits workflows, opens pull requests and the dependency dashboard, sets its
+    # stability status, and reads check results and Dependabot alerts.
     - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       id: app_token
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
+        permission-checks: read
+        permission-contents: write
+        permission-issues: write
+        permission-pull-requests: write
+        permission-statuses: write
+        permission-vulnerability-alerts: read
+        permission-workflows: write
     - name: self-hosted renovate
       uses: renovatebot/github-action@a63d9a7bc606f7336fd20b47f2f32259a35e6213 # v46.3.9
       with:

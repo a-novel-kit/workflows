@@ -37,13 +37,16 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # The App is named by its client ID, because create-github-app-token deprecates app-id.
+    # The App is named by its client ID, because create-github-app-token deprecates app-id. The token
+    # pushes a branch and opens its pull request, so it holds those two permissions and no other.
     - name: get app token
       id: token_client
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         private-key: ${{ inputs.app_private_key }}
         client-id: ${{ inputs.client_id }}
+        permission-contents: write
+        permission-pull-requests: write
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         token: ${{ steps.token_client.outputs.token }}
