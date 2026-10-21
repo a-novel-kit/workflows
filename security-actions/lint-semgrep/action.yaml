@@ -10,8 +10,8 @@ inputs:
     required: false
     default: "service"
     description: >
-      Ruleset to enforce. "service" fits the clean-architecture layout. "none" fits a library, whose
-      conventions golangci-lint already covers, and skips the scan.
+      Ruleset to enforce. "service" fits the clean-architecture layout. A repository that no ruleset
+      fits runs no lint-semgrep job.
   advisory:
     required: false
     default: "false"
@@ -37,14 +37,9 @@ runs:
       run: |
         set -euo pipefail
 
-        if [ "$RULESET" = "none" ]; then
-          echo "ruleset=none — nothing to enforce for this repo kind."
-          exit 0
-        fi
-
         rules="$ACTION_PATH/rules/$RULESET.yaml"
         if [ ! -f "$rules" ]; then
-          echo "::error::unknown ruleset '$RULESET'; expected one of: none, $(cd "$ACTION_PATH/rules" && printf '%s\n' ./*.yaml | sed 's|^./||; s/\.yaml$//' | tr '\n' ' ')"
+          echo "::error::unknown ruleset '$RULESET'; expected one of: $(cd "$ACTION_PATH/rules" && printf '%s\n' ./*.yaml | sed 's|^./||; s/\.yaml$//' | tr '\n' ' ')"
           exit 1
         fi
 
