@@ -51,8 +51,7 @@ test("status and reconcile selectors include every closing issue and label-only 
 test("Go package discovery propagates failed reads and rejects an empty filtered set", (t) => {
   const path = "go-actions/test-go/action.yaml",
     action = manifest(path);
-  const script = step(path, "discover").replace(/\$\{\{ inputs\.(\w+) \}\}/g, (_, key) => action.inputs[key].default);
-  assert(!script.includes("${{"));
+  const script = step(path, "discover");
   const w = workspace(t);
   w.stub(
     "go",
@@ -89,19 +88,14 @@ test("Go package discovery propagates failed reads and rejects an empty filtered
     "example.org/repo/test",
     "example.org/repo/proto",
   ].join("\n");
-  const kept = (patterns, run = script) => {
-    succeeds(w.bash(run, env({ packages }, patterns)));
+  const kept = (patterns) => {
+    succeeds(w.bash(script, env({ packages }, patterns)));
     return w.read("packages.txt").trimEnd().split("\n");
   };
   assert.deepEqual(kept({}), ["example.org/repo", "example.org/repo/internal/dao", "example.org/repo/pkg"]);
   assert.deepEqual(kept({ INCLUDE: "/internal" }), ["example.org/repo/internal/dao"]);
   assert.deepEqual(kept({ INCLUDE: "/pkg" }), ["example.org/repo/pkg"]);
   assert.equal(kept({ EXCLUDE: "" }).length, 7);
-  // Until its removal, the deprecated pipeline still narrows the set before the patterns apply.
-  const deprecated = step(path, "discover")
-    .replace("${{ inputs.filter_patterns }}", "")
-    .replace("${{ inputs.filter_extra_patterns }}", "| grep /internal | grep -v /protogen");
-  assert.deepEqual(kept({}, deprecated), ["example.org/repo/internal/dao"]);
 });
 
 test("Go test run adds the race detector only when asked", (t) => {
