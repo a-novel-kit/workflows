@@ -2,7 +2,7 @@
 #
 # security-actions/lint-workflows mounts one config, so this file carries the baseline's rules
 # beside this repository's exceptions. security-actions/lint-workflows/zizmor.yml is the original;
-# keep the shared rules identical, except unpinned-uses until the baseline adopts it.
+# keep the shared rules identical.
 
 rules:
   unpinned-uses:
@@ -10,8 +10,7 @@ rules:
       policies:
         # Third-party actions run from the commit their release named, so a moved tag cannot
         # change what runs beside an App key. The a-novel-kit/workflows actions stay on release
-        # tags, which their immutable releases lock. The baseline accepts tags until the fleet's
-        # Renovate has pinned every repository (a-novel-kit/workflows#626).
+        # tags, which their immutable releases lock.
         "a-novel-kit/*": ref-pin
         "*": hash-pin
 
