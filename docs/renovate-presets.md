@@ -30,7 +30,7 @@ A third-party action runs from the commit its release named. Renovate pins each 
 `owner/repo@<sha> # vX.Y.Z` and moves the commit and the version together, three days after the
 release. An update that keeps the version and changes the commit means the upstream tag was moved,
 so it waits for a reviewer instead of merging on its own. The `a-novel-kit/workflows` references
-stay on release tags.
+stay on release tags. The images and runners a workflow names do not wait.
 
 A workflow pin of a downloaded tool carries the SHA-256 of its release file on the line after
 `version`. The `custom.shellcheck` and `custom.hadolint` datasources read that file's digest from
@@ -44,7 +44,13 @@ version: "2.15.1"
 sha256: "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507"
 ```
 
-A first-party version skips both release-age gates. Any workflow run of a repository can publish its
+A Go module waits three days after its release. A security fix skips the wait, through GitHub's
+vulnerability alerts and OSV.
+
+Docker images do not wait. A release Renovate cannot date never clears a wait, and Docker Hub lists
+at most 1,000 tags to an anonymous client, so Renovate has no date for node or golang.
+
+A first-party version skips every release-age gate. Any workflow run of a repository can publish its
 packages, so the auto-approver merges a first-party version only with its release proof: an
 attestation over its bytes from the producer's `release.yaml` at the version's tag, and an immutable
 Release from the org's release App. Compose files and Dockerfiles pin first-party images by digest,
