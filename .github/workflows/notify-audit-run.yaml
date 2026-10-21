@@ -1,10 +1,10 @@
 name: notify-audit (reusable)
 
-# Alerts an org's Discord security channel minutes after its audit log records an entry that can
-# hand someone access, weaken a protection or push past a rule: a ref pushed past a ruleset, a change
-# to a ruleset, an environment or a member's access, a new key, hook, App, token or runner, or a
-# push-protection bypass. Each org's `.github` repository calls this engine from a workflow a clock
-# dispatches every five minutes, and the caller's ignore rules hide its routine shapes.
+# Alerts an org's Discord security channel within half an hour of its audit log recording an entry
+# that can hand someone access, weaken a protection or push past a rule: a ref pushed past a ruleset,
+# a change to a ruleset, an environment or a member's access, a new key, hook, App, token or runner,
+# or a push-protection bypass. Each org's `.github` repository calls this engine from a workflow a
+# clock dispatches every 30 minutes, and the caller's ignore rules hide its routine shapes.
 #
 # Each run reads from an hour before the caller's previous successful run, since GitHub indexes some
 # entries late, and skips the alerts that run recorded as seen. A run whose post Discord refuses
