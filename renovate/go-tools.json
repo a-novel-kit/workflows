@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "gomod": {
-    "managerFilePatterns": ["/(^|/)(?:golangci-lint|gotestsum|buf|mockery)\\.mod$/"]
+    "managerFilePatterns": ["/(^|/)(?:golangci-lint|gotestsum|govulncheck|buf|mockery)\\.mod$/"]
   },
   "packageRules": [
     {
@@ -23,6 +23,18 @@
       "goGetDirs": ["."],
       "postUpgradeTasks": {
         "commands": ["rm -f gotestsum.sum", "go get -modfile=gotestsum.mod -tool gotest.tools/gotestsum"],
+        "executionMode": "branch"
+      }
+    },
+    {
+      "matchFileNames": ["govulncheck.mod"],
+      "additionalBranchPrefix": "govulncheck-",
+      "goGetDirs": ["."],
+      "postUpgradeTasks": {
+        "commands": [
+          "rm -f govulncheck.sum",
+          "go get -modfile=govulncheck.mod -tool golang.org/x/vuln/cmd/govulncheck"
+        ],
         "executionMode": "branch"
       }
     },

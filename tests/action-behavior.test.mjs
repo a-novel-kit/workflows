@@ -319,6 +319,43 @@ test("change detection preserves literal pathspecs and fails on unreadable repos
   assert.equal(existsSync(join(w.cwd, "injected")), false);
 });
 
+test("lint-go reports what govulncheck finds and never fails the job on it", (t) => {
+  const w = workspace(t);
+  // The stub stands in for `go tool -modfile=govulncheck.mod govulncheck ./...`.
+  w.stub(
+    "go",
+    `const fs = require('fs'); fs.writeFileSync('calls', JSON.stringify(process.argv.slice(2)));
+    console.log(process.env.REPORT); process.exit(Number(process.env.SCAN_EXIT));`
+  );
+  const script = step("go-actions/lint-go/action.yaml", "govulncheck");
+  const reachable = "Vulnerability #1: GO-2026-0001\n  Module: example.org/a\nVulnerability #2: GO-2026-0002\n";
+  const found = (id) => `${id} is reachable from this module; see the job summary.`;
+  const cases = [
+    ["clean", 0, "No vulnerabilities found.", []],
+    ["reachable", 3, reachable, [found("GO-2026-0001"), found("GO-2026-0002")]],
+    ["failed", 1, "go: missing go.sum entry", ["The scan did not run (exit 1); see the job log."]],
+  ];
+  const prefix = "::warning title=govulncheck::";
+  const warnings = (stdout) =>
+    stdout
+      .split("\n")
+      .filter((line) => line.startsWith(prefix))
+      .map((line) => line.slice(prefix.length));
+
+  // A module that does not pin govulncheck skips the scan.
+  const skipped = succeeds(w.bash(script, { RUNNER_TEMP: w.cwd, WORKING_DIRECTORY: "", SCAN_EXIT: "3" }));
+  assert.deepEqual([existsSync(join(w.cwd, "calls")), warnings(skipped)], [false, []]);
+
+  w.write("govulncheck.mod", "module example.org/repo/govulncheck\n");
+  for (const [name, code, report, expected] of cases) {
+    w.write("summary", "");
+    const env = { RUNNER_TEMP: w.cwd, WORKING_DIRECTORY: "", REPORT: report, SCAN_EXIT: String(code) };
+    assert.deepEqual(warnings(succeeds(w.bash(script, env))), expected, name);
+    assert(w.read("summary").includes(report.trimEnd()), name);
+  }
+  assert.deepEqual(JSON.parse(w.read("calls")), ["tool", "-modfile=govulncheck.mod", "govulncheck", "./..."]);
+});
+
 test("refresh-apko-locks summarizes each lock's package changes and stays quiet without any", (t) => {
   const action = manifest("generic-actions/refresh-apko-locks/action.yaml");
   assert.equal(action.inputs.version.required, true);
