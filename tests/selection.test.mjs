@@ -71,16 +71,37 @@ test("Go package discovery propagates failed reads and rejects an empty filtered
     { packages: "" },
     { packages: "example.org/repo/mocks\nexample.org/repo/test\nexample.org/repo/proto" },
   ];
-  for (const changes of failures) {
-    assert.notEqual(
-      w.bash(script, { PACKAGES: "packages.txt", GO_FIXTURE: JSON.stringify({ ...fixture, ...changes }) }).status,
-      0
-    );
-  }
-  const packages =
-    "example.org/repo\nexample.org/repo/internal/dao\nexample.org/repo/mocks\nexample.org/repo/test\nexample.org/repo/proto";
-  succeeds(w.bash(script, { PACKAGES: "packages.txt", GO_FIXTURE: JSON.stringify({ ...fixture, packages }) }));
-  assert.equal(w.read("packages.txt"), "example.org/repo\nexample.org/repo/internal/dao\n");
+  const env = (changes, patterns = {}) => ({
+    PACKAGES: "packages.txt",
+    GO_FIXTURE: JSON.stringify({ ...fixture, ...changes }),
+    INCLUDE: action.inputs.include.default,
+    EXCLUDE: action.inputs.exclude.default,
+    ...patterns,
+  });
+  for (const changes of failures) assert.notEqual(w.bash(script, env(changes)).status, 0);
+
+  const packages = [
+    "example.org/repo",
+    "example.org/repo/internal/dao",
+    "example.org/repo/internal/handlers/protogen",
+    "example.org/repo/mocks",
+    "example.org/repo/pkg",
+    "example.org/repo/test",
+    "example.org/repo/proto",
+  ].join("\n");
+  const kept = (patterns, run = script) => {
+    succeeds(w.bash(run, env({ packages }, patterns)));
+    return w.read("packages.txt").trimEnd().split("\n");
+  };
+  assert.deepEqual(kept({}), ["example.org/repo", "example.org/repo/internal/dao", "example.org/repo/pkg"]);
+  assert.deepEqual(kept({ INCLUDE: "/internal" }), ["example.org/repo/internal/dao"]);
+  assert.deepEqual(kept({ INCLUDE: "/pkg" }), ["example.org/repo/pkg"]);
+  assert.equal(kept({ EXCLUDE: "" }).length, 7);
+  // Until its removal, the deprecated pipeline still narrows the set before the patterns apply.
+  const deprecated = step(path, "discover")
+    .replace("${{ inputs.filter_patterns }}", "")
+    .replace("${{ inputs.filter_extra_patterns }}", "| grep /internal | grep -v /protogen");
+  assert.deepEqual(kept({}, deprecated), ["example.org/repo/internal/dao"]);
 });
 
 test("Go test run adds the race detector only when asked", (t) => {
