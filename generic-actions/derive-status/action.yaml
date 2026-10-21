@@ -153,7 +153,7 @@ runs:
 
     - name: Write Status
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.halted != 'true' }}
-      uses: a-novel-kit/workflows/generic-actions/board-write@v1.69.1
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.70.0
       with:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
@@ -165,7 +165,7 @@ runs:
 
     - name: Stamp Start date (once)
       if: ${{ steps.derive.outputs.has_issue == 'true' && steps.derive.outputs.activated == 'true' && steps.derive.outputs.halted != 'true' }}
-      uses: a-novel-kit/workflows/generic-actions/board-write@v1.69.1
+      uses: a-novel-kit/workflows/generic-actions/board-write@v1.70.0
       with:
         client_id: ${{ inputs.client_id }}
         app_private_key: ${{ inputs.app_private_key }}
