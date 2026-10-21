@@ -21,14 +21,26 @@ inputs:
   skip_setup:
     required: false
     description: Skip the setup steps.
+  include:
+    required: false
+    default: ""
+    description: >
+      Extended regular expression over package import paths, such as `/internal`. Only the packages
+      it matches run. Empty runs every package.
+  exclude:
+    required: false
+    default: /mocks|/test|/proto
+    description: >
+      Extended regular expression over package import paths. The packages it matches are skipped.
+      Empty skips none.
   filter_patterns:
     required: false
-    description: The file patterns to filter.
-    default: "| grep -v /mocks | grep -v /test | grep -v /proto"
+    default: ""
+    description: Deprecated, use include and exclude. A shell pipeline over the package list.
   filter_extra_patterns:
     required: false
-    description: The file patterns to filter, appended to filter_patterns.
     default: ""
+    description: Deprecated, use include and exclude. A shell pipeline appended to filter_patterns.
   modfile:
     required: false
     description: The go.mod file to use.
@@ -75,8 +87,10 @@ runs:
       working-directory: ${{ inputs.working_directory || '.' }}
       env:
         PACKAGES: ${{ runner.temp }}/go-test-packages.txt
-      # filter_patterns and filter_extra_patterns are shell pipelines by contract (`| grep -v /mocks`),
-      # so they expand into the script. Only the caller's workflow sets them.
+        INCLUDE: ${{ inputs.include }}
+        EXCLUDE: ${{ inputs.exclude }}
+      # The deprecated filter_patterns and filter_extra_patterns are shell pipelines by contract
+      # (`| grep /internal`), so they expand into the script. Only the caller's workflow sets them.
       run: | # zizmor: ignore[template-injection]
         # Lists the packages of every module from `go list -m`, since one `go list ./...` reaches a
         # single module of a Go workspace.
@@ -110,6 +124,10 @@ runs:
 
             printf '%s\n' "$packages" ${{ inputs.filter_patterns }} ${{ inputs.filter_extra_patterns }} >>"$PACKAGES"
           done
+
+          # An empty pattern filters nothing: `.` keeps every path, and `^$` drops none.
+          grep -E -- "${INCLUDE:-.}" "$PACKAGES" | grep -vE -- "${EXCLUDE:-^$}" >"$PACKAGES.kept"
+          mv "$PACKAGES.kept" "$PACKAGES"
 
           if [ ! -s "$PACKAGES" ]; then
             echo "::error::discovery produced no packages — the test run would report success having run nothing"
