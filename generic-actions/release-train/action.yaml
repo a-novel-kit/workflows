@@ -143,13 +143,16 @@ runs:
 
         # ---- Validate untrusted inputs before they reach a search grammar / an API path ------------
         if ! [[ "${EPIC:-}" =~ ^[0-9]+$ ]]; then
-          echo "::error::epic_number must be an integer, got \"${EPIC:-}\""; exit 1
+          echo "::error::epic_number must be an integer, got \"${EPIC:-}\""
+          exit 1
         fi
         if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
-          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""; exit 1
+          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
+          exit 1
         fi
         if ! [[ "${PLANNING_REPO:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
-          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""; exit 1
+          echo "::error::planning_repo must be a bare repository name (no owner/slash), got \"${PLANNING_REPO:-}\""
+          exit 1
         fi
         dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
         [ "$dry" = false ] || dry=true
@@ -393,28 +396,28 @@ runs:
         echo "Requested by @${ACTOR}. dry_run=${dry}." | tee -a "$GITHUB_STEP_SUMMARY"
 
         if ! cands=$(search_prs "is:pr is:merged label:\"epic:${EPIC}\" org:${ORG}"); then
-          echo "::error::could not reconstruct the Epic (GraphQL search failed after retries)"; exit 1
+          echo "::error::could not reconstruct the Epic (GraphQL search failed after retries)"
+          exit 1
         fi
         # One row per repository, for its newest-merged sibling. Siblings share a base under atomic
-        # landing, so a tag that contains the newest merge contains them all.
-        newest=$(printf '%s' "$cands" | jq -c '
-          group_by(.repository.nameWithOwner)
-          | map(max_by(.mergedAt) | {repo: .repository.nameWithOwner, number: .number})')
+        # landing, so a tag that contains the newest merge contains them all. fd 3 keeps the REST
+        # reads in the loop off its input.
         ledger='[]'
-        repo_n0=$(printf '%s' "$newest" | jq 'length')
-        for i in $(seq 0 $((repo_n0 - 1))); do
-          repo=$(printf '%s' "$newest" | jq -r ".[$i].repo")
-          number=$(printf '%s' "$newest" | jq -r ".[$i].number")
+        while read -r repo number <&3; do
           if ! info=$(rest_pr_merge "$repo" "$number"); then
-            echo "::error::REST read failed for ${repo}#${number} — cannot confirm the Epic; aborting."; exit 1
+            echo "::error::REST read failed for ${repo}#${number} — cannot confirm the Epic; aborting."
+            exit 1
           fi
           read -r merged sha <<<"$info"
           [ "$merged" = "true" ] && [ -n "$sha" ] || continue
           ledger=$(jq -cn --argjson acc "$ledger" --arg r "$repo" --arg s "$sha" '$acc + [{repo:$r, sha:$s}]')
-        done
+        done 3< <(printf '%s' "$cands" | jq -r '
+          group_by(.repository.nameWithOwner)
+          | .[] | max_by(.mergedAt) | "\(.repository.nameWithOwner) \(.number)"')
         repo_n=$(printf '%s' "$ledger" | jq 'length')
         if [ "$repo_n" -eq 0 ]; then
-          echo "::error::no merged PRs carry epic:${EPIC} in org ${ORG} — nothing to release."; exit 1
+          echo "::error::no merged PRs carry epic:${EPIC} in org ${ORG} — nothing to release."
+          exit 1
         fi
         echo "### ${repo_n} repo(s) in epic:#${EPIC}" | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -429,129 +432,135 @@ runs:
           receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg s "$1" --arg t "${2:-}" \
             '$a + [{repo:$r, tag:(if $t == "" then null else $t end), status:$s}]')
         }
-        for i in $(seq 0 $((repo_n - 1))); do
-          repo=$(printf '%s' "$ledger" | jq -r ".[$i].repo")
-          merge_sha=$(printf '%s' "$ledger" | jq -r ".[$i].sha")
+
+        # Records the current $repo as unfinished, which fails the run: receipt $1 with tag $3, and
+        # summary line $2.
+        unfinished() { # $1=status $2=summary line $3=tag
+          had_failure=true
+          receipt "$1" "${3:-}"
+          echo "$2" | tee -a "$GITHUB_STEP_SUMMARY"
+        }
+
+        # Releases the ledger's repository $1, whose Epic merge is $2. Each outcome records one
+        # receipt and returns.
+        release_repo() { # $1=owner/repo $2=merge sha
+          local repo="$1" merge_sha="$2" default_branch="" attempt last tc bump rid concl before after newtag=""
 
           # Resolve the default branch once, with retries, and fail closed on an unresolved ref.
-          default_branch=""
           for attempt in 1 2 3; do
             default_branch=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null || echo "")
-            [ -n "$default_branch" ] && break; sleep 2
+            [ -n "$default_branch" ] && break
+            sleep 2
           done
           if [ -z "$default_branch" ]; then
-            had_failure=true
-            receipt failed:read
-            echo "- ❌ **${repo}** — could not read the default branch; skipping." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished failed:read "- ❌ **${repo}** — could not read the default branch; skipping."
+            return 0
           fi
 
           # -- Ship-state of this Epic's merge, read from live tags ----------------------------------
           last=$(latest_tag "$repo")
           if [ "$last" = "__ERR__" ]; then
-            had_failure=true
-            receipt failed:tagread
-            echo "- ❌ **${repo}** — tag read failed after retries; skipping (fail-closed, never assume first-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished failed:tagread "- ❌ **${repo}** — tag read failed after retries; skipping (fail-closed, never assume first-release)."
+            return 0
           fi
           if [ -n "$last" ]; then
             # tag_contains returns 1 when the merge has not shipped and 2 on a read error. The `||`
             # list suspends `set -e` through the call, so either code reaches tc.
-            tc=0; tag_contains "$repo" "$last" "$merge_sha" || tc=$?
+            tc=0
+            tag_contains "$repo" "$last" "$merge_sha" || tc=$?
             if [ "$tc" -eq 2 ]; then
-              had_failure=true
-              receipt failed:compare
-              echo "- ❌ **${repo}** — could not compare \`${last}\` to the Epic merge; skipping (fail-closed)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+              unfinished failed:compare "- ❌ **${repo}** — could not compare \`${last}\` to the Epic merge; skipping (fail-closed)."
+              return 0
             fi
+            if [ "$tc" -eq 0 ] && release_exists "$repo" "$last"; then
+              echo "- ⏭️  **${repo}** already shipped epic:#${EPIC} in \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
+              receipt skipped "$last"
+              return 0
+            fi
+            # A tag at or after the merge without a published Release is a botched cut. release-core
+            # pushed the tag and failed before creating the Release. The action holds no
+            # contents:write to create it, and a re-cut orphans this tag under a higher one. The
+            # repository fails for manual repair, which publishes the Release or deletes the tag.
             if [ "$tc" -eq 0 ]; then
-              if release_exists "$repo" "$last"; then
-                echo "- ⏭️  **${repo}** already shipped epic:#${EPIC} in \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
-                receipt skipped "$last"
-                continue
-              fi
-              # A tag at or after the merge without a published Release is a botched cut. release-core
-              # pushed the tag and failed before creating the Release. The action holds no
-              # contents:write to create it, and a re-cut orphans this tag under a higher one. The
-              # repository fails for manual repair, which publishes the Release or deletes the tag.
-              had_failure=true
-              receipt botched "$last"
-              echo "::error::${repo} — tag \`${last}\` exists (contains the Epic merge) but has NO published Release — a botched cut. Publish the Release for \`${last}\`, or delete the tag to let a re-dispatch re-cut it. Not skipping, not re-cutting." | tee -a "$GITHUB_STEP_SUMMARY"
-              continue
+              unfinished botched "::error::${repo} — tag \`${last}\` exists (contains the Epic merge) but has NO published Release — a botched cut. Publish the Release for \`${last}\`, or delete the tag to let a re-dispatch re-cut it. Not skipping, not re-cutting." "$last"
+              return 0
             fi
           fi
 
           # -- Not shipped: derive the bump ---------------------------------------------------------
           bump=$(derive_bump "$repo" "$last" "$default_branch")
           if [ "$bump" = "__ERR__" ]; then
-            had_failure=true
-            receipt failed:bumpread
-            echo "- ❌ **${repo}** — commit-range read failed after retries; skipping (fail-closed, never assume nothing-to-release)." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished failed:bumpread "- ❌ **${repo}** — commit-range read failed after retries; skipping (fail-closed, never assume nothing-to-release)."
+            return 0
           fi
           if [ "$bump" = "none" ]; then
             echo "- ⏭️  **${repo}** has nothing new since \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
             receipt nochange
-            continue
+            return 0
           fi
 
           # -- Rehearse: release.yaml with dry_run=true must succeed --------------------------------
           if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" true); then
-            had_failure=true
-            receipt failed:dispatch
-            echo "- ❌ **${repo}** — could not dispatch the rehearsal." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished failed:dispatch "- ❌ **${repo}** — could not dispatch the rehearsal."
+            return 0
           fi
           concl=$(poll_run "$repo" "$rid" false)
           if [ "$concl" = "blocked" ]; then
-            receipt parked
-            had_failure=true
-            echo "- ⏸️  **${repo}** — rehearsal parked at the release environment; its release.yaml runs the rehearsal inside that environment." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished parked "- ⏸️  **${repo}** — rehearsal parked at the release environment; its release.yaml runs the rehearsal inside that environment."
+            return 0
           fi
           if [ "$concl" != "success" ]; then
-            had_failure=true
-            receipt "failed:${concl}"
-            echo "- ❌ **${repo}** — rehearsal (${bump}) did not pass (${concl}); not cutting." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished "failed:${concl}" "- ❌ **${repo}** — rehearsal (${bump}) did not pass (${concl}); not cutting."
+            return 0
           fi
 
           if [ "$dry" != "false" ]; then
             echo "- 🧪 **${repo}** — rehearsed **${bump}** OK (dry-run; no tag cut)." | tee -a "$GITHUB_STEP_SUMMARY"
             receipt rehearsed "$bump"
-            continue
+            return 0
           fi
 
           # -- Cut: snapshot tags, dispatch live, poll, recover the new tag from the tag-set diff -----
           before=$(tag_set "$repo")
           if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" false); then
-            had_failure=true
-            receipt failed:dispatch
-            echo "- ❌ **${repo}** — could not dispatch the live release." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished failed:dispatch "- ❌ **${repo}** — could not dispatch the live release."
+            return 0
           fi
           concl=$(poll_run "$repo" "$rid" true)
           if [ "$concl" = "blocked" ]; then
             # Recorded as parked, since the run can still cut the tag on approval. A re-dispatch
             # before that run clears starts a second cut, and both release once approved.
-            receipt parked
-            had_failure=true
-            echo "- ⏸️  **${repo}** — live release not approved within the hour (pending). Approve the run, then re-dispatch to record the receipt." | tee -a "$GITHUB_STEP_SUMMARY"; continue
+            unfinished parked "- ⏸️  **${repo}** — live release not approved within the hour (pending). Approve the run, then re-dispatch to record the receipt."
+            return 0
           fi
+
           # Recover the cut tag from the tag-set diff, retrying the after-snapshot for ref-index lag.
-          newtag=""
           for attempt in 1 2 3 4; do
             after=$(tag_set "$repo")
             newtag=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sort -V | tail -n1 || true)
-            [ -n "$newtag" ] && break; sleep 5
+            [ -n "$newtag" ] && break
+            sleep 5
           done
-          if [ "$concl" = "success" ] && [ -n "$newtag" ]; then
+
+          if [ "$concl" != "success" ]; then
+            unfinished "failed:${concl}" "::error::${repo} — live release ${bump} did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A tag it left without a published Release blocks a re-dispatch until someone publishes that Release or deletes the tag."
+            return 0
+          fi
+          if [ -n "$newtag" ]; then
             echo "- ✅ **${repo}** — released \`${newtag}\` (${bump})." | tee -a "$GITHUB_STEP_SUMMARY"
             receipt shipped "$newtag"
-          elif [ "$concl" = "success" ]; then
-            # The run succeeded, so a tag was cut, but the lagging ref index does not show it yet.
-            # Success is recorded with a null tag, and a resume confirms the tag from live tags. The
-            # run conclusion alone decides, since a first release has no earlier tag to compare.
-            echo "- ✅ **${repo}** — release ${bump} ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
-            receipt shipped
-          else
-            had_failure=true
-            receipt "failed:${concl}"
-            echo "::error::${repo} — live release ${bump} did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A tag it left without a published Release blocks a re-dispatch until someone publishes that Release or deletes the tag." | tee -a "$GITHUB_STEP_SUMMARY"
+            return 0
           fi
-        done
+          # The run succeeded, so a tag was cut, but the lagging ref index does not show it yet.
+          # Success is recorded with a null tag, and a resume confirms the tag from live tags. The
+          # run conclusion alone decides, since a first release has no earlier tag to compare.
+          echo "- ✅ **${repo}** — release ${bump} ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
+          receipt shipped
+        }
+
+        while read -r repo merge_sha <&3; do
+          release_repo "$repo" "$merge_sha"
+        done 3< <(printf '%s' "$ledger" | jq -r '.[] | "\(.repo) \(.sha)"')
 
         # ================= 3. Receipt block on the Epic body (live runs only; best-effort audit) ====
         table=$(printf '%s' "$receipts" | jq -r '

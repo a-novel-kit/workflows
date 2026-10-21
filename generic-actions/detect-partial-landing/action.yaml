@@ -173,28 +173,34 @@ runs:
       run: |
         set -euo pipefail
         if ! [[ "${ORG:-}" =~ ^[A-Za-z0-9-]+$ ]]; then
-          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""; exit 1
+          echo "::error::org must be a valid GitHub login (alphanumeric + hyphens), got \"${ORG:-}\""
+          exit 1
         fi
+
         Q='query($q:String!,$cursor:String){ search(query:$q, type:ISSUE, first:100, after:$cursor){
           pageInfo{ hasNextPage endCursor }
           nodes{ ... on PullRequest{
             number headRefOid mergedAt baseRefName isDraft
             repository{ nameWithOwner }
             labels(first:100){ nodes{ name } } } } } }'
-        cursor=""; prs='[]'; failed=0
+        cursor=""
+        prs='[]'
+        failed=0
         while :; do
           args=(-f query="$Q" -f q="org:${ORG} is:pr is:open")
           [ -n "$cursor" ] && args+=(-f cursor="$cursor")
           # A 200 carrying data and errors is a partial page, so it fails the read as search_prs does.
           if ! data=$(gh api graphql "${args[@]}" 2>/dev/null) \
             || ! printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
-            failed=1; break
+            failed=1
+            break
           fi
           prs=$(jq -cs '.[0] + [(.[1].data.search.nodes // [])[] | select(.number != null)]' \
             <(printf '%s' "$prs") <(printf '%s' "$data"))
           [ "$(printf '%s' "$data" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
           cursor=$(printf '%s' "$data" | jq -r '.data.search.pageInfo.endCursor')
         done
+
         if [ "$failed" = 1 ]; then
           # A partial scope makes reenqueue fail in every uncovered repository, so a failed discovery
           # mints no enqueue token. Freeze detection still runs, because sweep_main enumerates again

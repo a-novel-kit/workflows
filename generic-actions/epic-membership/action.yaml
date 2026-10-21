@@ -107,60 +107,72 @@ runs:
         # cannot shadow the real region.
         START_M='<!-- epic-membership:snapshot:start -->'
         END_M='<!-- epic-membership:snapshot:end -->'
-        # Only a 404, a missing Epic issue, means no snapshot. Any other read failure fails the action
-        # after three attempts, because the live set may differ from a frozen one. merge-gate holds on
-        # the empty output a failure leaves.
-        errf="$RUNNER_TEMP/epic-membership-read.err"
-        for attempt in 1 2 3; do
-          body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>"$errf") && break
-          body=""
-          grep -q 'HTTP 404' "$errf" && break
-          if [ "$attempt" -eq 3 ]; then
-            echo "::error::Epic #${EPIC}: could not read its body for the activation snapshot: $(cat "$errf")"
-            exit 1
-          fi
-          sleep 2
-        done
-        # A body edited on the web carries CRLF line endings. Stripping \r lets the fence lines match.
-        body=$(printf '%s' "$body" | tr -d '\r')
+
+        # Sets body to the Epic issue's body, or to "" when the Epic issue does not exist. Any other
+        # read failure fails the action after three attempts, because the live set may differ from a
+        # frozen one. merge-gate holds on the empty output a failure leaves.
+        read_epic_body() {
+          local errf="$RUNNER_TEMP/epic-membership-read.err" attempt
+          for attempt in 1 2 3; do
+            body=$(gh api "repos/${OWNER}/${PLANNING_REPO}/issues/${EPIC}" --jq '.body // ""' 2>"$errf") && break
+            body=""
+            grep -q 'HTTP 404' "$errf" && break
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Epic #${EPIC}: could not read its body for the activation snapshot: $(cat "$errf")"
+              exit 1
+            fi
+            sleep 2
+          done
+          # A body edited on the web carries CRLF line endings. Stripping \r lets the fence lines match.
+          body=$(printf '%s' "$body" | tr -d '\r')
+        }
+
+        # Prints the frozen member array of body $1, or nothing when the body holds no usable frozen
+        # marker.
+        #
         # The fenced region holds a note and then the JSON, which may span several lines, so parsing
         # starts at the first line that opens a value. `-s .[0]` takes the first value when a hand-edit
         # left several. Trailing prose inside the region voids the marker. merge-gate,
         # detect-partial-landing and epic-rollback extract the marker the same way.
-        marker=$(printf '%s\n' "$body" \
-          | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
-          | sed -n '/^[[:space:]]*[{[]/,$p' \
-          | jq -s -c '.[0] // empty' 2>/dev/null || true)
-        # Only a frozen marker listing 1 to 50 valid members counts, the cap merge-gate writes with. A
-        # pending, malformed or misshapen marker leaves `frozen` empty, and the live search applies.
         #
-        # The guards are strict because `.repo` and `.number` go into the GraphQL document below, and
-        # anyone who can edit the Epic issue can write the marker. The repo pattern excludes quotes and
-        # newlines, which could inject fields. The number must be a whole integer, because a value such
-        # as 1.5 fails validation for the whole query.
-        frozen=$(printf '%s' "$marker" | jq -c '
-          select(type == "object" and .status == "frozen" and (.members | type == "array"))
-          | .members
-          | select(all(.[]; type == "object"
-              and (.repo | type == "string") and (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
-              and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
-          | unique_by((.repo | ascii_downcase), .number)
-          | select(length > 0 and length <= 50)' 2>/dev/null || true)
-        if [ -n "$frozen" ]; then
-          # Re-read each frozen member's live state, one GraphQL alias per member in a single call.
-          # GitHub answers a multi-alias query with partial data and an `errors` array, so the answer
-          # must cover every member. An incomplete answer yields [], which merge-gate holds on, so the
-          # gate never passes a wave with a member it did not evaluate.
-          #
-          # Each node matches its member by alias index and number. GraphQL follows a repository
-          # rename and answers with the new name, while a frozen marker keeps the old one, so the
-          # match leaves the name out.
+        # Only a frozen marker listing 1 to 50 valid members counts, the cap merge-gate writes with. A
+        # pending, malformed or misshapen marker prints nothing, and the live search applies. The
+        # guards are strict because `.repo` and `.number` go into the GraphQL document of
+        # resolve_frozen, and anyone who can edit the Epic issue can write the marker. The repo pattern
+        # excludes quotes and newlines, which could inject fields. The number must be a whole integer,
+        # because a value such as 1.5 fails validation for the whole query.
+        frozen_set() {
+          local marker
+          marker=$(printf '%s\n' "$1" \
+            | awk -v s="$START_M" -v e="$END_M" '$0 == s {f=1;next} $0 == e {f=0} f' \
+            | sed -n '/^[[:space:]]*[{[]/,$p' \
+            | jq -s -c '.[0] // empty' 2>/dev/null || true)
+          printf '%s' "$marker" | jq -c '
+            select(type == "object" and .status == "frozen" and (.members | type == "array"))
+            | .members
+            | select(all(.[]; type == "object"
+                and (.repo | type == "string") and (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
+                and (.number | type == "number" and . == floor and . > 0 and . < 2147483648)))
+            | unique_by((.repo | ascii_downcase), .number)
+            | select(length > 0 and length <= 50)' 2>/dev/null || true
+        }
+
+        # Sets members to the live state of the frozen set $1, re-read in a single call with one
+        # GraphQL alias per member. GitHub answers a multi-alias query with partial data and an
+        # `errors` array, so the answer must cover every member. An incomplete answer yields [], which
+        # merge-gate holds on, so the gate never passes a wave with a member it did not evaluate.
+        #
+        # Each node matches its member by alias index and number. GraphQL follows a repository rename
+        # and answers with the new name, while a frozen marker keeps the old one, so the match leaves
+        # the name out.
+        resolve_frozen() {
+          local frozen="$1" alias_q want rh='{}' out attempt
           alias_q=$(printf '%s' "$frozen" | jq -r 'to_entries | map(
               "m\(.key): repository(owner:\"\(.value.repo|split("/")[0])\", name:\"\(.value.repo|split("/")[1])\")"
               + "{pullRequest(number:\(.value.number|floor)){number isDraft reviewDecision headRefOid state repository{nameWithOwner} \($gate)}}"
             ) | join("\n")' --arg gate "$GATE_FIELDS")
           want=$(printf '%s' "$frozen" | jq 'length')
-          rh='{}'
+
           for attempt in 1 2 3; do
             out=$(gh api graphql -f query="{ ${alias_q} }" 2>&1 || true)
             if printf '%s' "$out" | jq -e --argjson want "$want" '
@@ -171,6 +183,7 @@ runs:
             fi
             [ "$attempt" -lt 3 ] && sleep 2
           done
+
           members=$(printf '%s' "$rh" | jq -c --argjson members "$frozen" --arg agent "$AGENT" '
             [ (.data // {}) | to_entries[]
               | (.key | ltrimstr("m") | tonumber) as $i
@@ -182,21 +195,14 @@ runs:
             echo "::warning::Epic #${EPIC}: could not re-read all ${want} frozen member(s) — reporting an empty set, which holds the Epic rather than gating on a partial one."
             members='[]'
           fi
-          count=$(printf '%s' "$members" | jq 'length')
-          {
-            echo "members=$members"
-            echo "count=$count"
-          } >> "$GITHUB_OUTPUT"
-          echo "Epic #${EPIC}: ${count} member(s) from the frozen activation snapshot (live state)." \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          exit 0
-        fi
+        }
 
-        # Live membership: open pull requests labeled `epic:<N>` across the organization. The label
-        # name is quoted because of its colon. The search index is eventually consistent, so a pull
-        # request labeled seconds ago can be missing and a just-closed one can still appear. merge-gate
-        # holds a pull request missing from its own set, and its two-phase capture gives a lagging
-        # member time to appear before the set freezes.
+        # --- Live membership ---------------------------------------------------------------------
+        # Live membership is the open pull requests labeled `epic:<N>` across the organization. The
+        # label name is quoted because of its colon. The search index is eventually consistent, so a
+        # pull request labeled seconds ago can be missing and a just-closed one can still appear.
+        # merge-gate holds a pull request missing from its own set, and its two-phase capture gives a
+        # lagging member time to appear before the set freezes.
         search="is:pr is:open label:\"epic:${EPIC}\" org:${OWNER}"
 
         # The search returns the ISSUE union, so pull requests come through the PullRequest fragment.
@@ -231,38 +237,50 @@ runs:
           return 1
         }
 
-        # Accumulate nodes across pages, since an Epic can span more than 100 pull requests.
-        # `(.data.search.nodes // [])[]` tolerates a null `nodes`, and `.number != null` drops any row
-        # of the ISSUE union that is not a pull request.
-        agg='[]'
-        cursor=""
-        while :; do
-          if ! resp=$(fetch "$cursor"); then
-            echo "::error::could not resolve epic:${EPIC} members — GraphQL search failed after retries (caller decides hold vs fail-open)"
-            exit 1
-          fi
-          page=$(printf '%s' "$resp" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')
-          agg=$(jq -s '.[0] + .[1]' <(printf '%s' "$agg") <(printf '%s' "$page"))
-          [ "$(printf '%s' "$resp" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
-          cursor=$(printf '%s' "$resp" | jq -r '.data.search.pageInfo.endCursor')
-        done
+        # Sets members to the live set, accumulated across pages, since an Epic can span more than
+        # 100 pull requests. `(.data.search.nodes // [])[]` tolerates a null `nodes`, and
+        # `.number != null` drops any row of the ISSUE union that is not a pull request.
+        resolve_live() {
+          local agg='[]' cursor="" resp page
+          while :; do
+            if ! resp=$(fetch "$cursor"); then
+              echo "::error::could not resolve epic:${EPIC} members — GraphQL search failed after retries (caller decides hold vs fail-open)"
+              exit 1
+            fi
+            page=$(printf '%s' "$resp" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')
+            agg=$(jq -s '.[0] + .[1]' <(printf '%s' "$agg") <(printf '%s' "$page"))
+            [ "$(printf '%s' "$resp" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
+            cursor=$(printf '%s' "$resp" | jq -r '.data.search.pageInfo.endCursor')
+          done
 
-        # `jq -c` keeps the output on one line, because GITHUB_OUTPUT is line-based. Search order
-        # varies between runs, so the set is sorted by repo then number.
-        members=$(printf '%s' "$agg" | jq -c --arg agent "$AGENT" '[.[] | {
-          repo: .repository.nameWithOwner,
-          number,
-          headRefOid,
-          isDraft,
-          reviewDecision,
-          reviewGate: '"$GATE_JQ"',
-          state: "OPEN"
-        }] | sort_by((.repo | ascii_downcase), .number)')
+          # Search order varies between runs, so the set is sorted by repo then number.
+          members=$(printf '%s' "$agg" | jq -c --arg agent "$AGENT" '[.[] | {
+            repo: .repository.nameWithOwner,
+            number,
+            headRefOid,
+            isDraft,
+            reviewDecision,
+            reviewGate: '"$GATE_JQ"',
+            state: "OPEN"
+          }] | sort_by((.repo | ascii_downcase), .number)')
+        }
+
+        # --- Resolve -----------------------------------------------------------------------------
+        read_epic_body
+        frozen=$(frozen_set "$body")
+        if [ -n "$frozen" ]; then
+          resolve_frozen "$frozen"
+          described="member(s) from the frozen activation snapshot (live state)."
+        else
+          resolve_live
+          described="authorized member(s) (open \`epic:${EPIC}\` PR(s))."
+        fi
+
+        # `jq -c` kept members on one line, because GITHUB_OUTPUT is line-based.
         count=$(printf '%s' "$members" | jq 'length')
-
         {
           echo "members=$members"
           echo "count=$count"
         } >> "$GITHUB_OUTPUT"
-        echo "Epic #${EPIC}: ${count} authorized member(s) (open \`epic:${EPIC}\` PR(s))." \
+        echo "Epic #${EPIC}: ${count} ${described}" \
           | tee -a "$GITHUB_STEP_SUMMARY"
