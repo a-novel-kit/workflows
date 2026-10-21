@@ -4,11 +4,11 @@ rules:
   unpinned-uses:
     config:
       policies:
-        # Accepts tags until every repository's Renovate has pinned its third-party actions to
-        # their release commits. Requiring commit pins first would fail each repository's
-        # grouped a-novel-kit/workflows update (a-novel-kit/workflows#626). ref-pin still fails
-        # a floating `@master` or a missing ref.
-        "*": ref-pin
+        # Third-party actions run from the commit their release named, so a moved tag cannot
+        # change what runs beside an App key. The a-novel-kit/workflows actions stay on release
+        # tags, which their immutable releases lock.
+        "a-novel-kit/*": ref-pin
+        "*": hash-pin
 
   cache-poisoning:
     ignore:
