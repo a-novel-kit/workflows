@@ -317,16 +317,15 @@ runs:
         # Confirm each candidate through REST, take its squash SHA, require a single parent, and
         # record the pre-merge parent and the Task ids. A row REST reports as unmerged is left out. A
         # commit with two parents means the ledger is wrong and aborts the run.
+        #
+        # One jq pass prints each candidate's fields on a line, unit-separated so an empty field keeps
+        # its place. fd 3 keeps the REST reads in the loop off its input.
+        candidate_rows=$(printf '%s' "$candidates" | jq -r '.[]
+          | [ (.repository.nameWithOwner | tostring), (.number | tostring), (.baseRefName | tostring),
+              (.mergedAt | tostring), (.mergeCommit.oid // ""), ([.closingIssuesReferences.nodes[] | .id] | tojson) ]
+          | join("\u001f")')
         ledger='[]'
-        for i in $(seq 0 $((cand_count - 1))); do
-          row=$(printf '%s' "$candidates" | jq -c ".[$i]")
-          repo=$(printf '%s' "$row" | jq -r '.repository.nameWithOwner')
-          number=$(printf '%s' "$row" | jq -r '.number')
-          base=$(printf '%s' "$row" | jq -r '.baseRefName')
-          merged_at=$(printf '%s' "$row" | jq -r '.mergedAt')
-          search_oid=$(printf '%s' "$row" | jq -r '.mergeCommit.oid // ""')
-          tasks=$(printf '%s' "$row" | jq -c '[.closingIssuesReferences.nodes[] | .id]')
-
+        while IFS=$'\x1f' read -r repo number base merged_at search_oid tasks <&3; do
           if ! info=$(rest_pr_merge "$repo" "$number"); then
             echo "::error::REST read failed for ${repo}#${number} — cannot confirm the ledger; aborting."
             exit 1
@@ -359,7 +358,7 @@ runs:
             --arg base "$base" --arg mergedAt "$merged_at" --arg sha "$sha" --arg pre "$premerge" \
             --argjson tasks "$tasks" \
             '$acc + [{repo:$repo, number:$number, base:$base, mergedAt:$mergedAt, sha:$sha, premerge:$pre, tasks:$tasks}]')
-        done
+        done 3< <(printf '%s\n' "$candidate_rows")
 
         ledger_count=$(printf '%s' "$ledger" | jq 'length')
         if [ "$ledger_count" -eq 0 ]; then
