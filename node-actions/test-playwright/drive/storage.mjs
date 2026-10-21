@@ -18,6 +18,15 @@ const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 // Drive reports rate limits as HTTP 403 or 429 with one of these reasons, and documents them as retryable.
 const RATE_LIMITS = ["rateLimitExceeded", "userRateLimitExceeded"];
 
+/**
+ * Wait before retry n as Google documents: 2^n seconds plus up to a second of jitter, at most 32 seconds.
+ *
+ * The jitter spreads out retries from concurrent jobs, which a shared rate limit refuses together.
+ */
+function backoff(n) {
+  return setTimeout(Math.min(2 ** n * 1000 + Math.random() * 1000, 32_000));
+}
+
 /** Whether a failed Drive response may succeed when retried after a backoff. */
 function transient({ status, reason }) {
   return [408, 429].includes(status) || status >= 500 || RATE_LIMITS.includes(reason);
@@ -109,7 +118,7 @@ export class Drive {
         // Transient statuses retry five times; failures without a status, including timeouts, twice.
         const retryable = error.status ? transient(error) : attempt < 2;
         if (!retry || !retryable || attempt >= 5) throw Object.assign(error, { operation });
-        await setTimeout(2 ** attempt * 500);
+        await backoff(attempt);
       }
     }
   }
@@ -254,7 +263,7 @@ export class Drive {
         });
       } catch (error) {
         if ((error.status && !transient(error)) || failures++ >= 5) throw error;
-        await setTimeout(Math.min(2 ** failures * 1000, 32_000));
+        await backoff(failures);
         // A failed request may already have persisted bytes; ask Drive for the committed offset.
         probe = true;
         continue;
