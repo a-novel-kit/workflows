@@ -63,24 +63,35 @@ inputs:
 runs:
   using: composite
   steps:
-    # The token spans the organization, because the search covers every repository and release tags
-    # are read from each member's repository. Write access to issues also covers reading the Epic
-    # body.
+    # The read token spans the organization, because the search covers every repository and release
+    # tags are read from each member's repository.
     - name: Mint token
       id: token
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
-        owner: ${{ inputs.org }}
-        permission-issues: write
+        owner: ${{ inputs.org }} # zizmor: ignore[github-app] read-only, across the org
+        permission-issues: read
         permission-pull-requests: read
         permission-contents: read
+
+    # The only write is the Epic body, so write access stops at the planning repo.
+    - name: Mint issue token
+      id: issues
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        client-id: ${{ inputs.client_id }}
+        private-key: ${{ inputs.app_private_key }}
+        owner: ${{ inputs.org }}
+        repositories: ${{ inputs.planning_repo }}
+        permission-issues: write
 
     - name: Render Epic read-model
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
+        ISSUES_TOKEN: ${{ steps.issues.outputs.token }}
         ORG: ${{ inputs.org }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
         LOOKBACK_DAYS: ${{ inputs.lookback_days }}
@@ -406,7 +417,7 @@ runs:
           printf '%s\n' "$body" > "$body_file"
           splice "$body_file" "$region_file" > "$spliced_file"
 
-          if gh issue edit "$epic" --repo "${ORG}/${PLANNING_REPO}" --body-file "$spliced_file" >/dev/null 2>&1; then
+          if GH_TOKEN="$ISSUES_TOKEN" gh issue edit "$epic" --repo "${ORG}/${PLANNING_REPO}" --body-file "$spliced_file" >/dev/null 2>&1; then
             echo "Epic ${ORG}/${PLANNING_REPO}#${epic}: read-model region updated." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::could not update Epic ${ORG}/${PLANNING_REPO}#${epic} body — display-only, next sweep retries." | tee -a "$GITHUB_STEP_SUMMARY"
