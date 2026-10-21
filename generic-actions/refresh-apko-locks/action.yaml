@@ -36,7 +36,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.67.0
+    - uses: a-novel-kit/workflows/generic-actions/pull-bot@v1.67.1
       id: bot
       with:
         app_private_key: ${{ inputs.app_private_key }}
