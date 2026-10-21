@@ -163,7 +163,7 @@ jobs:
         event: ${{ fromJSON(needs.scan.outputs.events) }}
     steps:
       - name: Post to the dependencies channel
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.67.1
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.67.2
         with:
           webhook: ${{ secrets.dependencies_webhook }}
           color: in-progress
@@ -177,7 +177,7 @@ jobs:
       - name: Resolve the reviewers
         id: reviewers
         if: matrix.event.review && matrix.event.user_ids != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.67.1
+        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.67.2
         with:
           github_user_ids: ${{ matrix.event.user_ids }}
           bws_access_token: ${{ secrets.bws_access_token }}
@@ -185,7 +185,7 @@ jobs:
 
       - name: Post to the reviews channel
         if: matrix.event.review
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.67.1
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.67.2
         with:
           webhook: ${{ secrets.reviews_webhook }}
           webhooks: ${{ secrets.reviews_webhooks }}
