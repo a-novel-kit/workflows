@@ -260,6 +260,10 @@ jobs:
             echo "::error::could not list PATs for ${ORG} ($(tr '\n' ' ' < "$RUNNER_TEMP/pat.err")). A 404 means the App lacks organization_personal_access_tokens:read on this org."
             exit 1
           fi
+
+          # Each token is one line of unit-separated fields, so `read` keeps an empty field in its
+          # place. A newline or unit separator inside a value becomes a space, so each token stays on
+          # its own line.
           rows=$(printf '%s' "$pats" | jq -r '
             (if type=="array" then . else [] end)
             | sort_by(.token_expires_at // "9999")
@@ -273,7 +277,8 @@ jobs:
                       then (.value | to_entries[] | "\(.key): \(.value)")
                       else "\(.key): \(.value)" end ]
                   | join("; ") ) ]
-            | @tsv')
+            | map(tostring | gsub("[\u001f\r\n]"; " "))
+            | join("\u001f")')
 
           total=0
           posted=0
@@ -281,7 +286,7 @@ jobs:
           hdr=$([ "$TEST_RUN" = "true" ] && echo "### ${ORG} — 🧪 TEST RUN (all PATs, admin only)" || echo "### ${ORG} — fine-grained PAT inventory")
           echo "$hdr" >> "$GITHUB_STEP_SUMMARY"
 
-          while IFS=$'\t' read -r name login exp expired granted repo_sel perms; do
+          while IFS=$'\x1f' read -r name login exp expired granted repo_sel perms; do
             [ -n "${name:-}" ] || continue
             total=$((total + 1))
             read_expiry || continue
