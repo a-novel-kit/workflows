@@ -216,11 +216,11 @@ when a push reaches the PR and reruns the check when a label changes. The
 
 ### `security-actions`
 
-| Action           | Purpose                                                                  |
-| ---------------- | ------------------------------------------------------------------------ |
-| `lint-semgrep`   | Enforce the A-Novel structural conventions golangci-lint cannot express. |
-| `lint-workflows` | Audit GitHub Actions workflows for security defects (zizmor).            |
-| `scan-secrets`   | Scan the working tree for committed credentials (gitleaks).              |
+| Action           | Purpose                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| `lint-semgrep`   | Enforce the A-Novel structural conventions golangci-lint cannot express.            |
+| `lint-workflows` | Audit GitHub Actions workflows and composite actions for security defects (zizmor). |
+| `scan-secrets`   | Scan the working tree for committed credentials (gitleaks).                         |
 
 Each ships its own config, so a calling repository carries none. All three run offline, so nothing
 outside the repository can stall them, which a required check needs. Each takes `advisory: "true"` to
