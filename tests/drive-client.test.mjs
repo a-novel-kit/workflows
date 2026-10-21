@@ -1,5 +1,6 @@
 // Exercise the real HTTP client with deterministic Drive responses and buffered request bodies.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -7,11 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { mock, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { Failure } from "../node-actions/test-playwright/drive/common.mjs";
 import { CHUNK, Drive, PROTOCOL, digest } from "../node-actions/test-playwright/drive/storage.mjs";
 const repository = "a-novel/platform-studio";
 const session = "https://www.googleapis.com/upload/drive/v3/files?upload_id=private-session";
 const props = { run_id: "10", run_number: "2", attempt: "1", sha: "a".repeat(40) };
+const storage = fileURLToPath(new URL("../node-actions/test-playwright/drive/storage.mjs", import.meta.url));
 
 function client(responses) {
   const calls = [];
@@ -69,6 +72,10 @@ async function result(archive) {
     md5Checksum: await digest(archive),
     properties: { ...props, state: "pending", protocol: PROTOCOL, repository },
   };
+}
+/** A Drive error response, whose message names private resources. */
+function refusal(status, reason) {
+  return { status, data: { error: { code: status, message: "private-file-id", errors: [{ reason }] } } };
 }
 function sent(call, expectedRange, expectedLength) {
   assert.equal(call.headers.get("content-range"), expectedRange);
@@ -160,15 +167,68 @@ test("listing is scoped to platform, protocol and repository, including every pa
 });
 test("transient failures retry within a bounded budget while others fail at once", async () => {
   const recovered = client([{ status: 503 }, { status: 429 }, { data: { ids: ["batch-id"] } }]);
-  assert.deepEqual(await recovered.drive.files("/generateIds"), { ids: ["batch-id"] });
+  assert.deepEqual(await recovered.drive.files("generateIds", "/generateIds"), { ids: ["batch-id"] });
   // Failures without a response share the attempt count and stop after two retries.
   const network = new TypeError("fetch failed");
   const offline = client([{ error: network }, { status: 503 }, { error: network }]);
-  await assert.rejects(offline.drive.files(""), network);
+  await assert.rejects(offline.drive.files("list"), network);
   assert.equal(offline.responses.length, 0);
   const denied = client([{ status: 403 }, { data: {} }]);
-  await assert.rejects(denied.drive.files(""), (error) => error.status === 403);
+  await assert.rejects(denied.drive.files("list"), (error) => error.status === 403);
   assert.equal(denied.responses.length, 1);
+});
+test("rate-limited requests retry while other 403 reasons fail at once", async () => {
+  const limited = client([refusal(403, "userRateLimitExceeded"), refusal(403, "rateLimitExceeded"), { data: {} }]);
+  assert.deepEqual(await limited.drive.files("list"), {});
+  for (const reason of ["storageQuotaExceeded", "insufficientFilePermissions"]) {
+    const denied = client([refusal(403, reason), { data: {} }]);
+    const removal = denied.drive.files("delete", "/batch-id", {}, { method: "DELETE" });
+    await assert.rejects(removal, { status: 403, reason, operation: "files.delete" });
+    assert.equal(denied.responses.length, 1);
+  }
+  // A reason that is not a plain word stays out of the workflow command line.
+  const unsafe = client([refusal(403, "x\n::stop-commands::token")]);
+  await assert.rejects(unsafe.drive.files("list"), (error) => error.status === 403 && error.reason === undefined);
+});
+test("rate-limited chunks and ranges retry while other 403 reasons stop them", async (t) => {
+  const dir = await directory(t),
+    archive = join(dir, "batch.tar"),
+    target = join(dir, "reference.tar");
+  await writeFile(archive, "0123456789");
+  const upload = client([
+    { ...refusal(403, "userRateLimitExceeded"), check: (call) => sent(call, "bytes 0-9/10", 10) },
+    { status: 308, headers: { range: "bytes=0-4" }, check: (call) => sent(call, "bytes */10", 0) },
+    { data: { id: "batch-id" }, check: (call) => sent(call, "bytes 5-9/10", 5) },
+  ]);
+  assert.deepEqual(await upload.drive.sendArchive(session, archive, 10), { id: "batch-id" });
+  const full = client([refusal(403, "storageQuotaExceeded"), { status: 308 }]);
+  const quota = { status: 403, reason: "storageQuotaExceeded", operation: "files.create chunk" };
+  await assert.rejects(full.drive.sendArchive(session, archive, 10), quota);
+  assert.equal(full.responses.length, 1);
+  const reference = { id: "reference", size: "3", md5Checksum: createHash("md5").update("png").digest("hex") };
+  const range = { status: 206, headers: { "content-range": "bytes 0-2/3" }, body: "png" };
+  await client([refusal(403, "rateLimitExceeded"), range]).drive.download(reference, target);
+  assert.equal(await readFile(target, "utf8"), "png");
+  const denied = client([refusal(403, "insufficientFilePermissions"), range]);
+  await assert.rejects(denied.drive.download(reference, target), { status: 403, operation: "files.get media" });
+  assert.equal(denied.responses.length, 1);
+});
+test("a failed CLI request reports its operation, status and Drive reason, and nothing private", () => {
+  const body = JSON.stringify(refusal(403, "insufficientFilePermissions").data);
+  const stub = `globalThis.fetch = async () => new Response(${JSON.stringify(body)}, { status: 403 });`;
+  const args = ["--import", `data:text/javascript,${encodeURIComponent(stub)}`, storage, "download"];
+  const env = {
+    DRIVE_TOKEN: "private-token",
+    GITHUB_REPOSITORY: repository,
+    REFERENCES_FOLDER: "references",
+    RESULTS_FOLDER: "results",
+  };
+  const result = spawnSync(process.execPath, args, { encoding: "utf8", env });
+  assert.equal(result.status, 1);
+  assert.equal(
+    result.stderr,
+    "::error::Drive operation failed; check API access and quota in the private consoles (files.get, HTTP 403, insufficientFilePermissions)\n"
+  );
 });
 test("resumes at the server-confirmed offset after an ambiguous chunk failure", async (t) => {
   const dir = await directory(t),

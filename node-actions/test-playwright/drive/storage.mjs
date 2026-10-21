@@ -15,6 +15,24 @@ export const CHUNK = 16 * 1024 * 1024;
 const FIELDS = "id,name,size,md5Checksum,properties,createdTime,parents";
 const API = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
+// Drive reports rate limits as HTTP 403 or 429 with one of these reasons, and documents them as retryable.
+const RATE_LIMITS = ["rateLimitExceeded", "userRateLimitExceeded"];
+
+/** Whether a failed Drive response may succeed when retried after a backoff. */
+function transient({ status, reason }) {
+  return [408, 429].includes(status) || status >= 500 || RATE_LIMITS.includes(reason);
+}
+
+/** The reason Drive gives for a failed response, such as userRateLimitExceeded, when it is a plain word. */
+async function errorReason(response) {
+  try {
+    const reason = JSON.parse(await response.text()).error.errors[0].reason;
+    // Only a plain word passes, since the reason reaches a workflow command line.
+    return typeof reason === "string" && /^\w{1,64}$/.test(reason) ? reason : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Hash archives without buffering their contents. */
 export async function digest(path) {
@@ -50,10 +68,23 @@ export class Drive {
     this.token = token;
   }
 
-  /** Return status, headers and parsed JSON, or the body stream when requested. */
+  /**
+   * Return status, headers and parsed JSON, or the body stream when requested.
+   *
+   * A thrown error carries the request's operation, such as files.list, for the CLI to report. An error for a failed
+   * response also carries its HTTP status and Drive reason.
+   */
   async request(
     url,
-    { params = {}, headers, retry = true, stream = false, ok = (status) => status >= 200 && status < 300, ...init } = {}
+    {
+      operation,
+      params = {},
+      headers,
+      retry = true,
+      stream = false,
+      ok = (status) => status >= 200 && status < 300,
+      ...init
+    } = {}
   ) {
     url = new URL(url);
     for (const [key, value] of Object.entries(params)) if (value !== undefined) url.searchParams.append(key, value);
@@ -68,23 +99,25 @@ export class Drive {
         });
         const { status } = response;
         if (!ok(status)) {
-          await response.body?.cancel();
-          throw Object.assign(new Error(`Drive request failed (HTTP ${status})`), { status });
+          const reason = await errorReason(response);
+          throw Object.assign(new Error(`Drive request failed (HTTP ${status})`), { status, reason });
         }
         if (stream) return { status, headers: response.headers, data: response.body };
         const text = await response.text();
         return { status, headers: response.headers, data: text ? JSON.parse(text) : null };
       } catch (error) {
         // Transient statuses retry five times; failures without a status, including timeouts, twice.
-        const transient = error.status ? [408, 429].includes(error.status) || error.status >= 500 : attempt < 2;
-        if (!retry || !transient || attempt >= 5) throw error;
+        const retryable = error.status ? transient(error) : attempt < 2;
+        if (!retry || !retryable || attempt >= 5) throw Object.assign(error, { operation });
         await setTimeout(2 ** attempt * 500);
       }
     }
   }
 
-  async files(path = "", params = {}, options = {}) {
-    return (await this.request(`${API}${path}`, { params: { supportsAllDrives: true, ...params }, ...options })).data;
+  /** Call the named Drive files method, such as list, and return its parsed JSON. */
+  async files(name, path = "", params = {}, options = {}) {
+    const init = { operation: `files.${name}`, params: { supportsAllDrives: true, ...params }, ...options };
+    return (await this.request(`${API}${path}`, init)).data;
   }
 
   async validateFolders(references, results, maintenance = false) {
@@ -93,7 +126,7 @@ export class Drive {
     }
     const folders = await Promise.all(
       [references, results].map((id) =>
-        this.files(`/${id}`, { fields: "id,mimeType,driveId,parents,trashed,capabilities" })
+        this.files("get", `/${id}`, { fields: "id,mimeType,driveId,parents,trashed,capabilities" })
       )
     );
     // Drive hides parents from folder-only shares; maintenance must verify the full hierarchy.
@@ -121,7 +154,7 @@ export class Drive {
     const batches = [];
     let pageToken;
     do {
-      const result = await this.files("", {
+      const result = await this.files("list", "", {
         // Folder-only shares do not make CI a Shared Drive member.
         corpora: "user",
         includeItemsFromAllDrives: true,
@@ -139,7 +172,7 @@ export class Drive {
 
   async remove(batch) {
     try {
-      await this.files(`/${batch.id}`, {}, { method: "DELETE" });
+      await this.files("delete", `/${batch.id}`, {}, { method: "DELETE" });
     } catch (error) {
       if (error.status !== 404) throw error;
     }
@@ -147,7 +180,7 @@ export class Drive {
 
   async markCurrent(batch) {
     const properties = { ...batch.properties, state: "current" };
-    await this.files(`/${batch.id}`, {}, { method: "PATCH", body: JSON.stringify({ properties }) });
+    await this.files("update", `/${batch.id}`, {}, { method: "PATCH", body: JSON.stringify({ properties }) });
     batch.properties = properties;
   }
 
@@ -155,7 +188,7 @@ export class Drive {
     let fileId;
     if (existsSync(identityFile)) fileId = (await readFile(identityFile, "utf8")).trim();
     else {
-      fileId = (await this.files("/generateIds", { count: 1, space: "drive", type: "files" })).ids[0];
+      fileId = (await this.files("generateIds", "/generateIds", { count: 1, space: "drive", type: "files" })).ids[0];
       await writeFile(identityFile, fileId);
     }
     const metadata = {
@@ -169,6 +202,7 @@ export class Drive {
     let batch;
     try {
       const response = await this.request(UPLOAD, {
+        operation: "files.create",
         method: "POST",
         params: { uploadType: "resumable", supportsAllDrives: true, fields: FIELDS },
         body: JSON.stringify(metadata),
@@ -181,7 +215,7 @@ export class Drive {
       batch = await this.sendArchive(session.href, archive, size);
     } catch (error) {
       if (error.status !== 409) throw error;
-      batch = await this.files(`/${fileId}`, { fields: FIELDS });
+      batch = await this.files("get", `/${fileId}`, { fields: FIELDS });
     }
     if (batch.md5Checksum !== (await digest(archive)) || Number(batch.size ?? -1) !== size) {
       throw new Failure("Uploaded batch checksum or size does not match");
@@ -208,6 +242,7 @@ export class Drive {
       let response;
       try {
         response = await this.request(session, {
+          operation: "files.create chunk",
           method: "PUT",
           retry: false,
           body,
@@ -218,7 +253,7 @@ export class Drive {
           ok: (status) => status === 200 || status === 201 || status === 308,
         });
       } catch (error) {
-        if ((error.status && error.status !== 429 && error.status < 500) || failures++ >= 5) throw error;
+        if ((error.status && !transient(error)) || failures++ >= 5) throw error;
         await setTimeout(Math.min(2 ** failures * 1000, 32_000));
         // A failed request may already have persisted bytes; ask Drive for the committed offset.
         probe = true;
@@ -247,6 +282,7 @@ export class Drive {
       for (let attempt = 0; attempt <= 5; attempt++) {
         try {
           const response = await this.request(`${API}/${batch.id}`, {
+            operation: "files.get media",
             params: { alt: "media", supportsAllDrives: true },
             stream: true,
             headers: { Range: `bytes=${offset}-${end}` },
@@ -266,8 +302,7 @@ export class Drive {
           if ((await stat(target)).size !== end + 1) throw new Failure("Downloaded reference size does not match");
           break;
         } catch (error) {
-          if (error instanceof Failure || (error.status && error.status !== 429 && error.status < 500) || attempt === 5)
-            throw error;
+          if (error instanceof Failure || (error.status && !transient(error)) || attempt === 5) throw error;
         }
       }
       offset = end + 1;

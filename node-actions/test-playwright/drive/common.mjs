@@ -5,10 +5,17 @@ import { pathToFileURL } from "node:url";
 /** A safe operator-facing error that contains no credential or API payload. */
 export class Failure extends Error {}
 
-/** Run a script entry point while keeping private API errors out of public logs. */
+/**
+ * Run a script entry point while keeping private API errors out of public logs.
+ *
+ * An error tagged with its request operation adds that operation, its HTTP status and the API reason to the message.
+ */
 export function runCli(url, main, message) {
   function fail(error) {
-    console.error(`::error::${error instanceof Failure ? error.message : message}`);
+    // Only a request error carries an operation; a failed child process carries an exit status instead.
+    const facts = [error.operation, error.status && `HTTP ${error.status}`, error.reason].filter(Boolean).join(", ");
+    const detail = error.operation ? ` (${facts})` : "";
+    console.error(`::error::${error instanceof Failure ? error.message : message + detail}`);
     process.exitCode = 1;
   }
 
