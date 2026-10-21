@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { functions, root, step, succeeds, workspace } from "./helpers.mjs";
+import { functions, manifest, root, step, succeeds, workspace } from "./helpers.mjs";
 
 function repository(t) {
   const w = workspace(t);
@@ -159,6 +159,7 @@ test("release pushes are atomic, hotfixes push their release line, and dry runs 
       const env = {
         GITHUB_ACTION_PATH: join(root, "publish-actions", action),
         GITHUB_REPOSITORY: "a-novel-kit/example",
+        GH_TOKEN: "release-token",
         APP_SLUG: "fixture",
         RELEASE_TYPE: "patch",
         STAMP_NEEDED: "false",
@@ -265,5 +266,12 @@ test("release receipt replacement preserves prose and literal backslashes", (t) 
     assert(result.includes("Human prose."));
     assert(result.includes(block));
     assert(!result.includes("stale"));
+  }
+});
+
+test("release checkouts keep no credential, so only the push sees the release token", () => {
+  for (const action of ["release-core", "release-core-hotfix"]) {
+    const checkout = manifest(`publish-actions/${action}/action.yaml`).runs.steps.find((s) => s.name === "Checkout");
+    assert.equal(checkout.with["persist-credentials"], false, action);
   }
 });

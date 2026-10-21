@@ -232,6 +232,7 @@ function gate(t, ready) {
   w.stub("gh", `import * as fs from 'node:fs'; fs.writeFileSync('check.json', fs.readFileSync(0, 'utf8'));`);
   succeeds(
     w.bash(evaluate, {
+      CHECKS_TOKEN: "checks",
       REPO_FULL: ready[0].repo,
       HEAD_SHA: "head",
       EPIC: "900",

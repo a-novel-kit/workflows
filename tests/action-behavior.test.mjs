@@ -260,7 +260,7 @@ test("refresh-apko-locks summarizes each lock's package changes and stays quiet 
   const lock = (packages) =>
     JSON.stringify({ contents: { packages: Object.entries(packages).map(([name, version]) => ({ name, version })) } });
   const w = workspace(t);
-  // The stub writes NEW_LOCK where apko lock would write the lock.
+  // The stub, which the step runs from RUNNER_TEMP, writes NEW_LOCK where apko lock would write the lock.
   w.stub(
     "apko",
     "const args = process.argv; require('fs').writeFileSync(args[args.indexOf('--output') + 1], process.env.NEW_LOCK);"
@@ -283,7 +283,14 @@ test("refresh-apko-locks summarizes each lock's package changes and stays quiet 
   ];
   for (const [name, newLock, expected] of cases) {
     w.write("output", "");
-    succeeds(w.bash(refresh, { CONFIGS: "builds/db.apko.yaml", ARCH: "x86_64", NEW_LOCK: newLock }));
+    succeeds(
+      w.bash(refresh, {
+        RUNNER_TEMP: `${w.cwd}/bin`,
+        CONFIGS: "builds/db.apko.yaml",
+        ARCH: "x86_64",
+        NEW_LOCK: newLock,
+      })
+    );
     assert.equal(w.read("output"), expected && `summary<<SUMMARY_END\n${expected}\nSUMMARY_END\n`, name);
   }
 });

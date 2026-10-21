@@ -54,7 +54,6 @@ runs:
           --pattern "apko_${VERSION}_linux_amd64.tar.gz" --pattern checksums.txt
         grep " apko_${VERSION}_linux_amd64.tar.gz\$" checksums.txt | sha256sum -c -
         tar -xzf "apko_${VERSION}_linux_amd64.tar.gz" --strip-components=1 "apko_${VERSION}_linux_amd64/apko"
-        echo "$RUNNER_TEMP" >>"$GITHUB_PATH"
 
     - name: Refresh the locks
       id: refresh
@@ -78,7 +77,7 @@ runs:
           lock="${config%.yaml}.lock.json"
           old="$(mktemp)"
           git show "HEAD:$lock" >"$old" 2>/dev/null || echo '{}' >"$old"
-          apko lock "$config" --arch "$ARCH" --output "$lock"
+          "$RUNNER_TEMP/apko" lock "$config" --arch "$ARCH" --output "$lock"
           lines="$(changes "$old" "$lock")"
           [ -z "$lines" ] || summary+=$'\n'"**\`$lock\`**"$'\n\n'"$lines"$'\n'
         done

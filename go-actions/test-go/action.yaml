@@ -75,7 +75,9 @@ runs:
       working-directory: ${{ inputs.working_directory || '.' }}
       env:
         PACKAGES: ${{ runner.temp }}/go-test-packages.txt
-      run: |
+      # filter_patterns and filter_extra_patterns are shell pipelines by contract (`| grep -v /mocks`),
+      # so they expand into the script. Only the caller's workflow sets them.
+      run: | # zizmor: ignore[template-injection]
         # Lists the packages of every module from `go list -m`, since one `go list ./...` reaches a
         # single module of a Go workspace.
         #

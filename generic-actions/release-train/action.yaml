@@ -95,7 +95,7 @@ runs:
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
-        owner: ${{ inputs.org }}
+        owner: ${{ inputs.org }} # zizmor: ignore[github-app] read-only, across the org
         permission-issues: read
         permission-pull-requests: read
         permission-contents: read
@@ -108,7 +108,7 @@ runs:
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
-        owner: ${{ inputs.org }}
+        owner: ${{ inputs.org }} # zizmor: ignore[github-app] dispatches each member's release.yaml
         permission-actions: write
 
     # Issue token, scoped to the planning repo alone, which splices the receipt into the Epic body.

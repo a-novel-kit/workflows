@@ -1,9 +1,10 @@
 name: lint workflows
 description: >
-  Audit a repo's GitHub Actions workflows with zizmor, in place of CodeQL's `actions` analysis.
-  zizmor reports CodeQL's `actions/missing-workflow-permissions` as `excessive-permissions`, and adds
-  checkout credential leaks, cache poisoning and floating refs. The baseline config ships with the
-  action, and zizmor runs offline. A repo without `.github/workflows` passes.
+  Audit a repo's GitHub Actions workflows and composite actions with zizmor, in place of CodeQL's
+  `actions` analysis. zizmor reports CodeQL's `actions/missing-workflow-permissions` as
+  `excessive-permissions`, and adds checkout credential leaks, cache poisoning and floating refs.
+  The baseline config ships with the action, and zizmor runs offline. A repo without
+  `.github/workflows` passes.
 
 inputs:
   config:
@@ -55,4 +56,4 @@ runs:
         node "$ACTION_PATH/../run-scan.mjs" zizmor docker run --rm \
           -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
           "ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION" \
-          --offline --config /zizmor.yml /src/.github/workflows
+          --offline --config /zizmor.yml --collect=workflows,actions /src

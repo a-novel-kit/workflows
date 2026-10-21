@@ -62,7 +62,7 @@ runs:
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
-        owner: ${{ github.repository_owner }}
+        owner: ${{ github.repository_owner }} # zizmor: ignore[github-app] the board's items live in every repository
         permission-organization-projects: write
         permission-issues: write # close each archived issue
 

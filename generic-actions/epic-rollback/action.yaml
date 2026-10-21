@@ -113,7 +113,7 @@ runs:
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
-        owner: ${{ inputs.org }}
+        owner: ${{ inputs.org }} # zizmor: ignore[github-app] read-only, across the org
         permission-issues: read
         permission-pull-requests: read
         permission-contents: read
