@@ -2,7 +2,8 @@ name: auto-approve-dependabot (reusable)
 
 # Approves and queues a repository's trusted dependency-bot pull requests. Each governed repository
 # calls this engine from the `auto-approve-dependabot.yaml` that repocfg renders, and the engine runs
-# in that repository's context.
+# in that repository's context. A Renovate update merges alone only when Renovate itself put it on
+# auto-merge, so the updates its presets leave to review, such as majors, wait for a person.
 #
 # Approval is what lets a bot pull request merge, so the engine also enforces Renovate's release age.
 # An update younger than its minimumReleaseAge carries a pending `renovate/stability-days` status,
@@ -102,8 +103,11 @@ jobs:
       # A person's push means the change needs real review, so the step approves only when every
       # commit is the bot's own. An unknown author counts as a person. A push can claim any author
       # email, so each commit must also carry GitHub's signature, which only the bot's API commits
-      # get. An update inside its release-age window waits for its green status to re-run the job.
-      - name: Confirm every commit is the bot's and the update has aged
+      # get. Renovate puts on auto-merge exactly the updates its configuration lets merge alone, so a
+      # Renovate pull request it left off auto-merge, or that a person took off, waits for a person.
+      # The first to enable auto-merge decided it; recover-prs re-arms a dropped pull request as the
+      # agent. An update inside its release-age window waits for its green status to re-run the job.
+      - name: Confirm the bot's commits, Renovate's auto-merge choice and the update's age
         id: guard
         if: ${{ steps.pr.outputs.skip != 'true' }}
         env:
@@ -125,6 +129,23 @@ jobs:
             '[add[] | select(.author.login != $bot or .committer.login != "web-flow" or (.commit.verification.verified | not))] | length')
           if [ "$unsigned" != 0 ]; then
             echo "::notice::Not auto-approving — $unsigned commit(s) not signed by GitHub for '$BOT'."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          read -r branch first armed < <(gh api graphql -f owner="${GITHUB_REPOSITORY%/*}" \
+            -f name="${GITHUB_REPOSITORY#*/}" -F number="${PR##*/}" -f query='
+              query($owner: String!, $name: String!, $number: Int!) {
+                repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+                  headRefName
+                  autoMergeRequest { enabledAt }
+                  timelineItems(itemTypes: [AUTO_MERGE_ENABLED_EVENT], first: 1) {
+                    nodes { ... on AutoMergeEnabledEvent { actor { login } } }
+                  }
+                } }
+              }' --jq '.data.repository.pullRequest |
+                "\(.headRefName) \(.timelineItems.nodes[0].actor.login // "none") \(.autoMergeRequest != null)"')
+          if [[ "$branch" == renovate/* ]] && { [ "${first%"[bot]"}" != "${BOT%"[bot]"}" ] || [ "$armed" != true ]; }; then
+            echo "::notice::Not auto-approving — Renovate left this update to review, or a person took it off auto-merge."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
