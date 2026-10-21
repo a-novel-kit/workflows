@@ -1,0 +1,90 @@
+name: notify-audit (reusable)
+
+# Alerts an org's Discord security channel minutes after its audit log records an entry that can
+# hand someone access, weaken a protection or push past a rule: a ref pushed past a ruleset, a change
+# to a ruleset, an environment or a member's access, a new key, hook, App, token or runner, or a
+# push-protection bypass. Each org's `.github` repository calls this engine from a workflow a clock
+# dispatches every five minutes, and the caller's ignore rules hide its routine shapes.
+#
+# Each run reads from an hour before the caller's previous successful run, since GitHub indexes some
+# entries late, and skips the alerts that run recorded as seen. A run whose post Discord refuses
+# fails, so the next one posts its alerts again.
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        required: true
+        type: string
+        description: Client id of the GitHub App that reads the org's audit log, which needs organization administration read.
+      ignore:
+        required: false
+        type: string
+        default: "[]"
+        description: >-
+          JSON list of rules hiding routine entries. A rule holds a required "reason" and at least one
+          field of the audit-log entry, each a regular expression the field must match.
+    secrets:
+      private_key:
+        required: true
+        description: Private key (PEM) of the App that client_id names.
+      webhook:
+        required: false
+        description: Discord webhook of the org's security channel. Empty fails every run holding an alert.
+      mention:
+        required: false
+        description: Discord user id of the admin every post pings. Empty posts without a ping.
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
+    # The default token reads the caller's previous run and its seen list. The audit log goes through the App.
+    permissions:
+      actions: read
+    steps:
+      - name: Mint audit-log token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-organization-administration: read
+
+      - name: Collect the alerts
+        id: collect
+        uses: a-novel-kit/workflows/generic-actions/collect-audit-alerts@v1.70.0
+        with:
+          github_token: ${{ github.token }}
+          audit_token: ${{ steps.token.outputs.token }}
+          ignore: ${{ inputs.ignore }}
+
+      - name: Post to the security channel
+        id: post
+        if: steps.collect.outputs.count != '0'
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.70.0
+        with:
+          webhook: ${{ secrets.webhook }}
+          color: failed
+          title: ${{ steps.collect.outputs.title }}
+          url: ${{ steps.collect.outputs.url }}
+          description: ${{ steps.collect.outputs.description }}
+          footer: ${{ steps.collect.outputs.footer }}
+          mention_users: ${{ secrets.mention }}
+
+      # The next run reads its window from the last successful one, so failing here posts these again.
+      - name: Fail an undelivered post
+        if: steps.collect.outputs.count != '0' && steps.post.outputs.delivered != 'true'
+        run: |
+          echo "::error::Discord did not accept the alerts; the next run posts them again."
+          exit 1
+
+      - name: Record the seen alerts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notify-audit-seen
+          path: ${{ steps.collect.outputs.seen }}
+          retention-days: 1

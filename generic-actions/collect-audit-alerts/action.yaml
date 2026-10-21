@@ -1,0 +1,57 @@
+name: collect audit alerts
+description: >
+  Collect the audit-log entries of an org that can hand someone access, weaken a protection or push
+  past a rule, since the calling workflow's previous successful run. Each run rereads the hour before
+  that run, since GitHub indexes some entries late, and skips the alerts that run recorded as seen.
+
+  Ignore rules hide the org's routine shapes, such as an admin merging a reviewed pull request past
+  the merge queue. The step summary holds only counts, what each rule hid included, since a public
+  repository's run summary is public.
+
+inputs:
+  github_token:
+    required: true
+    description: Token that reads the calling repository's workflow runs and their artifacts.
+  audit_token:
+    required: true
+    description: Token that reads the org's audit log, such as an App token with organization administration read.
+  ignore:
+    required: false
+    default: "[]"
+    description: >
+      JSON list of rules hiding routine entries. A rule holds a required "reason" and at least one
+      field of the audit-log entry, each a regular expression the field must match. A list field is
+      matched as its sorted values joined by commas, and a missing field as an empty string.
+
+outputs:
+  count:
+    description: Number of alerts no earlier run recorded.
+    value: ${{ steps.collect.outputs.count }}
+  title:
+    description: Post title naming that number and the org.
+    value: ${{ steps.collect.outputs.title }}
+  url:
+    description: The org's audit log, which the post links.
+    value: ${{ steps.collect.outputs.url }}
+  description:
+    description: Post body, two lines per group of alerts sharing an action, an actor and a target.
+    value: ${{ steps.collect.outputs.description }}
+  footer:
+    description: How many entries the ignore rules hid, or empty when none.
+    value: ${{ steps.collect.outputs.footer }}
+  seen:
+    description: Directory holding seen.json, the ids of every alert in the window, for the next run.
+    value: ${{ steps.collect.outputs.seen }}
+
+runs:
+  using: composite
+  steps:
+    - name: Collect the alerts
+      id: collect
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        AUDIT_TOKEN: ${{ inputs.audit_token }}
+        CALLER: ${{ github.workflow_ref }}
+        IGNORE: ${{ inputs.ignore }}
+      run: node "$GITHUB_ACTION_PATH/collect.mjs"

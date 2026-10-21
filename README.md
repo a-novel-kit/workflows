@@ -99,6 +99,7 @@ move a tag.
 | `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.           |
 | `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.     |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                         |
+| `collect-audit-alerts`   | Collect the audit-log entries that grant access or push past a rule, minus ignore rules and posted alerts.       |
 | `collect-warnings`       | Merge the warnings an org's default-branch runs raised in a window into one entry each, minus ignore rules.      |
 | `derive-status`          | Derive the board Status of the issues a PR closes from the PR's current state.                                   |
 | `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
@@ -266,6 +267,7 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | `backport-run`                | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.           |
 | `epic-rollback-run`           | Admin-gated dispatch of `epic-rollback`, behind a typed confirmation.                                             |
 | `merge-gate-run`              | Post the required `merge-gate` check, and arm auto-merge on ready Epic members so they land together.             |
+| `notify-audit-run`            | Alert the org's Discord security channel minutes after an audit-log entry grants access or skips a rule.          |
 | `notify-ci-run`               | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
 | `notify-issues-run`           | Post board issues' Status and assignee changes to Discord by stage color, pinging on Triage, Ready and assignees. |
 | `notify-pr-run`               | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
