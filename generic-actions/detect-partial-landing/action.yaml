@@ -138,7 +138,7 @@ runs:
     # token. A halted sweep still runs the discovery read below, then posts and re-enqueues nothing.
     - name: Mint read token
       id: read
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
@@ -148,7 +148,7 @@ runs:
 
     - name: Mint checks token
       id: checks
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
@@ -216,7 +216,7 @@ runs:
     - name: Mint enqueue token
       id: write
       if: ${{ steps.mode.outputs.mode == 'sweep' && steps.scope.outputs.repos != '' }}
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}

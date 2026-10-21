@@ -26,6 +26,12 @@ Renovate selects a GitHub release no sooner than one hour after publication, whi
 assets and checksums time to finish uploading. The delay applies to every `github-releases`
 dependency, on top of Renovate's release-age buffer.
 
+A third-party action runs from the commit its release named. Renovate pins each one as
+`owner/repo@<sha> # vX.Y.Z` and moves the commit and the version together, three days after the
+release. An update that keeps the version and changes the commit means the upstream tag was moved,
+so it waits for a reviewer instead of merging on its own. The `a-novel-kit/workflows` references
+stay on release tags.
+
 Each service's Go module, npm client and images update in one PR, because a module must ship with
 its matching images. Renovate runs every artifact update in a grouped branch with the configuration
 of its first upgrade by name, usually an image, so these groups carry both `go mod tidy` and
@@ -59,7 +65,7 @@ lockfile maintenance.
 | `service`   | Podman Compose and isolated Go tool modules; standard service regeneration; database dependency detection.                          |
 | `library`   | Isolated Go tool modules, standard linter/test-tool updates, npm deduplication and peer-dependency updates. Includes the stack CLI. |
 | `platform`  | npm deduplication and peer-dependency updates.                                                                                      |
-| `workflows` | Complete GitHub Actions release tags.                                                                                               |
+| `workflows` | Common base.                                                                                                                        |
 | `infra`     | Common base; deployment-specific policy remains in the repository.                                                                  |
 | `meta`      | Common base for organization configuration repositories.                                                                            |
 

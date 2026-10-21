@@ -30,13 +30,13 @@ runs:
   steps:
     # Renovate reads the repository through the API and its config from this action's folder, so
     # the run needs the bot token and no checkout.
-    - uses: actions/create-github-app-token@v3
+    - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       id: app_token
       with:
         client-id: ${{ inputs.client_id }}
         private-key: ${{ inputs.app_private_key }}
     - name: self-hosted renovate
-      uses: renovatebot/github-action@v46.3.9
+      uses: renovatebot/github-action@a63d9a7bc606f7336fd20b47f2f32259a35e6213 # v46.3.9
       with:
         token: ${{ steps.app_token.outputs.token }}
         configurationFile: ${{ github.action_path }}/config.json
