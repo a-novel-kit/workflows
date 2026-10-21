@@ -69,7 +69,9 @@ for (const [action, name, tool, env, findings] of scanners)
     }
     const invalid = action === "lint-semgrep" ? { RULESET: "missing" } : { CONFIG: "missing" };
     assert.equal(w.bash(script, { ...vars, ...invalid, ADVISORY: "false", SCANNER_EXIT: "0" }).status, 1);
-    if (action === "lint-semgrep") succeeds(w.bash(script, { ...vars, RULESET: "none", ADVISORY: "false" }));
+    // `none` names no ruleset, so a job that passes it fails instead of passing without a scan.
+    if (action === "lint-semgrep")
+      assert.equal(w.bash(script, { ...vars, RULESET: "none", ADVISORY: "false" }).status, 1);
   });
 
 test("lint-shell and lint-dockerfile run a release only when its bytes match the caller's sha256", (t) => {
