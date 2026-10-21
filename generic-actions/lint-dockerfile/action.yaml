@@ -23,7 +23,14 @@ inputs:
     description: >
       hadolint release tag, with or without the leading v. The caller pins it so Renovate bumps it
       per repo, with the annotation
-      `# renovate: datasource=github-releases depName=hadolint/hadolint`.
+      `# renovate: datasource=custom.hadolint depName=hadolint/hadolint`.
+  sha256:
+    required: false
+    default: ""
+    description: >
+      SHA-256 of that release's `hadolint-linux-x86_64`, on the line right after `version`, so
+      Renovate moves both together. A download that does not match fails the step. Empty runs the
+      release unverified, with a warning; a later release requires it.
 
 runs:
   using: composite
@@ -34,6 +41,7 @@ runs:
         PATHS: ${{ inputs.paths }}
         ADVISORY: ${{ inputs.advisory }}
         HADOLINT_VERSION: ${{ inputs.version }}
+        HADOLINT_SHA256: ${{ inputs.sha256 }}
       run: |
         # errexit is off because hadolint exits non-zero on findings, and the step gates on that code.
         set +e -u
@@ -59,9 +67,18 @@ runs:
         # The check gates, so the download retries. `--retry-all-errors` also retries a
         # transport-level reset (curl exit 35), which plain `--retry` leaves fatal.
         if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-          "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION#v}/hadolint-Linux-x86_64" \
+          "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION#v}/hadolint-linux-x86_64" \
           -o "$bin"; then
           echo "::error::failed to download hadolint ${HADOLINT_VERSION} after 3 retries"
+          exit 1
+        fi
+
+        # The pin comes from the caller, never from the release, whose files and checksums an
+        # attacker holding the release can replace together.
+        if [ -z "$HADOLINT_SHA256" ]; then
+          echo "::warning::hadolint ${HADOLINT_VERSION} runs unverified: pin its sha256 beside version."
+        elif ! echo "$HADOLINT_SHA256  $bin" | sha256sum --check --quiet; then
+          echo "::error::hadolint ${HADOLINT_VERSION} does not match the pinned sha256"
           exit 1
         fi
         chmod +x "$bin"

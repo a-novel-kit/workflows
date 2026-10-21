@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { functions, manifest, root, step, succeeds, workspace } from "./helpers.mjs";
@@ -70,6 +71,74 @@ for (const [action, name, tool, env, findings] of scanners)
     assert.equal(w.bash(script, { ...vars, ...invalid, ADVISORY: "false", SCANNER_EXIT: "0" }).status, 1);
     if (action === "lint-semgrep") succeeds(w.bash(script, { ...vars, RULESET: "none", ADVISORY: "false" }));
   });
+
+test("lint-shell and lint-dockerfile run a release only when its bytes match the caller's sha256", (t) => {
+  const w = workspace(t);
+  // One fixture stands in for the shellcheck archive and the hadolint binary, and records that it ran.
+  const release = "#!/bin/sh\ntouch ran\n";
+  w.stub("curl", "const a = process.argv; require('fs').writeFileSync(a[a.indexOf('-o') + 1], process.env.RELEASE);");
+  // lint-shell unpacks before installing, so its install marks the run there.
+  w.stub("tar", "");
+  w.stub("install", "require('fs').writeFileSync('ran', '');");
+  w.stub("shellcheck", "");
+  w.write("Dockerfile", "FROM scratch\n");
+  const actions = [
+    ["generic-actions/lint-shell/action.yaml", "install shellcheck", "SHELLCHECK"],
+    ["generic-actions/lint-dockerfile/action.yaml", "hadolint", "HADOLINT"],
+  ];
+  const pins = [
+    [createHash("sha256").update(release).digest("hex"), 0, true, /^$/],
+    ["0".repeat(64), 1, false, /^::error::.* does not match the pinned sha256$/m],
+    ["", 0, true, /^::warning::.* unverified/m],
+  ];
+  for (const [path, name, tool] of actions)
+    for (const [pin, status, ran, annotation] of pins) {
+      rmSync(join(w.cwd, "ran"), { force: true });
+      const result = w.bash(step(path, name), {
+        RELEASE: release,
+        RUNNER_TEMP: w.cwd,
+        PATHS: "Dockerfile",
+        ADVISORY: "false",
+        [`${tool}_VERSION`]: "1.0.0",
+        [`${tool}_SHA256`]: pin,
+      });
+      assert.equal(result.status, status, `${name} ${pin}: ${result.stdout}${result.stderr}`);
+      assert.equal(existsSync(join(w.cwd, "ran")), ran, `${name} ${pin}`);
+      assert.match(
+        result.stdout
+          .split("\n")
+          .filter((line) => line.startsWith("::"))
+          .join("\n"),
+        annotation
+      );
+    }
+});
+
+test("scan-secrets and refresh-apko-locks build their tool from Go's checksum-verified module", (t) => {
+  const w = workspace(t);
+  w.stub("go", "require('fs').appendFileSync('calls', JSON.stringify([process.env.GOBIN, ...process.argv.slice(2)]));");
+  w.stub("gitleaks", "");
+  const installs = [
+    [
+      "security-actions/scan-secrets/action.yaml",
+      "install gitleaks",
+      { GITLEAKS_VERSION: "v8.30.1" },
+      ["/usr/local/bin", "github.com/zricethezav/gitleaks/v8@v8.30.1"],
+    ],
+    [
+      "generic-actions/refresh-apko-locks/action.yaml",
+      "Install apko",
+      { VERSION: "1.4.12", RUNNER_TEMP: "/runner" },
+      ["/runner", "chainguard.dev/apko@v1.4.12"],
+    ],
+  ];
+  for (const [path, name, env, [gobin, module]] of installs) {
+    w.write("calls", "");
+    succeeds(w.bash(step(path, name), env));
+    const call = JSON.parse(w.read("calls"));
+    assert.deepEqual([call[0], call[1], call.at(-1)], [gobin, "install", module], name);
+  }
+});
 
 test("scanner retries only container launch failures and never masks a missing executable", (t) => {
   const w = workspace(t);

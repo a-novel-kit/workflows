@@ -36,6 +36,14 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
   assert.deepEqual(extract(workflow, release).map(pin), [
     { datasource: "github-releases", depName: "koalaman/shellcheck", currentValue: "0.11.0" },
   ]);
+  // A sha256 on the next line moves with the version; one anywhere else stays out of the match.
+  const hash = "d".repeat(64);
+  const hashed = `# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck\nversion: "0.11.0"\nsha256: "${hash}"`;
+  const apart = `# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck\nversion: "0.11.0"\npaths: x\nsha256: "${hash}"`;
+  assert.deepEqual(
+    [hashed, apart].map((fixture) => extract(workflow, fixture).map((groups) => groups.currentDigest)),
+    [[hash], [undefined]]
+  );
   const container =
     "container:\n  # renovate: datasource=npm depName=playwright\n  image: mcr.microsoft.com/playwright:v1.63.0-noble";
   assert.deepEqual(extract(workflow, container).map(pin), [
@@ -165,9 +173,15 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
 test("Renovate pins third-party actions to their release commit and keeps the workflows actions on tags", () => {
   assert(base.extends.includes("helpers:pinGitHubActionDigestsToSemver"));
   const actions = base.packageRules.filter((r) => r.matchManagers?.includes("github-actions"));
-  // A digest update means the upstream tag moved: it overrides the automerge rule before it.
+  // A digest update means the upstream tag moved, or a pinned release file was replaced: it
+  // overrides the automerge rule before it.
   const moved = actions.find((r) => r.matchUpdateTypes?.includes("digest"));
   assert.equal(moved.automerge, false);
+  assert(moved.matchManagers.includes("custom.regex"));
+  // Each release-file datasource waits for its assets like a GitHub release does.
+  const published = base.packageRules.find((r) => r.matchDatasources?.includes("github-releases"));
+  for (const name of Object.keys(base.customDatasources))
+    assert(published.matchDatasources.includes(`custom.${name}`), name);
   assert(base.packageRules.indexOf(moved) > base.packageRules.findIndex((r) => r.automerge === true));
   assert.equal(actions.find((r) => r.minimumReleaseAge).minimumReleaseAge, "3 days");
   assert.equal(base.packageRules.find((r) => r.groupName === "a-novel-kit workflows").pinDigests, false);
