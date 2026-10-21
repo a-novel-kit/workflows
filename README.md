@@ -157,8 +157,28 @@ check-migration-snapshots:
 | Action        | Purpose                                                                    |
 | ------------- | -------------------------------------------------------------------------- |
 | `generate-go` | Generate Go code with retries and fail when the committed output is stale. |
-| `lint-go`     | Run `golangci-lint`, from a non-root module directory if needed.           |
+| `lint-go`     | Run `golangci-lint` and report reachable vulnerabilities (`govulncheck`).  |
 | `test-go`     | Run the workspace's Go tests with coverage through `gotestsum`.            |
+
+#### `lint-go`
+
+`lint-go` runs `golangci-lint` from the module directory, a non-root one if `working-directory`
+names it. When that directory holds a `govulncheck.mod`, the action then runs the `govulncheck` it
+pins. Each vulnerability the code reaches becomes a warning, which the daily CI digest collects from
+the default branch, and the full report goes to the run summary. The scan never fails the job. Its
+database changes without a commit, and each Go security release flags the standard library until
+Renovate moves the `go` directive, so a gate would turn every repository red at once.
+
+Adopt it with a tool-only modfile shaped like `golangci-lint.mod` and named after the repository's
+module. The last command runs the same scan locally:
+
+```bash
+printf 'module github.com/a-novel/service-example/govulncheck\n\ngo 1.27.0\n' > govulncheck.mod
+go get -modfile=govulncheck.mod -tool golang.org/x/vuln/cmd/govulncheck@v1.9.0
+go tool -modfile=govulncheck.mod govulncheck ./...
+```
+
+The `go-tools` Renovate preset keeps the pin current on a branch of its own.
 
 ### `node-actions`
 

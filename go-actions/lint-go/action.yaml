@@ -1,5 +1,7 @@
 name: lint go
-description: Run golangci-lint over the Go module.
+description: >
+  Run golangci-lint over the Go module, then report the vulnerabilities its code reaches when the
+  module pins govulncheck in govulncheck.mod. The report never fails the job.
 
 inputs:
   working-directory:
@@ -43,6 +45,36 @@ runs:
       with:
         version: ${{ steps.golangci-version.outputs.version }}
         working-directory: ${{ inputs.working-directory }}
+    # govulncheck.mod pins the scanner developers run locally, and a module without one skips it.
+    # The scan reports and never fails the job: its database changes without a commit, and each Go
+    # security release flags the standard library until Renovate moves the go directive, so a gate
+    # would turn every repository red at once.
+    - name: govulncheck
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "${WORKING_DIRECTORY:-.}"
+        if [ ! -f govulncheck.mod ]; then
+          echo "No govulncheck.mod, so the vulnerability scan is skipped."
+          exit 0
+        fi
+        report="$RUNNER_TEMP/govulncheck.txt"
+        rc=0
+        go tool -modfile=govulncheck.mod govulncheck ./... >"$report" 2>&1 || rc=$?
+        cat "$report"
+        printf '## govulncheck\n\n```\n%s\n```\n' "$(cat "$report")" >>"$GITHUB_STEP_SUMMARY"
+        # Exit code 3 marks vulnerabilities the code reaches, each listed under its own heading.
+        case "$rc" in
+          0) ;;
+          3)
+            sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9-]*\).*/\1/p' "$report" | while read -r id; do
+              echo "::warning title=govulncheck::$id is reachable from this module; see the job summary."
+            done
+            ;;
+          *) echo "::warning title=govulncheck::The scan did not run (exit $rc); see the job log." ;;
+        esac
     # Only pushes to the default branch save: other refs restore its cache, a merge-queue
     # branch's cache is unreachable once the branch is deleted, and a pull_request_target run
     # reports the base branch as its ref.

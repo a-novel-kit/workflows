@@ -176,7 +176,7 @@ test("Renovate pins third-party actions to their release commit and keeps the wo
 
 test("Renovate discovers tool modules and compose files while excluding unrelated formats", () => {
   const managerFiles = [
-    ["gomod", ["buf.mod", "tools/mockery.mod"], true],
+    ["gomod", ["buf.mod", "tools/mockery.mod", "govulncheck.mod"], true],
     ["gomod", ["models.mod"], false],
     ["docker-compose", ["builds/podman-compose.go.test.yaml", "compose.yml"], true],
     ["docker-compose", ["builds/database.apko.yaml"], false],
@@ -184,6 +184,14 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
   for (const [manager, files, expected] of managerFiles)
     for (const file of files)
       assert.equal(matches((goTools[manager] ?? service[manager]).managerFilePatterns, file), expected, file);
+  // Each tool modfile updates on its own branch, or its options would reach another modfile's.
+  const tools = goTools.gomod.managerFilePatterns[0].match(/\(\?:([^)]+)\)/)[1].split("|");
+  for (const tool of tools) {
+    const rule = [...goTools.packageRules, ...service.packageRules].find(
+      (r) => r.matchFileNames?.includes(`${tool}.mod`) && r.additionalBranchPrefix
+    );
+    assert.equal(rule?.additionalBranchPrefix, `${tool}-`, tool);
+  }
   const go = base.packageRules.find(
     (r) => r.groupName === "go toolchain" && r.matchManagers?.includes("gomod") && r.matchDepNames?.includes("go")
   );
