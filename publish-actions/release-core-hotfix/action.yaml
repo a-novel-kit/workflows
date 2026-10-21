@@ -89,6 +89,8 @@ runs:
         path: __hotfix
         fetch-depth: 0
         fetch-tags: true
+        # The steps before the push never see the release token.
+        persist-credentials: false
 
     - name: Setup node
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -210,7 +212,12 @@ runs:
           tag_refs+=("refs/tags/$t")
         done <<< "$tags"
 
-        git push --atomic origin "HEAD:refs/heads/$BRANCH" "${tag_refs[@]}"
+        # The checkout kept no credential, so the release token reaches git for this push alone, as the
+        # header actions/checkout would have written.
+        auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+        GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}" \
+          git push --atomic origin "HEAD:refs/heads/$BRANCH" "${tag_refs[@]}"
 
         # --latest=false keeps a patch to an old line from becoming the repo's "Latest" release over
         # a newer version. The tag already exists, so --target only records the line on the release,
