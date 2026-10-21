@@ -1,9 +1,9 @@
 name: approve-pr
 description: >
-  Approve a pull request as a GitHub App on behalf of a repository admin or maintainer, usually one
-  approving their own pull request. Self-approval skips review, so it stays an escape hatch for urgent
-  work or for a repository with no other reviewer. `require-role` refuses anyone below Maintain, and
-  `approve-bot` records the approval.
+  Approve a repository admin's own pull request as a GitHub App. Self-approval skips review, so it
+  stays an escape hatch for urgent work or for a repository with no other reviewer. `require-role`
+  refuses anyone but an admin, core included through its org role, the action refuses a pull request
+  someone else opened, and `approve-bot` records the approval.
 
 inputs:
   client_id:
@@ -45,10 +45,10 @@ runs:
 
     - uses: a-novel-kit/workflows/generic-actions/require-role@v1.67.1
       with:
-        roles: admin,maintain
+        roles: admin
 
-    # The token only writes the review. approve-bot reaches the pull request through the API, so it
-    # needs no checkout and no contents access.
+    # The token reads the author and writes the review. approve-bot reaches the pull request through
+    # the API, so it needs no checkout and no contents access.
     - name: Mint approval token
       id: token
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -58,6 +58,23 @@ runs:
         owner: ${{ github.repository_owner }}
         repositories: ${{ github.event.repository.name }}
         permission-pull-requests: write
+
+    # An admin approves only their own pull request. Anyone else's gets a review on GitHub. The check
+    # names the person who started this attempt, as require-role does, so a re-run is theirs.
+    - name: Require own pull request
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_URL: ${{ inputs.pull_request }}
+        ACTOR: ${{ github.triggering_actor }}
+      run: |
+        set -euo pipefail
+        author="$(gh pr view "$PR_URL" --json author --jq .author.login)"
+        if [ "$author" != "$ACTOR" ]; then
+          echo "::error::@${ACTOR} may approve only their own pull request; ${PR_URL} was opened by @${author}. Review it on GitHub instead."
+          exit 1
+        fi
 
     - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.67.1
       with:
