@@ -188,6 +188,20 @@ test("Renovate pins third-party actions to their release commit and keeps the wo
   assert.equal(preset("workflows").packageRules, undefined);
 });
 
+test("Renovate holds only dated releases, and security fixes skip the hold", () => {
+  const holds = base.packageRules.filter((r) => typeof r.minimumReleaseAge === "string");
+  assert.equal(holds.find((r) => r.matchDatasources?.includes("go")).minimumReleaseAge, "3 days");
+  // An undated release never clears a hold. Renovate has no date for node or golang on Docker Hub,
+  // whose anonymous tag listing stops at 1,000 tags, nor for the images and runners a workflow names.
+  assert(!holds.some((r) => r.matchDatasources?.includes("docker")));
+  assert.deepEqual(holds.find((r) => r.matchManagers?.includes("github-actions")).matchDepTypes, [
+    "action",
+    "workflow",
+  ]);
+  // The object merges into Renovate's default, whose `minimumReleaseAge: null` every alert update is forced to.
+  assert(!("minimumReleaseAge" in base.vulnerabilityAlerts));
+});
+
 test("Renovate discovers tool modules and compose files while excluding unrelated formats", () => {
   const managerFiles = [
     ["gomod", ["buf.mod", "tools/mockery.mod", "govulncheck.mod"], true],

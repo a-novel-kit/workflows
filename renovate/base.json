@@ -84,17 +84,23 @@
       "minimumReleaseAge": "1 hour"
     },
     {
-      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to npm registry releases (what pnpm installs from pnpm-lock.yaml, workspaces and catalogs, plus workflow pins annotated with datasource=npm) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install, and an annotated pin moves with its package. Other ecosystems (gomod, docker) aren't gated by pnpm, so they keep landing security patches without delay. Keep >= pnpm's value, its built-in 1-day default.",
+      "description": "Match pnpm's minimumReleaseAge supply-chain gate, scoped to npm registry releases (what pnpm installs from pnpm-lock.yaml, workspaces and catalogs, plus workflow pins annotated with datasource=npm) so it doesn't open/rebase PRs for packages too fresh to pass pnpm install, and an annotated pin moves with its package. Keep >= pnpm's value, its built-in 1-day default.",
       "matchDatasources": ["npm"],
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "Hold new third-party action releases for three days. Actions run beside the release App's key and the bots' keys, so the age bounds a compromised upstream release before it reaches one.",
+      "description": "Hold new third-party action releases for three days. Actions run beside the release App's key and the bots' keys, so the age bounds a compromised upstream release before it reaches one. The rule leaves out the images and runners a workflow names: Renovate has no release date for most of them, and an undated release never clears a hold.",
       "matchManagers": ["github-actions"],
+      "matchDepTypes": ["action", "workflow"],
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "First-party releases skip both release-age gates. Any workflow run of a repository can publish its packages, so the auto-approver merges a first-party version only with its release proof: an attestation over its bytes from the producer's release workflow at its tag, and an immutable Release from the org's release App. Waiting adds nothing to that proof and only holds the fleet a release behind. Each repo's pnpm-workspace.yaml exempts the same npm scopes from pnpm's own gate.",
+      "description": "Hold Go module releases for three days, like npm releases and actions: the modules compile into services that hold production keys. Security fixes skip the hold, because vulnerabilityAlerts keeps Renovate's default `minimumReleaseAge: null` and forces it onto every GitHub and OSV alert update. Renovate dates a GitHub-hosted module by its Release or tag, and otherwise by its commit time, which the publisher sets, so the hold bounds an ordinary release rather than a backdated one. Docker images get no hold: Docker Hub lists at most 1,000 tags to an anonymous client, so Renovate has no date for node or golang.",
+      "matchDatasources": ["go"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "First-party releases skip every release-age gate. Any workflow run of a repository can publish its packages, so the auto-approver merges a first-party version only with its release proof: an attestation over its bytes from the producer's release workflow at its tag, and an immutable Release from the org's release App. Waiting adds nothing to that proof and only holds the fleet a release behind. Each repo's pnpm-workspace.yaml exempts the same npm scopes from pnpm's own gate.",
       "matchPackageNames": ["/^(@|github\\.com\\/|ghcr\\.io\\/)?a-novel(-kit)?\\//"],
       "minimumReleaseAge": null
     },
