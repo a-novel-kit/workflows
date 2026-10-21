@@ -24,13 +24,25 @@ transitive fix lands without waiting for a direct dependency bump.
 
 Renovate selects a GitHub release no sooner than one hour after publication, which gives its binary
 assets and checksums time to finish uploading. The delay applies to every `github-releases`
-dependency, on top of Renovate's release-age buffer.
+dependency and to the release-file datasources below, on top of Renovate's release-age buffer.
 
 A third-party action runs from the commit its release named. Renovate pins each one as
 `owner/repo@<sha> # vX.Y.Z` and moves the commit and the version together, three days after the
 release. An update that keeps the version and changes the commit means the upstream tag was moved,
 so it waits for a reviewer instead of merging on its own. The `a-novel-kit/workflows` references
 stay on release tags.
+
+A workflow pin of a downloaded tool carries the SHA-256 of its release file on the line after
+`version`. The `custom.shellcheck` and `custom.hadolint` datasources read that file's digest from
+GitHub's release API, so one update moves the version and the hash. An update that keeps the version
+and changes the hash means someone replaced the release's files, so it waits for a reviewer, as do
+the database preset's pgBackRest and apko hashes.
+
+```yaml
+# renovate: datasource=custom.hadolint depName=hadolint/hadolint
+version: "2.15.1"
+sha256: "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507"
+```
 
 A first-party version skips both release-age gates. Any workflow run of a repository can publish its
 packages, so the auto-approver merges a first-party version only with its release proof: an

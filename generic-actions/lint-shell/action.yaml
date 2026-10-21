@@ -22,8 +22,15 @@ inputs:
     description: >
       shellcheck release tag, with or without the leading v. The caller pins it so Renovate bumps
       it per repo, with the annotation
-      `# renovate: datasource=github-releases depName=koalaman/shellcheck`. The pin keeps what the
+      `# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck`. The pin keeps what the
       gate accepts independent of the runner image.
+  sha256:
+    required: false
+    default: ""
+    description: >
+      SHA-256 of that release's `shellcheck-v<version>.linux.x86_64.tar.xz`, on the line right after
+      `version`, so Renovate moves both together. A download that does not match fails the step.
+      Empty installs the release unverified, with a warning; a later release requires it.
 
 runs:
   using: composite
@@ -32,6 +39,7 @@ runs:
       shell: bash
       env:
         SHELLCHECK_VERSION: ${{ inputs.version }}
+        SHELLCHECK_SHA256: ${{ inputs.sha256 }}
       run: |
         set -euo pipefail
         # The release tag and the archive name both carry the v, so the input works with or without it.
@@ -45,6 +53,15 @@ runs:
           "https://github.com/koalaman/shellcheck/releases/download/${v}/shellcheck-${v}.linux.x86_64.tar.xz" \
           -o "$tmp/shellcheck.tar.xz"; then
           echo "::error::failed to download shellcheck ${v} after 3 retries"
+          exit 1
+        fi
+
+        # The pin comes from the caller, never from the release, whose files and checksums an
+        # attacker holding the release can replace together.
+        if [ -z "$SHELLCHECK_SHA256" ]; then
+          echo "::warning::shellcheck ${v} installs unverified: pin its sha256 beside version."
+        elif ! echo "$SHELLCHECK_SHA256  $tmp/shellcheck.tar.xz" | sha256sum --check --quiet; then
+          echo "::error::shellcheck ${v} does not match the pinned sha256"
           exit 1
         fi
 

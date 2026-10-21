@@ -239,6 +239,24 @@ resolve the datasource:
     version: "8.30.1"
 ```
 
+A tool never trusts a checksum published beside its own release, since whoever can replace the
+release's files can replace that checksum too. `scan-secrets` builds gitleaks with the runner's Go,
+which checks the source against Go's checksum database, and `refresh-apko-locks` builds apko the same
+way. `lint-shell` and `lint-dockerfile` download a release binary, so the caller pins its SHA-256 on
+the line after `version`, and the base Renovate preset moves both together:
+
+```yaml
+- uses: a-novel-kit/workflows/generic-actions/lint-shell@v1.71.0
+  with:
+    # renovate: datasource=custom.shellcheck depName=koalaman/shellcheck
+    version: "0.11.0"
+    sha256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+```
+
+`lint-dockerfile` takes `datasource=custom.hadolint depName=hadolint/hadolint` and the SHA-256 of
+`hadolint-linux-x86_64`. A download that does not match its pin fails the step. A release whose files
+change under an unchanged version gets a Renovate pull request that waits for a reviewer.
+
 A repository that needs its own gitleaks allowlist passes `config`, which replaces the shipped
 baseline. gitleaks drops a base config's allowlists when another config extends it, so the repository
 copies `security-actions/scan-secrets/gitleaks.toml` and adds its entries.

@@ -25,7 +25,8 @@ inputs:
     description: >
       gitleaks release tag, with or without the leading v. The caller pins it so Renovate bumps it
       per repo, with the annotation
-      `# renovate: datasource=github-releases depName=gitleaks/gitleaks`.
+      `# renovate: datasource=github-releases depName=gitleaks/gitleaks`. The action builds that
+      version with the runner's Go, which checks the source against Go's checksum database.
 
 runs:
   using: composite
@@ -36,22 +37,14 @@ runs:
         GITLEAKS_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        # gitleaks tags its releases with a v and names the archive without one, so the input works
-        # either way. The binary runs directly, because gitleaks-action's free tier covers one repo
-        # per organization.
+        # go install builds the source that Go's checksum database recorded for this version, which
+        # replacing the release's files, checksums.txt included, or moving its tag cannot change.
+        # The build tag and version stamp match gitleaks' release archives. The binary runs
+        # directly, because gitleaks-action's free tier covers one repo per organization.
         v="${GITLEAKS_VERSION#v}"
-        tmp=$(mktemp -d)
-        # curl restarts a retried transfer from its first byte, so the archive lands in a file before
-        # tar reads it. `--retry-all-errors` also retries a transport-level reset (curl exit 35),
-        # which plain `--retry` leaves fatal.
-        if ! curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors \
-          "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" \
-          -o "$tmp/gitleaks.tar.gz"; then
-          echo "::error::failed to download gitleaks ${v} after 3 retries"
-          exit 1
-        fi
-        tar -xz -C /usr/local/bin -f "$tmp/gitleaks.tar.gz" gitleaks
-        rm -rf "$tmp"
+        GOBIN=/usr/local/bin go install -tags gore2regex \
+          -ldflags "-X=github.com/zricethezav/gitleaks/v8/version.Version=${v}" \
+          "github.com/zricethezav/gitleaks/v8@v${v}"
         gitleaks version
 
     - name: scan working tree

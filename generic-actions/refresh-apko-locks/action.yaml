@@ -23,7 +23,8 @@ inputs:
     description: >
       apko release that resolves the locks, such as "1.4.8". Pin it with a
       "# renovate: datasource=github-tags depName=chainguard-dev/apko" comment, so it moves with the
-      apko the builds use.
+      apko the builds use. The action builds that version with the runner's Go, which checks the
+      source against Go's checksum database.
   arch:
     required: false
     default: x86_64
@@ -42,18 +43,15 @@ runs:
         app_private_key: ${{ inputs.app_private_key }}
         client_id: ${{ inputs.client_id }}
 
+    # go install builds the source that Go's checksum database recorded for this version, which
+    # replacing the release's files, checksums.txt included, or moving its tag cannot change.
     - name: Install apko
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.bot.outputs.token }}
         VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-        cd "$RUNNER_TEMP"
-        gh release download "v$VERSION" --repo chainguard-dev/apko --clobber \
-          --pattern "apko_${VERSION}_linux_amd64.tar.gz" --pattern checksums.txt
-        grep " apko_${VERSION}_linux_amd64.tar.gz\$" checksums.txt | sha256sum -c -
-        tar -xzf "apko_${VERSION}_linux_amd64.tar.gz" --strip-components=1 "apko_${VERSION}_linux_amd64/apko"
+        GOBIN="$RUNNER_TEMP" go install "chainguard.dev/apko@v${VERSION#v}"
 
     - name: Refresh the locks
       id: refresh
