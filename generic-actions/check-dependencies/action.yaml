@@ -1,11 +1,11 @@
 name: check dependencies
 description: >
-  Hold a pull request that changes a dependency manifest (go.mod, a tool's .mod, go.work,
-  package.json, pnpm-workspace.yaml) until a reviewer adds the override label, so every dependency a
-  person adds, removes or bumps is acknowledged. Lockfiles only follow their manifests and pass. A
-  pull request whose author and every commit are bots passes, and so does a merge-queue group, whose
-  pull requests each passed on their own. The label approves the head it was added on, and a push
-  removes it.
+  Hold a pull request that changes a dependency manifest until a reviewer adds the override label,
+  so a reviewer acknowledges every dependency a person adds, removes or bumps. The manifests are
+  go.mod, a tool's .mod, go.work, package.json and pnpm-workspace.yaml. Lockfiles only follow their
+  manifests and pass. A pull request whose author and every commit are bots passes, and so does a
+  merge-queue group, whose pull requests each passed on their own. The label approves the head it
+  was added on, and a push removes it.
 
 inputs:
   override_label:

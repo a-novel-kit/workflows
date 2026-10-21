@@ -22,10 +22,10 @@ inputs:
   client_id:
     required: true
     description: >
-      Client ID of a GitHub App installed on the org. The action mints three tokens from it: an
-      org-wide read token for issues, pull requests and contents, an org-wide Actions write token
-      that dispatches and polls each `release.yaml`, and an Issues write token scoped to
-      `planning_repo` for the receipt.
+      Client ID of a GitHub App installed on the org. The action mints three tokens from it. An
+      org-wide read token reads issues, pull requests and contents. An org-wide Actions write token
+      dispatches and polls each `release.yaml`. An Issues write token scoped to `planning_repo`
+      writes the receipt.
   app_private_key:
     required: true
     description: Private key (PEM) of that App.
@@ -58,9 +58,9 @@ inputs:
     default: ""
     description: >
       Org-level halt, passed in by the caller because a composite action cannot read the `vars`
-      context. The action runs only when the value, lowercased and stripped of whitespace, is empty,
-      0, off, false, no or disabled. Any other value engages the halt, and the action fails in its
-      first step, before the role check or any token mint.
+      context. The action runs only on an explicit off value: empty, 0, off, false, no or disabled,
+      compared lowercased with whitespace removed. Any other value engages the halt, and the action
+      fails in its first step, before the role check or any token mint.
 
 runs:
   using: composite

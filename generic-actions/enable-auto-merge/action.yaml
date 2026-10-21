@@ -40,11 +40,11 @@ inputs:
     required: false
     default: ""
     description: >
-      Org-wide halt switch. The action runs only when the value, lowercased and stripped of
-      whitespace, is empty, 0, off, false, no or disabled. Any other value halts it, so a mistyped
-      value fails safe. A halt arms nothing and exits 0. Auto-merge already armed on a pull request
-      stays armed, and merge-gate's failing check blocks that merge once the next event or reconcile
-      sweep posts it.
+      Org-wide halt switch. The action runs only on an explicit off value: empty, 0, off, false, no
+      or disabled, compared lowercased with whitespace removed. Any other value halts it, so a
+      mistyped value fails safe. A halt arms nothing and exits 0. Auto-merge already armed on a pull
+      request stays armed, and merge-gate's failing check blocks that merge once the next event or
+      reconcile sweep posts it.
 
 runs:
   using: composite

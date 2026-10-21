@@ -1,11 +1,12 @@
 name: verify release proof
 description: >
   Check that every first-party version a dependency bot's pull request adds was built by a release,
-  for the commit the caller approves. A version is an npm package of the a-novel or a-novel-kit scope
-  that a pnpm lockfile adds, or a ghcr.io image of those orgs pinned by a release tag. Its release proof
-  is an attestation over its exact bytes, signed by the producer's release.yaml at the version's tag on
-  a GitHub-hosted runner, and an immutable Release of that tag that the org's release App published.
-  Any workflow run of a repository can publish its packages, while only a release makes both.
+  for the commit the caller approves. A version is an npm package of the a-novel or a-novel-kit
+  scope that a pnpm lockfile adds, or a ghcr.io image of those orgs pinned by a release tag. Its
+  release proof has two parts. The producer's release.yaml signed an attestation over its exact
+  bytes, at the version's tag, on a GitHub-hosted runner. The org's release App published an
+  immutable Release of that tag. Any workflow run of a repository can publish its packages, while
+  only a release makes both.
 
 inputs:
   github_token:

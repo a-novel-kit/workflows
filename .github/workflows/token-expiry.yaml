@@ -1,5 +1,5 @@
 # Reusable daily watcher of an organization's fine-grained personal access tokens. It reads their
-# metadata through the org PAT endpoint, never a token value, and posts to the token-expiry Discord
+# metadata through the org PAT endpoint, never a token value. It posts to the token-expiry Discord
 # channel only when a token crosses a milestone of the ping policy below, so quiet days stay silent.
 #
 # Each post @mentions the one configured admin, who triages, and names the token's owner in the

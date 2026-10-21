@@ -71,12 +71,13 @@ inputs:
     required: false
     default: ""
     description: >
-      Organization-wide halt. The gate runs only when the value, lowercased with whitespace removed,
-      is empty, `0`, `off`, `false`, `no` or `disabled`. Any other value halts, so a mistyped value
-      halts too. A halted gate posts a `failure` hold on every pull request and merge group, before
-      any label or membership read. A composite action cannot read the `vars` context, so the caller
-      passes the switch in as an input. Engaging the switch leaves posted checks alone. A pull request
-      that already passed can still merge through auto-merge until the next run on it posts the hold.
+      Organization-wide halt. The gate runs only on an explicit off value: empty, `0`, `off`,
+      `false`, `no` or `disabled`, compared lowercased with whitespace removed. Any other value
+      halts, so a mistyped value halts too. A halted gate posts a `failure` hold on every pull
+      request and merge group, before any label or membership read. A composite action cannot read
+      the `vars` context, so the caller passes the switch in as an input. Engaging the switch leaves
+      posted checks alone. A pull request that already passed can still merge through auto-merge
+      until the next run on it posts the hold.
   snapshot_dry_run:
     required: false
     default: "false"

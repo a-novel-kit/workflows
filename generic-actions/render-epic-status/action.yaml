@@ -55,10 +55,10 @@ inputs:
     required: false
     default: ""
     description: >
-      Organization-wide halt. The action runs only when the value, lowercased with whitespace
-      removed, is empty, `0`, `off`, `false`, `no` or `disabled`. Any other value halts it, so a
-      mistyped value halts too. A halted run edits no Epic and succeeds. A composite action cannot
-      read the `vars` context, so the caller passes the switch in as an input.
+      Organization-wide halt. The action runs only on an explicit off value: empty, `0`, `off`,
+      `false`, `no` or `disabled`, compared lowercased with whitespace removed. Any other value
+      halts it, so a mistyped value halts too. A halted run edits no Epic and succeeds. A composite
+      action cannot read the `vars` context, so the caller passes the switch in as an input.
 
 runs:
   using: composite

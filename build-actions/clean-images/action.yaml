@@ -1,10 +1,11 @@
 name: clean images
 description: >
-  Delete a container package's images once the branch or pull request that built them is gone: untagged
-  builds and tags of closed pull requests, merge-queue builds, old branch tags, and the default branch's
-  untagged builds from before the last minor release. Release tags, the default branch's tag and its
-  builds since that release, and open pull requests' tags and builds stay, with the manifests and
-  attestations they reference. Run it for one package at a time.
+  Delete a container package's images once the branch or pull request that built them is gone. The
+  sweep takes untagged builds and tags of closed pull requests, merge-queue builds, old branch tags,
+  and the default branch's untagged builds from before the last minor release. These stay: release
+  tags, the default branch's tag and its builds since that release, and the tags and builds of open
+  pull requests. So do the manifests and attestations they reference. Run it for one package at a
+  time.
 
 inputs:
   package:

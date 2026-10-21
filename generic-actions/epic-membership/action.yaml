@@ -216,8 +216,8 @@ runs:
         # Retry transient GraphQL failures. An unresolvable set fails the action with the underlying
         # error, and the caller chooses between holding and passing.
         fetch() { # $1=cursor  → prints the response JSON on success, nothing on failure
-          # Both variables are GraphQL strings, so they pass with -f, which skips the type coercion
-          # -F applies to true, false, numbers and a leading @.
+          # Both variables are GraphQL strings, so they pass with -f. Only -F coerces true, false,
+          # numbers and a leading @.
           local args=(-f query="$q" -f q="$search")
           [ -n "${1:-}" ] && args+=(-f cursor="$1")
           local data
