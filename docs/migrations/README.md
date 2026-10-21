@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                   |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [v1.68.0](./v1.68.0.md) | `publish-actions/npm` attests its tarballs; its job grants `attestations: write` and `id-token: write`.                   |
 | [v1.64.0](./v1.64.0.md) | `test-playwright` compares a Vitest browser project's screenshots against Drive with `runner: vitest`.                    |
 | [v1.63.0](./v1.63.0.md) | The database preset tracks apko as a checksum-verified release download; replace `go install` in database images.         |
 | [v1.60.0](./v1.60.0.md) | No bot write bypasses the release rulesets: audit opens a pull request; `notify-pr-run` drops `pull_requests_webhook`.    |
