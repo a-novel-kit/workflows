@@ -351,7 +351,26 @@ test("notify-pr describes status, reviews, links and dates beyond the headline",
   );
   const plain = notify(t, "pull_request_target", prEvent("opened"), pullRequest()).outputs;
   const plainDetails = ["Status: open · Review: no reviewer", "Opened <t:1791799200:R> by kushuh"];
-  assert.deepEqual(plain.description.split("\n").slice(1), plainDetails);
+  assert.deepEqual(plain.description.split("\n").slice(1, 3), plainDetails);
+});
+
+test("notify-pr gives a pull request waiting on a reviewer the commands to take its review or self-approve it", (t) => {
+  const waiting = notify(t, "pull_request_target", prEvent("opened"), pullRequest()).outputs;
+  assert.deepEqual(waiting.description.split("\n").slice(3), [
+    "Assign yourself as reviewer:",
+    "```sh",
+    'gh pr edit 7 -R a-novel/service-authentication --add-reviewer "$(gh api user -q .login)"',
+    "```",
+    "Self-approve your own pull request (repository admins and core only):",
+    "```sh",
+    "gh workflow run approve-pr.yaml -R a-novel/service-authentication -f pull_request=7",
+    "```",
+  ]);
+  const requested = { reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", ...dada } }] } };
+  const event = prEvent("ready_for_review", { sender: { id: 1 } });
+  const reviewing = notify(t, "pull_request_target", event, pullRequest(requested)).outputs;
+  assert.equal(reviewing.color, "started");
+  assert(!reviewing.description.includes("```"), "a pull request with a reviewer carries no commands");
 });
 
 test("notify-pr flags a bot's failing pull request once, then its refails, merge or close", (t) => {

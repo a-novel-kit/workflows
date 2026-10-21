@@ -252,7 +252,7 @@ jobs:
                 else null end
               elif $kind == "opened" or $kind == "ready_for_review" or
                 ($kind == "review_request_removed" and ($settling | not)) then
-                if $unreviewed then {color: "upcoming", headline: "**Needs a reviewer**", role: true}
+                if $unreviewed then {color: "upcoming", headline: "**Needs a reviewer**", role: true, commands: true}
                 elif $kind == "review_request_removed" then
                   {color: "cancelled",
                    headline: "**Review request removed** for \([$event.requested_reviewer // $event.requested_team] | logins)"}
@@ -307,12 +307,20 @@ jobs:
                 ($run | select($kind == "failed") |
                   "[\(.name) #\(.run_number)](\(.html_url)) failed\(if $jobs != [] then ": \($jobs | join(", "))" else "" end)")
               ] as $details
+            # A pull request waiting on a reviewer carries the commands that take its review or, for an
+            # admin who opened it, approve it through approve-pr.
+            | (if $post.commands then [
+                "Assign yourself as reviewer:",
+                "```sh\ngh pr edit \($pr.number) -R \($repo) --add-reviewer \"$(gh api user -q .login)\"\n```",
+                "Self-approve your own pull request (repository admins and core only):",
+                "```sh\ngh workflow run approve-pr.yaml -R \($repo) -f pull_request=\($pr.number)\n```"
+              ] else [] end) as $commands
             | {
                 title: "\($repo)#\($pr.number) · \($pr.title)",
                 url: $pr.url,
                 channel: (if $bot then "dependencies" else "reviews" end),
                 color: ($post.color // ""),
-                description: (if $post then [$post.headline] + $details | join("\n") else "" end),
+                description: (if $post then [$post.headline] + $details + $commands | join("\n") else "" end),
                 users: ($post.users // [] | join(" ")),
                 role: ($post.role // false)
               }
