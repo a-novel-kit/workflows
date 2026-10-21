@@ -89,7 +89,7 @@ move a tag.
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | `approve-bot`            | Approve a PR as the token's identity, optionally bound to one head commit; it applies no policy of its own.      |
 | `approve-playwright`     | Bind screenshot approval to the PR head and rerun the browser check that a label change left stale.              |
-| `approve-pr`             | Admin or maintainer escape hatch: approve a PR as the [Agent] App.                                               |
+| `approve-pr`             | Admin escape hatch: approve the dispatching admin's own PR as the [Agent] App.                                   |
 | `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                |
 | `archive-board-items`    | Archive the board items in a terminal Status, or whose issue is closed, and close their issues.                  |
 | `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                          |
