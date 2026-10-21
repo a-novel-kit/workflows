@@ -26,10 +26,10 @@
     },
     {
       "customType": "regex",
-      "description": "Registry-qualified Docker images pinned as repository-local composite-action input defaults.",
+      "description": "Registry-qualified Docker images pinned as repository-local composite-action input defaults. A digest written after the tag moves with it.",
       "managerFilePatterns": ["/^\\.github/actions/.+/action\\.ya?ml$/"],
       "matchStrings": [
-        "(?:^|\\r?\\n)[ \\t]+default:\\s*[\"']?(?<depName>[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._-]+)+):(?<currentValue>[^\\s\"'/:]+)[\"']?"
+        "(?:^|\\r?\\n)[ \\t]+default:\\s*[\"']?(?<depName>[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._-]+)+):(?<currentValue>[^\\s\"'/:@]+)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?[\"']?"
       ],
       "datasourceTemplate": "docker",
       "versioningTemplate": "docker"
@@ -78,9 +78,15 @@
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "First-party releases skip both release-age gates. They come from the org's own release workflows behind the protected release environment, so waiting guards against nothing and only holds the fleet a release behind; none ships assets that finish publishing late. Each repo's pnpm-workspace.yaml exempts the same npm scopes from pnpm's own gate.",
+      "description": "First-party releases skip both release-age gates. Any workflow run of a repository can publish its packages, so the auto-approver merges a first-party version only with its release proof: an attestation over its bytes from the producer's release workflow at its tag, and an immutable Release from the org's release App. Waiting adds nothing to that proof and only holds the fleet a release behind. Each repo's pnpm-workspace.yaml exempts the same npm scopes from pnpm's own gate.",
       "matchPackageNames": ["/^(@|github\\.com\\/|ghcr\\.io\\/)?a-novel(-kit)?\\//"],
       "minimumReleaseAge": null
+    },
+    {
+      "description": "Pin first-party images by digest. A moved tag then changes nothing a consumer runs, and each image update names the digest whose release proof the auto-approver checks. A composite-action input default gets its digest by hand once; its manager keeps it from then on.",
+      "matchManagers": ["docker-compose", "dockerfile"],
+      "matchPackageNames": ["/^ghcr\\.io\\/a-novel(-kit)?\\//"],
+      "pinDigests": true
     },
     {
       "description": "Bump the main go directive, grouped with the golang base image, and only to a release that image publishes. go.dev lists a Go release a day or more before Docker Hub's alpine tag exists, and a directive ahead of the image fails every build under the image's GOTOOLCHAIN=local, so the directive reads its versions from the alpine tags. Tool modfiles keep their existing compatibility floor until a tool dependency requires a newer Go release.",

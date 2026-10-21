@@ -48,15 +48,31 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
     default: ghcr.io/a-novel/service-json-keys/database:v2.4.1
   grpc_image:
     default: "ghcr.io/a-novel/service-json-keys/standalone-grpc:v2.4.1"
+  pinned_image:
+    default: ghcr.io/a-novel/service-authentication/database:v2.14.0@sha256:${"c".repeat(64)}
   local_image:
     default: service-under-test:ci
   callback:
     default: https://example.test:8443/path`;
   assert.deepEqual(
-    extract(images, defaults).map(({ depName, currentValue }) => ({ depName, currentValue })),
+    extract(images, defaults).map(({ depName, currentValue, currentDigest }) => ({
+      depName,
+      currentValue,
+      currentDigest,
+    })),
     [
-      { depName: "ghcr.io/a-novel/service-json-keys/database", currentValue: "v2.4.1" },
-      { depName: "ghcr.io/a-novel/service-json-keys/standalone-grpc", currentValue: "v2.4.1" },
+      { depName: "ghcr.io/a-novel/service-json-keys/database", currentValue: "v2.4.1", currentDigest: undefined },
+      {
+        depName: "ghcr.io/a-novel/service-json-keys/standalone-grpc",
+        currentValue: "v2.4.1",
+        currentDigest: undefined,
+      },
+      // A digest written after the tag moves with it.
+      {
+        depName: "ghcr.io/a-novel/service-authentication/database",
+        currentValue: "v2.14.0",
+        currentDigest: `sha256:${"c".repeat(64)}`,
+      },
     ]
   );
   const databasePins = [
@@ -137,6 +153,13 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
     "evil/a-novel-kit/workflows",
   ];
   for (const name of lookalikes) assert(!matches(base.packageRules[exempt].matchPackageNames, name), name);
+  // First-party images are pinned by digest wherever the manager adds one, so the approver checks it.
+  const pinned = base.packageRules.find((r) => r.pinDigests === true);
+  assert.deepEqual(pinned.matchManagers, ["docker-compose", "dockerfile"]);
+  for (const name of ["ghcr.io/a-novel/service-json-keys/database", "ghcr.io/a-novel-kit/tools"])
+    assert(matches(pinned.matchPackageNames, name), name);
+  for (const name of ["ghcr.io/zizmorcore/zizmor", "ghcr.io/a-novelist/x", "a-novel-kit/workflows"])
+    assert(!matches(pinned.matchPackageNames, name), name);
 });
 
 test("Renovate pins third-party actions to their release commit and keeps the workflows actions on tags", () => {

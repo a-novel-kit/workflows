@@ -32,6 +32,13 @@ release. An update that keeps the version and changes the commit means the upstr
 so it waits for a reviewer instead of merging on its own. The `a-novel-kit/workflows` references
 stay on release tags.
 
+A first-party version skips both release-age gates. Any workflow run of a repository can publish its
+packages, so the auto-approver merges a first-party version only with its release proof: an
+attestation over its bytes from the producer's `release.yaml` at the version's tag, and an immutable
+Release from the org's release App. Compose files and Dockerfiles pin first-party images by digest,
+so a moved tag changes nothing a consumer runs. A composite-action input default gets its digest by
+hand once, and its manager then moves the digest with the tag.
+
 Each service's Go module, npm client and images update in one PR, because a module must ship with
 its matching images. Renovate runs every artifact update in a grouped branch with the configuration
 of its first upgrade by name, usually an image, so these groups carry both `go mod tidy` and
