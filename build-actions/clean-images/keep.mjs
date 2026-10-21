@@ -24,8 +24,12 @@ export class Client {
 
   async fetch(url, { headers, method = "GET", missing = false }) {
     const response = await fetch(url, { method, headers, signal: AbortSignal.timeout(60_000) });
-    if (missing && response.status === 404) return null;
-    if (!response.ok) throw new Error(`${method} ${url} answered HTTP ${response.status}`);
+    if (!response.ok) {
+      // An unread body holds its connection open, and a sweep reads on past a 404 or a failed origin.
+      await response.body?.cancel();
+      if (missing && response.status === 404) return null;
+      throw new Error(`${method} ${url} answered HTTP ${response.status}`);
+    }
     const text = await response.text();
     return text ? JSON.parse(text) : {};
   }

@@ -150,9 +150,16 @@ function stub(w, { versions, tagged = [] }) {
   return w.write(
     "fetch.mjs",
     `
-    import { appendFileSync } from "node:fs";
+    import { appendFileSync, writeFileSync } from "node:fs";
     const versions = ${JSON.stringify(versions)}, tagged = ${JSON.stringify(tagged)};
-    const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+    // An unread error body holds its connection open, so the run must consume every one.
+    const failed = [];
+    process.on("exit", () => writeFileSync("unread", String(failed.filter((r) => !r.bodyUsed).length)));
+    const json = (body, status = 200) => {
+      const response = new Response(JSON.stringify(body), { status });
+      if (!response.ok) failed.push(response);
+      return response;
+    };
     globalThis.fetch = async (url, { method = "GET" } = {}) => {
       appendFileSync("requests", method + " " + url + "\\n");
       const page = Number(new URL(url).searchParams.get("page") ?? 1);
@@ -277,6 +284,7 @@ test("closing a pull request deletes only its single-tagged image, unless rehear
       deleted,
       `pr-${pull} dry=${dryRun}`
     );
+    assert.equal(w.read("unread"), "0", `pr-${pull} leaves an error body unread`);
     // A package without the tag is never listed.
     assert.equal(
       requests.some((r) => r.includes("/versions")),
