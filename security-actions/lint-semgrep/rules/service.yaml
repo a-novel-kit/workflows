@@ -13,15 +13,18 @@ rules:
     severity: ERROR
     message: >-
       $M takes a context but never opens an otel span. Every function in the
-      internal layers that receives an explicit context is a step in the trace.
-      A function that skips the span hides its work and folds its latency into
-      the caller. Open one with
+      dao, core and handlers layers that receives an explicit context is a step
+      in the trace. A function that skips the span hides its work and folds its
+      latency into the caller. Open one with
       `ctx, span := otel.Tracer().Start(ctx, "<layer>.<Operation>")`.
     paths:
-      # pkg/go holds a generated client and its mocks, which are not ours to
-      # instrument.
+      # internal/lib is tooling rather than a layer: the layer that calls it
+      # opens the span and reports its errors. pkg/go holds a generated client
+      # and its mocks, which are not ours to instrument.
       include:
-        - "**/internal/"
+        - "**/internal/core/"
+        - "**/internal/dao/"
+        - "**/internal/handlers/"
       exclude:
         - "*_test.go"
         - "**/mocks/"
