@@ -43,7 +43,7 @@ runs:
             ;;
         esac
 
-    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.67.2
+    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.68.0
       with:
         roles: admin
 
@@ -76,7 +76,7 @@ runs:
           exit 1
         fi
 
-    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.67.2
+    - uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.68.0
       with:
         pull_request: ${{ inputs.pull_request }}
         github_token: ${{ steps.token.outputs.token }}
