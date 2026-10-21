@@ -8,6 +8,9 @@ name: auto-approve-dependabot (reusable)
 # An update younger than its minimumReleaseAge carries a pending `renovate/stability-days` status,
 # which no ruleset requires. The caller re-runs the engine when that status turns green. A `status`
 # event carries no pull request, so the job resolves the pull request from the commit.
+#
+# It also approves a first-party package or image only with its release proof. Any workflow run of a
+# repository can publish its packages, so an update to a version no release built waits for a person.
 on:
   workflow_call:
     inputs:
@@ -52,9 +55,13 @@ jobs:
       github.event_name == 'status' ||
       github.event.pull_request.user.login == inputs.dependency_bot_login ||
       github.event.pull_request.user.login == inputs.dependabot_security_login
-    # The default token reads commit statuses, which the App cannot. Every other call uses the App.
+    # The default token makes the reads the App cannot: commit statuses, attestations and GitHub
+    # Packages tarballs, with the diff they belong to. Every write uses the App.
     permissions:
       statuses: read
+      contents: read
+      attestations: read
+      packages: read
     steps:
       # The App approves because the workflow token's review does not count toward the required
       # approval.
@@ -128,11 +135,20 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Verify first-party release proofs
+        id: proof
+        if: ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
+        uses: a-novel-kit/workflows/generic-actions/verify-release-proof@v1.67.2
+        with:
+          github_token: ${{ github.token }}
+          pull_request: ${{ steps.pr.outputs.url }}
+          head_sha: ${{ steps.pr.outputs.sha }}
+
       # Strict mode defers to Renovate's own auto-merge choice, so an update Renovate leaves to
       # review, and any moved tag, waits for a person.
       - name: Classify the change
         id: classify
-        if: ${{ inputs.strict && steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
+        if: ${{ inputs.strict && steps.proof.outputs.verified == 'true' }}
         uses: a-novel-kit/workflows/generic-actions/classify-bot-change@v1.67.2
         with:
           github_token: ${{ steps.token.outputs.token }}
@@ -142,32 +158,25 @@ jobs:
 
       - name: Approve
         if: >-
-          ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' &&
-          (!inputs.strict || steps.classify.outputs.decision == 'pin' ||
-          steps.classify.outputs.decision == 'renovate') }}
+          ${{ steps.proof.outputs.verified == 'true' && (!inputs.strict ||
+          steps.classify.outputs.decision == 'pin' || steps.classify.outputs.decision == 'renovate') }}
         uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.67.2
         with:
           pull_request: ${{ steps.pr.outputs.url }}
           github_token: ${{ steps.token.outputs.token }}
-          # Strict mode approves the classified commit, so a later push needs its own approval.
-          head_sha: ${{ inputs.strict && steps.pr.outputs.sha || '' }}
+          # The approval names the checked commit, so a later push needs its own.
+          head_sha: ${{ steps.pr.outputs.sha }}
 
       # Auto-merge puts the approved pull request in the merge queue, which re-validates the required
       # checks and owns the merge method. `--squash` is the org's only merge method and serves a
       # repository with no queue. In strict mode, a Renovate update keeps the auto-merge Renovate
       # enabled, so the step arms only a release pin.
       - name: Enable auto-merge
-        if: >-
-          ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' &&
-          (!inputs.strict || steps.classify.outputs.decision == 'pin') }}
+        if: ${{ steps.proof.outputs.verified == 'true' && (!inputs.strict || steps.classify.outputs.decision == 'pin') }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ steps.pr.outputs.url }}
-          SHA: ${{ inputs.strict && steps.pr.outputs.sha || '' }}
+          SHA: ${{ steps.pr.outputs.sha }}
         run: |
           set -euo pipefail
-          if [ -z "$SHA" ]; then
-            gh pr merge "$PR" --auto --squash
-          else
-            gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
-          fi
+          gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"

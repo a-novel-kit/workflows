@@ -121,6 +121,7 @@ move a tag.
 | `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                           |
 | `review-gate`            | Required check: a maintainer or admin approved the head and applied every privileged label last.                 |
 | `rollup-board`           | Roll an Epic's Status and Start date up from its children.                                                       |
+| `verify-release-proof`   | Pass a bot PR only when a release built every first-party package and image version it adds.                     |
 
 `check-append-only` needs the full base history. It rejects every change except additions under the
 configured path, and the `append-only-override` PR label is the reviewed exception. The label approves

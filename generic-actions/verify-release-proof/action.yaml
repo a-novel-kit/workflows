@@ -1,0 +1,44 @@
+name: verify release proof
+description: >
+  Check that every first-party version a dependency bot's pull request adds was built by a release,
+  for the commit the caller approves. A version is an npm package of the a-novel or a-novel-kit scope
+  that a pnpm lockfile adds, or a ghcr.io image of those orgs pinned by a release tag. Its release proof
+  is an attestation over its exact bytes, signed by the producer's release.yaml at the version's tag on
+  a GitHub-hosted runner, and an immutable Release of that tag that the org's release App published.
+  Any workflow run of a repository can publish its packages, while only a release makes both.
+
+inputs:
+  github_token:
+    required: true
+    description: >
+      Token that reads the calling repository's pull request and files, attestations, Releases and
+      GitHub Packages tarballs: contents, attestations and packages read.
+  pull_request:
+    required: true
+    description: URL or number of a pull request in the calling repository.
+  head_sha:
+    required: true
+    description: >
+      Commit the caller approves. Its own diff against the base is checked, so the check and the
+      approval name the same commit whatever the branch does meanwhile.
+
+outputs:
+  verified:
+    description: '"true" when every first-party version the pull request adds carries its release proof.'
+    value: ${{ steps.verify.outputs.verified }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify the release proofs
+      id: verify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPOSITORY: ${{ github.repository }}
+        PULL_REQUEST: ${{ inputs.pull_request }}
+        HEAD_SHA: ${{ inputs.head_sha }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        node "$ACTION_PATH/verify.mjs"
