@@ -35,12 +35,11 @@ inputs:
       `# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck`. The pin keeps what the
       gate accepts independent of the runner image.
   sha256:
-    required: false
-    default: ""
+    required: true
     description: >
       SHA-256 of that release's `shellcheck-v<version>.linux.x86_64.tar.xz`, on the line right after
-      `version`, so Renovate moves both together. A download that does not match fails the step.
-      Empty installs the release unverified, with a warning; a later release requires it.
+      `version`, so Renovate moves both together. A missing pin or a download that does not match
+      fails the step.
 
 runs:
   using: composite
@@ -69,7 +68,8 @@ runs:
         # The pin comes from the caller, never from the release, whose files and checksums an
         # attacker holding the release can replace together.
         if [ -z "$SHELLCHECK_SHA256" ]; then
-          echo "::warning::shellcheck ${v} installs unverified: pin its sha256 beside version."
+          echo "::error::shellcheck ${v} has no pinned sha256: pin it beside version."
+          exit 1
         elif ! echo "$SHELLCHECK_SHA256  $tmp/shellcheck.tar.xz" | sha256sum --check --quiet; then
           echo "::error::shellcheck ${v} does not match the pinned sha256"
           exit 1
