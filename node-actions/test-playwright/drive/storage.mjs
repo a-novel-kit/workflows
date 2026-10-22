@@ -6,9 +6,8 @@ import { appendFile, lstat, mkdir, readdir, readFile, stat, unlink, writeFile } 
 import { join, posix } from "node:path";
 import { buffer } from "node:stream/consumers";
 import { pipeline } from "node:stream/promises";
-import { setTimeout } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { Failure, GitHub, runCli, testedHead } from "./common.mjs";
+import { Failure, GitHub, backoff, runCli, testedHead } from "./common.mjs";
 
 export const PROTOCOL = "playwright-v1";
 export const CHUNK = 16 * 1024 * 1024;
@@ -17,15 +16,6 @@ const API = "https://www.googleapis.com/drive/v3/files";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 // Drive reports rate limits as HTTP 403 or 429 with one of these reasons, and documents them as retryable.
 const RATE_LIMITS = ["rateLimitExceeded", "userRateLimitExceeded"];
-
-/**
- * Wait before retry n as Google documents: 2^n seconds plus up to a second of jitter, at most 32 seconds.
- *
- * The jitter spreads out retries from concurrent jobs, which a shared rate limit refuses together.
- */
-function backoff(n) {
-  return setTimeout(Math.min(2 ** n * 1000 + Math.random() * 1000, 32_000));
-}
 
 /** Whether a failed Drive response may succeed when retried after a backoff. */
 function transient({ status, reason }) {
