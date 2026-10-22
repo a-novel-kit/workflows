@@ -49,6 +49,8 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        # Any proxy error falls back to the origin; Go's checksum database still verifies the source.
+        GOPROXY: "https://proxy.golang.org|direct"
       run: |
         set -euo pipefail
         GOBIN="$RUNNER_TEMP" go install "chainguard.dev/apko@v${VERSION#v}"

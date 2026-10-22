@@ -35,6 +35,8 @@ runs:
       shell: bash
       env:
         GITLEAKS_VERSION: ${{ inputs.version }}
+        # Any proxy error falls back to the origin; Go's checksum database still verifies the source.
+        GOPROXY: "https://proxy.golang.org|direct"
       run: |
         set -euo pipefail
         # go install builds the source that Go's checksum database recorded for this version, which
