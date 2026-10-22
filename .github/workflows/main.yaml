@@ -123,7 +123,7 @@ jobs:
         with:
           config: .github/zizmor.yml
           # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
-          version: "1.31.1"
+          version: "1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9"
 
   # Runs this branch's scan with the shipped baseline.
   scan-secrets:
