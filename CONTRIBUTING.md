@@ -69,12 +69,14 @@ podman run --rm -v "$PWD:$PWD:z" -w "$PWD" -e PNPM="$pnpm" \
 
 `pnpm lint` checks formatting and that no composite manifest names a context it cannot read. CI also
 audits the workflows with zizmor (`lint-workflows`) and shellchecks the Bash every run block ships
-(`lint-shell`), which extracts each block into its own file first:
+(`lint-shell` with `run_steps`), which extracts each block into its own file first. Its extraction
+step needs `yq` v4:
 
 ```bash
-shell_dir="$(mktemp -d)"
-node .github/scripts/extract-shell.mjs "$shell_dir"
-shellcheck "$shell_dir"/*.sh
+tmp="$(mktemp -d)"
+RUN_STEPS='*-actions/*/action.yaml .github/workflows/*.yaml' RUNNER_TEMP="$tmp" GITHUB_OUTPUT="$tmp/output" \
+  bash -c "$(yq '.runs.steps[] | select(.name == "extract run steps") | .run' generic-actions/lint-shell/action.yaml)"
+shellcheck "$tmp"/run-steps.*/*.sh
 ```
 
 `tests/helpers.mjs` reads run blocks from the parsed YAML and gives each test an isolated workspace and
