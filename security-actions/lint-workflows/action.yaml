@@ -24,8 +24,8 @@ inputs:
     description: >
       zizmor image tag and digest, as `<tag>@sha256:<digest>`. The caller pins both so Renovate bumps
       them together per repo, with the annotation
-      `# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor`. A tag alone runs whatever image the tag names,
-      with a warning; a later release requires the digest.
+      `# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor`. A tag alone fails the step: it would run
+      whatever image the tag names.
 
 runs:
   using: composite
@@ -56,7 +56,8 @@ runs:
         fi
 
         if [[ "$ZIZMOR_VERSION" != *@sha256:* ]]; then
-          echo "::warning::zizmor ${ZIZMOR_VERSION} runs by tag alone: pin its digest as <tag>@sha256:<digest>."
+          echo "::error::zizmor ${ZIZMOR_VERSION} has no digest: pin it as <tag>@sha256:<digest>."
+          exit 1
         fi
 
         node "$ACTION_PATH/../run-scan.mjs" zizmor docker run --rm \

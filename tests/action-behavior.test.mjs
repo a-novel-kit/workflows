@@ -37,9 +37,15 @@ function findingOutcomes(code) {
 }
 
 const scanners = [
-  ["lint-semgrep", "semgrep", "docker", { RULESET: "service", SEMGREP_VERSION: "test" }, [1]],
+  ["lint-semgrep", "semgrep", "docker", { RULESET: "service", SEMGREP_VERSION: `test@sha256:${"e".repeat(64)}` }, [1]],
   ["scan-secrets", "scan working tree", "gitleaks", { CONFIG: "" }, [10]],
-  ["lint-workflows", "zizmor", "docker", { CONFIG: "", ZIZMOR_VERSION: "test" }, [11, 12, 13, 14]],
+  [
+    "lint-workflows",
+    "zizmor",
+    "docker",
+    { CONFIG: "", ZIZMOR_VERSION: `test@sha256:${"e".repeat(64)}` },
+    [11, 12, 13, 14],
+  ],
 ];
 for (const [action, name, tool, env, findings] of scanners)
   test(`${action}: advisory waives findings, never a failed scanner`, (t) => {
@@ -74,7 +80,7 @@ for (const [action, name, tool, env, findings] of scanners)
       assert.equal(w.bash(script, { ...vars, RULESET: "none", ADVISORY: "false" }).status, 1);
   });
 
-test("lint-semgrep and lint-workflows run the pinned image, and warn on a tag without its digest", (t) => {
+test("lint-semgrep and lint-workflows run only an image pinned by digest", (t) => {
   const w = workspace(t);
   w.write(".github/workflows/main.yaml", "name: fixture\n");
   w.stub("docker", "require('fs').writeFileSync('args', process.argv.slice(2).join('\\n'));");
@@ -84,19 +90,25 @@ test("lint-semgrep and lint-workflows run the pinned image, and warn on a tag wi
   ];
   const pinned = `1.0.0@sha256:${"e".repeat(64)}`;
   for (const [action, name, variable, image, env] of images)
-    for (const [version, warns] of [
-      [pinned, false],
-      ["1.0.0", true],
+    for (const [version, ran] of [
+      [pinned, true],
+      ["1.0.0", false],
     ]) {
+      rmSync(join(w.cwd, "args"), { force: true });
       const result = w.bash(step(`security-actions/${action}/action.yaml`, name), {
         ...env,
         [variable]: version,
         ADVISORY: "false",
         ACTION_PATH: join(root, "security-actions", action),
       });
-      succeeds(result);
-      assert(w.read("args").split("\n").includes(`${image}:${version}`), `${action} ${version}`);
-      assert.equal(/^::warning::.* runs by tag alone/m.test(result.stdout), warns, `${action} ${version}`);
+      if (ran) {
+        succeeds(result);
+        assert(w.read("args").split("\n").includes(`${image}:${version}`), `${action} ${version}`);
+      } else {
+        assert.equal(result.status, 1, `${action} ${version}: ${result.stdout}${result.stderr}`);
+        assert.match(result.stdout, /^::error::.* has no digest/m, `${action} ${version}`);
+        assert.equal(existsSync(join(w.cwd, "args")), false, `${action} ${version} ran the image`);
+      }
     }
 });
 
@@ -117,7 +129,7 @@ test("lint-shell and lint-dockerfile run a release only when its bytes match the
   const pins = [
     [createHash("sha256").update(release).digest("hex"), 0, true, /^$/],
     ["0".repeat(64), 1, false, /^::error::.* does not match the pinned sha256$/m],
-    ["", 0, true, /^::warning::.* unverified/m],
+    ["", 1, false, /^::error::.* has no pinned sha256/m],
   ];
   for (const [path, name, tool] of actions)
     for (const [pin, status, ran, annotation] of pins) {
