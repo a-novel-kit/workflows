@@ -1,6 +1,16 @@
 // Shared GitHub provenance checks for screenshot publication and approval.
 import { readFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+
+/**
+ * Wait before retry n as Google documents: 2^n seconds plus up to a second of jitter, at most 32 seconds.
+ *
+ * The jitter spreads out retries from concurrent jobs, which a shared rate limit refuses together.
+ */
+export function backoff(n) {
+  return setTimeout(Math.min(2 ** n * 1000 + Math.random() * 1000, 32_000));
+}
 
 /** A safe operator-facing error that contains no credential or API payload. */
 export class Failure extends Error {}
@@ -41,21 +51,36 @@ export class GitHub {
 
   async request(path, { missing = false, method = "GET", body } = {}) {
     const url = path.startsWith("https://") ? path : `https://api.github.com/repos/${this.repository}/${path}`;
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(60_000),
-      redirect: "error",
-    });
-    if (missing && response.status === 404) return null;
-    if (!response.ok) throw new Failure(`GitHub request failed (HTTP ${response.status})`);
-    const text = await response.text();
-    return text ? JSON.parse(text) : null;
+    // A 5xx or a lost connection retries twice: every call here reads, posts a commit status that replaces its
+    // context's last one, or removes a label, so a repeat changes nothing.
+    for (let attempt = 0; ; attempt++) {
+      let response;
+      try {
+        response = await fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: "application/vnd.github+json",
+            "Content-Type": "application/json",
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(60_000),
+          redirect: "error",
+        });
+      } catch (error) {
+        if (attempt >= 2) throw error;
+        await backoff(attempt);
+        continue;
+      }
+      if (response.status >= 500 && attempt < 2) {
+        await backoff(attempt);
+        continue;
+      }
+      if (missing && response.status === 404) return null;
+      if (!response.ok) throw new Failure(`GitHub request failed (HTTP ${response.status})`);
+      const text = await response.text();
+      return text ? JSON.parse(text) : null;
+    }
   }
 
   async graphql(query, variables) {

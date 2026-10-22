@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { Failure } from "../node-actions/test-playwright/drive/common.mjs";
+import { Failure, GitHub } from "../node-actions/test-playwright/drive/common.mjs";
 import { CHUNK, Drive, PROTOCOL, digest } from "../node-actions/test-playwright/drive/storage.mjs";
 const repository = "a-novel/platform-studio";
 const session = "https://www.googleapis.com/upload/drive/v3/files?upload_id=private-session";
@@ -175,6 +175,18 @@ test("transient failures retry within a bounded budget while others fail at once
   assert.equal(offline.responses.length, 0);
   const denied = client([{ status: 403 }, { data: {} }]);
   await assert.rejects(denied.drive.files("list"), (error) => error.status === 403);
+  assert.equal(denied.responses.length, 1);
+});
+test("GitHub requests retry a 5xx or a lost connection twice, while other failures stop at once", async () => {
+  const github = new GitHub(repository, "private-token");
+  const recovered = client([{ status: 500 }, { error: new TypeError("fetch failed") }, { data: { sha: "ok" } }]);
+  assert.deepEqual(await github.request("git/ref/heads/master"), { sha: "ok" });
+  assert.equal(recovered.responses.length, 0);
+  const exhausted = client([{ status: 503 }, { status: 502 }, { status: 500 }, { data: {} }]);
+  await assert.rejects(github.request("git/ref/heads/master"), /HTTP 500/);
+  assert.equal(exhausted.responses.length, 1);
+  const denied = client([{ status: 403 }, { data: {} }]);
+  await assert.rejects(github.request("git/ref/heads/master"), /HTTP 403/);
   assert.equal(denied.responses.length, 1);
 });
 test("rate-limited requests retry while other 403 reasons fail at once", async () => {
