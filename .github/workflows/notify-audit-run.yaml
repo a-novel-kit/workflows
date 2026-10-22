@@ -56,7 +56,7 @@ jobs:
 
       - name: Collect the alerts
         id: collect
-        uses: a-novel-kit/workflows/generic-actions/collect-audit-alerts@v1.72.0
+        uses: a-novel-kit/workflows/generic-actions/collect-audit-alerts@v1.73.0
         with:
           github_token: ${{ github.token }}
           audit_token: ${{ steps.token.outputs.token }}
@@ -65,7 +65,7 @@ jobs:
       - name: Post to the security channel
         id: post
         if: steps.collect.outputs.count != '0'
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.72.0
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.73.0
         with:
           webhook: ${{ secrets.webhook }}
           color: failed
