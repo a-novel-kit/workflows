@@ -101,7 +101,7 @@ runs:
 
     # The role is checked here as well as in the caller, since a hand-written or outdated caller can
     # omit the check.
-    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.75.0
+    - uses: a-novel-kit/workflows/generic-actions/require-role@v1.76.0
       with:
         roles: admin
 
