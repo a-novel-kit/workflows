@@ -32,6 +32,15 @@ release. An update that keeps the version and changes the commit means the upstr
 so it waits for a reviewer instead of merging on its own. The `a-novel-kit/workflows` references
 stay on release tags. The images and runners a workflow names do not wait.
 
+A scanner image pinned in a workflow's `with:` block carries its digest after the tag, so a moved tag
+changes nothing the job runs. Renovate moves the digest with the tag. An update that keeps the tag and
+changes the digest merges on its own, since publishers rebuild image tags as routine:
+
+```yaml
+# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
+version: "1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9"
+```
+
 A workflow pin of a downloaded tool carries the SHA-256 of its release file on the line after
 `version`. The `custom.shellcheck` and `custom.hadolint` datasources read that file's digest from
 GitHub's release API, so one update moves the version and the hash. An update that keeps the version
