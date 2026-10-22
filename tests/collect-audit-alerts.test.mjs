@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  agent,
   isWatched,
   parseRules,
   phrase,
@@ -43,6 +44,30 @@ test("collect-audit-alerts matches a list as its sorted values and a missing fie
   assert.equal(text(undefined), "");
   assert.equal(text({ code: "creation" }), '{"code":"creation"}');
   assert.equal(text(42), "42");
+});
+
+test("collect-audit-alerts labels a browser by its system and anything else by its tool", () => {
+  const chrome = "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0";
+  const cases = [
+    [`Mozilla/5.0 (X11; Linux x86_64) ${chrome} Safari/537.36`, "Chrome on Linux"],
+    [`Mozilla/5.0 (Windows NT 10.0; Win64; x64) ${chrome} Safari/537.36 Edg/141.0.0.0`, "Edge on Windows"],
+    [`Mozilla/5.0 (Linux; Android 15) ${chrome} Mobile Safari/537.36`, "Chrome on Android"],
+    ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0", "Firefox on macOS"],
+    [
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+      "Safari on iOS",
+    ],
+    ["GitHub CLI v2.102.0", "GitHub CLI v2.102.0"],
+    ["Go-http-client/2.0", "Go-http-client/2.0"],
+    // A library behind another product token still marks a script.
+    ["actions/github-script octokit-core.js/5.0.1 Node.js/20.19.0 (linux; x64)", "octokit-core.js/5.0.1"],
+    ["Mozilla/5.0 (compatible; SomeBot/1.0)", "Mozilla/5.0"],
+    ["terraform-provider-github/6.6.0 (+https://registry.terraform.io)", "terraform-provider-github/6.6.0"],
+    // The client writes its agent, so the post copies nothing that renders as a link.
+    ["[GitHub](https://example.test/login)", "unrecognized agent"],
+    [undefined, ""],
+  ];
+  for (const [userAgent, label] of cases) assert.equal(agent(userAgent), label, userAgent);
 });
 
 test("collect-audit-alerts refuses an ignore rule without a reason or a pattern", () => {
@@ -96,6 +121,7 @@ test("collect-audit-alerts posts a burst across repositories as one line", () =>
       repo: "a-novel/infra",
       name: "web",
       programmatic_access_type: "Fine-grained personal access token",
+      user_agent: "curl/8.5.0",
     },
   ];
   assert.deepEqual(post("a-novel", fresh, [{ reason: "routine", hidden: 3 }]), {
@@ -107,7 +133,7 @@ test("collect-audit-alerts posts a burst across repositories as one line", () =>
       "**protected_branch.policy_override** · `kushuh` · `refs/heads/master` · `merge_queue, required_status_checks, review_policy_not_satisfied`",
       "-# [infra](https://github.com/a-novel/infra), [service-genai](https://github.com/a-novel/service-genai) · 2026-10-21 19:51Z · OAuth access token · GitHub CLI v2.102.0",
       "**hook.create** · `intruder` · `web`",
-      "-# [infra](https://github.com/a-novel/infra) · 2026-10-21 19:52Z · Fine-grained personal access token",
+      "-# [infra](https://github.com/a-novel/infra) · 2026-10-21 19:52Z · Fine-grained personal access token · curl/8.5.0",
     ].join("\n"),
   });
   assert.equal(post("a-novel", [], []).footer, "");

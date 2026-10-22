@@ -142,6 +142,48 @@ const targets = [
   "visibility",
 ];
 
+// Browser and system names by the token that gives each away. A browser's agent also names the
+// browsers it imitates, and a phone's names the desktop system it builds on, so each list runs from
+// the most specific token.
+const browsers = [
+  ["Edg/", "Edge"],
+  ["OPR/", "Opera"],
+  ["Firefox/", "Firefox"],
+  ["CriOS/", "Chrome"],
+  ["Chrome/", "Chrome"],
+  ["Safari/", "Safari"],
+];
+const systems = [
+  ["Android", "Android"],
+  ["iPhone", "iOS"],
+  ["iPad", "iOS"],
+  ["Windows", "Windows"],
+  ["CrOS", "ChromeOS"],
+  ["Mac OS X", "macOS"],
+  ["Linux", "Linux"],
+];
+// The HTTP libraries and tools scripts reach the API with, wherever the agent names them.
+const tools =
+  /\b(?:Go-http-client|python-requests|python-httpx|aiohttp|curl|Wget|okhttp|axios|node-fetch|undici|PyGithub|go-github|octokit[\w.-]*)\/[\w.+-]+/i;
+
+/**
+ * A short label for a user agent, which tells a person in a browser from a token in a script. A
+ * browser reads as itself and its system, and anything else as the GitHub CLI, a known library or
+ * the agent's first product token. The client sets its agent, so a label copies at most 60
+ * product-token characters from it.
+ */
+export function agent(userAgent) {
+  if (!userAgent) return "";
+  const browser = userAgent.startsWith("Mozilla/") && browsers.find(([token]) => userAgent.includes(token));
+  if (browser) {
+    const system = systems.find(([token]) => userAgent.includes(token));
+    return system ? `${browser[1]} on ${system[1]}` : browser[1];
+  }
+  const label =
+    userAgent.match(/^GitHub CLI v?[\w.+-]+/) ?? userAgent.match(tools) ?? userAgent.match(/^[\w.+-]+(?:\/[\w.+-]+)?/);
+  return label?.[0].slice(0, 60) ?? "unrecognized agent";
+}
+
 const time = (entry) => new Date(entry["@timestamp"]).toISOString().slice(0, 16).replace("T", " ") + "Z";
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 const code = (value) => `\`${value.replaceAll("`", "'")}\``;
@@ -152,7 +194,7 @@ function groupLines({ entries }) {
   const target = targets.map((field) => text(first[field]).replaceAll(",", ", ")).filter(Boolean);
   const repos = [...new Set(entries.map((entry) => entry.repo).filter(Boolean))].sort();
   const where = repos.map((repo) => `[${repo.split("/")[1]}](https://github.com/${repo})`).join(", ");
-  const how = [first.programmatic_access_type, first.user_agent?.slice(0, 60)].filter(Boolean).join(" · ");
+  const how = [first.programmatic_access_type, agent(first.user_agent)].filter(Boolean).join(" · ");
   return [
     [`**${first.action}**`, code(first.actor ?? "unknown actor"), ...target.map(code)].join(" · "),
     `-# ${[where, entries.map(time).sort()[0], how].filter(Boolean).join(" · ")}`,
