@@ -79,6 +79,8 @@ RUN_STEPS='*-actions/*/action.yaml .github/workflows/*.yaml' RUNNER_TEMP="$tmp" 
 shellcheck "$tmp"/run-steps.*/*.sh
 ```
 
+`scan-secrets` runs this branch's gitleaks action over the working tree, with the shipped baseline.
+
 `tests/helpers.mjs` reads run blocks from the parsed YAML and gives each test an isolated workspace and
 command stubs. Prefer tests of a complete step's behavior, and extract a function only when the full
 step would add unrelated setup. Keep a case for each distinct failure and security boundary, and leave
