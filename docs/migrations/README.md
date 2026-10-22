@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [v1.73.0](./v1.73.0.md) | `lint-shell` shellchecks the Bash `run:` steps of workflows and composite actions through `run_steps`.                          |
 | [v1.72.0](./v1.72.0.md) | Tool downloads verify against pins a release cannot rewrite; `lint-semgrep` drops `ruleset: none`.                              |
 | [v1.71.0](./v1.71.0.md) | `reconcile-board` drops the render pass and `render_dry_run`; `render-epic-status` is removed.                                  |
 | [v1.70.0](./v1.70.0.md) | `test-go` drops `filter_patterns` and `filter_extra_patterns`; set `include` or `exclude` instead.                              |

@@ -1,8 +1,9 @@
 name: lint shell
 description: >
-  Run shellcheck over a repo's tracked shell scripts. A repo with no shell files passes, so the job
-  fits any repo. Advisory mode reports findings without failing, for a repo clearing an existing
-  backlog before the check gates.
+  Run shellcheck over a repo's tracked shell scripts, and optionally over the Bash `run:` steps of
+  its workflows and composite actions. A repo with no shell files passes, so the job fits any repo.
+  Advisory mode reports findings without failing, for a repo clearing an existing backlog before the
+  check gates.
 
 inputs:
   paths:
@@ -11,6 +12,15 @@ inputs:
       Space- or newline-separated globs of shell files to lint. Empty lints every tracked `*.sh`
       file. Discovery reads tracked files only, so it skips gitignored trees. The caller checks the
       repo out first.
+  run_steps:
+    required: false
+    default: ""
+    description: >
+      Space- or newline-separated globs of workflow files and composite action manifests whose Bash
+      `run:` steps are linted too, such as `.github/actions/*/action.yaml`. Each step is linted as
+      its own script. Every GitHub expression in it reads as a set variable, and SC2016 is off, since
+      jq and GraphQL quote literal `$variables` on purpose. Globs that match no file fail the step.
+      Needs the runner's yq v4, which GitHub's Ubuntu images ship.
   advisory:
     required: false
     default: "false"
@@ -70,11 +80,52 @@ runs:
         rm -rf "$tmp"
         shellcheck --version
 
+    - name: extract run steps
+      id: extract
+      if: inputs.run_steps != ''
+      shell: bash
+      env:
+        RUN_STEPS: ${{ inputs.run_steps }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        # The caller's globs split into words and expand into the file list.
+        # shellcheck disable=SC2206
+        manifests=($RUN_STEPS)
+        if [ ${#manifests[@]} -eq 0 ]; then
+          echo "::error::run_steps matches no file: $RUN_STEPS"
+          exit 1
+        fi
+        dir=$(mktemp -d "$RUNNER_TEMP/run-steps.XXXXXX")
+        echo "dir=$dir" >>"$GITHUB_OUTPUT"
+
+        # yq prints each Bash step as two NUL-terminated values: a file name built from its manifest
+        # and index, then its script. The script exports the step's env keys and the one variable
+        # every GitHub expression becomes, so neither reads as unassigned. yq evaluates a `,` over
+        # every step at once and writes `---` between manifests, hence the array and `--no-doc`.
+        yq --nul-output --no-doc '
+          filename as $manifest
+          | (.runs.steps // [.jobs[].steps[]]) | to_entries[]
+          | select(.value.run and (.value.shell // "bash") == "bash")
+          | [
+              ($manifest | sub("^[.]"; "") | sub("/"; "_")) + "-" + (.key | tostring) + ".sh",
+              (["#!/usr/bin/env bash", "# shellcheck disable=SC2016", "export GITHUB_EXPRESSION=1"]
+                + (.value.env // {} | keys | map("export " + . + "=1"))
+                + [.value.run | sub("(?s)[$][{][{].*?[}][}]"; "$${GITHUB_EXPRESSION}")]
+                | join("\n"))
+            ]
+          | .[]
+        ' "${manifests[@]}" |
+          while IFS= read -r -d '' name && IFS= read -r -d '' script; do
+            printf '%s\n' "$script" >"$dir/$name"
+          done
+
     - name: shellcheck
       shell: bash
       env:
         PATHS: ${{ inputs.paths }}
         ADVISORY: ${{ inputs.advisory }}
+        STEPS_DIR: ${{ steps.extract.outputs.dir }}
       run: |
         # errexit is off because shellcheck exits non-zero on findings, and the step gates on that code.
         set +e -u
@@ -85,6 +136,9 @@ runs:
           files=($PATHS)
         else
           mapfile -t files < <(git ls-files '*.sh')
+        fi
+        if [ -n "$STEPS_DIR" ]; then
+          files+=("$STEPS_DIR"/*.sh)
         fi
 
         if [ ${#files[@]} -eq 0 ]; then

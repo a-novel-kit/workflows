@@ -110,7 +110,7 @@ move a tag.
 | `epic-rollback`          | Revert a landed Epic's merged PRs through a new rollback Epic that lands the reverts together.                   |
 | `escalate`               | File or update a deduplicated escalation ticket, drive its board Status, and page a SEV1 through a webhook.      |
 | `lint-dockerfile`        | Run hadolint over the repository's Dockerfiles, advisory or gating; a repository without one passes.             |
-| `lint-shell`             | Run shellcheck over the repository's tracked shell scripts, advisory or gating; a repository without one passes. |
+| `lint-shell`             | Run shellcheck over the repository's shell scripts and, opt-in, over its workflows' and actions' Bash run steps. |
 | `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.           |
 | `merge-gate`             | Required "may this PR merge?" check: Epic atomicity, draft state and review.                                     |
 | `pull-bot`               | Mint a bot App token and check out the repository authenticated as it.                                           |

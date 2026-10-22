@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { functions, manifest, root, step, succeeds, workspace } from "./helpers.mjs";
@@ -114,6 +114,71 @@ test("lint-shell and lint-dockerfile run a release only when its bytes match the
         annotation
       );
     }
+});
+
+test("lint-shell checks each Bash run step of the given manifests as its own script", (t) => {
+  const w = workspace(t);
+  const path = "generic-actions/lint-shell/action.yaml";
+  w.write(
+    ".github/actions/build/action.yaml",
+    `runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        lower_name: x
+      run: |
+        echo "\${{ inputs.a }}" "$lower_name" \${{ inputs.b }}
+    - shell: pwsh
+      run: Write-Host skipped
+    - uses: actions/checkout@v7
+    - shell: bash
+      run: echo two
+`
+  );
+  // yq separates the documents of every manifest after the first, which the step must not read as a step.
+  w.write(
+    ".github/actions/deploy/action.yaml",
+    "runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo three\n"
+  );
+  w.write(
+    ".github/workflows/ci.yaml",
+    `on: push
+jobs:
+  call:
+    uses: ./.github/workflows/other.yaml
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "\${{ github.sha }}"
+      - shell: sh
+        run: echo skipped
+`
+  );
+  w.write("tracked.sh", "#!/bin/bash\n");
+  w.stub("shellcheck", "require('fs').writeFileSync('args', JSON.stringify(process.argv.slice(2)));");
+
+  const globs = ".github/actions/*/action.yaml .github/workflows/*.yaml";
+  succeeds(w.bash(step(path, "extract run steps"), { RUN_STEPS: globs, RUNNER_TEMP: w.cwd }));
+  const dir = w.read("output").match(/^dir=(.+)$/m)[1];
+  const scripts = [
+    "github_actions_build_action.yaml-0.sh",
+    "github_actions_build_action.yaml-3.sh",
+    "github_actions_deploy_action.yaml-0.sh",
+    "github_workflows_ci.yaml-0.sh",
+  ];
+  assert.equal(
+    readFileSync(join(dir, scripts[0]), "utf8"),
+    '#!/usr/bin/env bash\n# shellcheck disable=SC2016\nexport GITHUB_EXPRESSION=1\nexport lower_name=1\necho "${GITHUB_EXPRESSION}" "$lower_name" ${GITHUB_EXPRESSION}\n\n'
+  );
+
+  const env = { PATHS: "tracked.sh", ADVISORY: "false", RUNNER_TEMP: w.cwd, STEPS_DIR: dir };
+  succeeds(w.bash(step(path, "shellcheck"), env));
+  assert.deepEqual(JSON.parse(w.read("args")), ["-f", "gcc", "tracked.sh", ...scripts.map((name) => join(dir, name))]);
+
+  const missing = w.bash(step(path, "extract run steps"), { RUN_STEPS: "missing/*.yaml", RUNNER_TEMP: w.cwd });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /^::error::run_steps matches no file: missing\/\*\.yaml$/m);
 });
 
 test("scan-secrets and refresh-apko-locks build their tool from Go's checksum-verified module", (t) => {
