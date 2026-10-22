@@ -130,6 +130,8 @@ runs:
       shell: bash
       env:
         CLI_VERSION: ${{ inputs.cli_version }}
+        # Any proxy error falls back to the origin; Go's checksum database still verifies the source.
+        GOPROXY: "https://proxy.golang.org|direct"
       run: |
         go install "github.com/a-novel-kit/stack/cli/cmd/a-novel@v${CLI_VERSION#v}"
 
