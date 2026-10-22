@@ -16,10 +16,10 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Versions pinned in workflow with: blocks, and container image tags that follow another package's releases, annotated with a renovate datasource comment. A sha256 on the line after a version moves with it.",
+      "description": "Versions pinned in workflow with: blocks, and container image tags that follow another package's releases, annotated with a renovate datasource comment. A digest moves with its version: an image digest written after the version as `@sha256:<digest>`, or a release file's sha256 on the next line.",
       "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+version:\\s*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?(?:\\s+sha256:\\s*[\"']?(?<currentDigest>[a-f0-9]{64}))?",
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+version:\\s*[\"']?(?<currentValue>[^\"'\\s@]+)(?:(?:@|[\"']?\\s+sha256:\\s*[\"']?)(?<currentDigest>(?:sha256:)?[a-f0-9]{64}))?",
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+image:\\s*[^\\s:]+:v(?<currentValue>[^\\s\"'-]+)"
       ],
       "extractVersionTemplate": "^v?(?<version>.+)$"
@@ -58,8 +58,9 @@
       "automerge": true
     },
     {
-      "description": "Review a digest update by hand. It keeps the version and changes its bytes. For an action, the upstream tag moved to another commit: the shape of the 2026 trivy-action hijack. For a release file pinned by SHA-256, someone replaced the release's files: the shape of the 2026 OVHcloud CLI compromise.",
+      "description": "Review a digest update by hand. It keeps the version and changes its bytes. For an action, the upstream tag moved to another commit: the shape of the 2026 trivy-action hijack. For a release file pinned by SHA-256, someone replaced the release's files: the shape of the 2026 OVHcloud CLI compromise. An image digest update merges on its own, since publishers rebuild image tags as routine, such as for a base-image fix.",
       "matchManagers": ["github-actions", "custom.regex"],
+      "matchDatasources": ["!docker"],
       "matchUpdateTypes": ["digest"],
       "automerge": false
     },

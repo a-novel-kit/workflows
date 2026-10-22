@@ -21,8 +21,10 @@ inputs:
   version:
     required: true
     description: >
-      semgrep image tag. The caller pins it so Renovate bumps it per repo, with the annotation
-      `# renovate: datasource=docker depName=semgrep/semgrep`.
+      semgrep image tag and digest, as `<tag>@sha256:<digest>`. The caller pins both so Renovate bumps
+      them together per repo, with the annotation
+      `# renovate: datasource=docker depName=semgrep/semgrep`. A tag alone runs whatever image the tag names,
+      with a warning; a later release requires the digest.
 
 runs:
   using: composite
@@ -41,6 +43,10 @@ runs:
         if [ ! -f "$rules" ]; then
           echo "::error::unknown ruleset '$RULESET'; expected one of: $(cd "$ACTION_PATH/rules" && printf '%s\n' ./*.yaml | sed 's|^./||; s/\.yaml$//' | tr '\n' ' ')"
           exit 1
+        fi
+
+        if [[ "$SEMGREP_VERSION" != *@sha256:* ]]; then
+          echo "::warning::semgrep ${SEMGREP_VERSION} runs by tag alone: pin its digest as <tag>@sha256:<digest>."
         fi
 
         node "$ACTION_PATH/../run-scan.mjs" semgrep docker run --rm \

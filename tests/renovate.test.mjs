@@ -36,14 +36,25 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
   assert.deepEqual(extract(workflow, release).map(pin), [
     { datasource: "github-releases", depName: "koalaman/shellcheck", currentValue: "0.11.0" },
   ]);
-  // A sha256 on the next line moves with the version; one anywhere else stays out of the match.
+  // A digest moves with its version: an image's after `@`, a release file's sha256 on the next line.
+  // A sha256 anywhere else stays out of the match.
   const hash = "d".repeat(64);
-  const hashed = `# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck\nversion: "0.11.0"\nsha256: "${hash}"`;
-  const apart = `# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck\nversion: "0.11.0"\npaths: x\nsha256: "${hash}"`;
-  assert.deepEqual(
-    [hashed, apart].map((fixture) => extract(workflow, fixture).map((groups) => groups.currentDigest)),
-    [[hash], [undefined]]
-  );
+  const shellcheck = '# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck\nversion: "0.11.0"';
+  const digests = [
+    [
+      `# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor\nversion: "1.31.1@sha256:${hash}"`,
+      "1.31.1",
+      `sha256:${hash}`,
+    ],
+    [`${shellcheck}\nsha256: "${hash}"`, "0.11.0", hash],
+    [`${shellcheck}\npaths: x\nsha256: "${hash}"`, "0.11.0", undefined],
+  ];
+  for (const [fixture, currentValue, currentDigest] of digests)
+    assert.deepEqual(
+      extract(workflow, fixture).map((groups) => [groups.currentValue, groups.currentDigest]),
+      [[currentValue, currentDigest]],
+      fixture
+    );
   const container =
     "container:\n  # renovate: datasource=npm depName=playwright\n  image: mcr.microsoft.com/playwright:v1.63.0-noble";
   assert.deepEqual(extract(workflow, container).map(pin), [
@@ -178,6 +189,8 @@ test("Renovate pins third-party actions to their release commit and keeps the wo
   const moved = actions.find((r) => r.matchUpdateTypes?.includes("digest"));
   assert.equal(moved.automerge, false);
   assert(moved.matchManagers.includes("custom.regex"));
+  // Publishers rebuild image tags as routine, so an image's digest update keeps merging on its own.
+  assert.deepEqual(moved.matchDatasources, ["!docker"]);
   // Each release-file datasource waits for its assets like a GitHub release does.
   const published = base.packageRules.find((r) => r.matchDatasources?.includes("github-releases"));
   for (const name of Object.keys(base.customDatasources))

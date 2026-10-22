@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [v1.74.0](./v1.74.0.md) | `lint-semgrep` and `lint-workflows` run their scanner image by digest; pin `version` as `<tag>@sha256:<digest>`.                |
 | [v1.73.0](./v1.73.0.md) | `lint-shell` shellchecks the Bash `run:` steps of workflows and composite actions through `run_steps`.                          |
 | [v1.72.0](./v1.72.0.md) | Tool downloads verify against pins a release cannot rewrite; `lint-semgrep` drops `ruleset: none`.                              |
 | [v1.71.0](./v1.71.0.md) | `reconcile-board` drops the render pass and `render_dry_run`; `render-epic-status` is removed.                                  |
