@@ -11,6 +11,9 @@ name: notify-stuck (reusable)
 # on a person's review posts to its repository's reviews channel too, or the org's when the
 # repository has none. That post pings the requested reviewers, else the role, and the dependencies
 # post stays quiet.
+#
+# The same clock watches the caller repository's notify-audit, which cannot report its own silence.
+# When its last success turns 2 hours old, the security channel hears it once.
 on:
   workflow_call:
     inputs:
@@ -58,8 +61,69 @@ on:
       bws_access_token:
         required: false
         description: Bitwarden token that reads the GitHub-to-Discord map. Empty posts without user pings.
+      security_webhook:
+        required: false
+        description: >-
+          Discord webhook of the org's security channel, told when the caller repository's
+          notify-audit.yaml stops succeeding. Empty skips that check.
+      security_mention:
+        required: false
+        description: Discord user id of the admin the security post pings. Empty posts without a ping.
 
 jobs:
+  # A broken dispatch, a revoked App key or a disabled workflow stops notify-audit without a post.
+  watch-audit:
+    runs-on: ubuntu-latest
+    # The default token alone reads the runs, so the check outlives the App key that notify-audit and
+    # the scan share.
+    permissions:
+      actions: read
+    steps:
+      - name: Check notify-audit's last success
+        id: audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CALLER: ${{ github.workflow_ref }}
+          WEBHOOK: ${{ secrets.security_webhook }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WEBHOOK" ]; then
+            echo "No security webhook, so notify-audit goes unwatched." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # notify-audit runs every 30 minutes, so 2 hours is four runs missed. The alert posts in
+          # the run whose window, read as the scan reads it, holds that deadline. With no success on
+          # record, every run posts.
+          workflow="${CALLER%@*}"
+          since="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "${workflow##*/}" --status success \
+            --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
+          until="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+          last="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow notify-audit.yaml --status success \
+            --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
+          silent="$(jq -nr --arg since "$since" --arg until "$until" --arg last "$last" '
+            if $last == "" then true
+            else ($last | fromdateiso8601 + 7200 | todateiso8601) as $due | $due > $since and $due <= $until
+            end')"
+          echo "silent=$silent" >>"$GITHUB_OUTPUT"
+          echo "last=${last:-never}" >>"$GITHUB_OUTPUT"
+          echo "notify-audit last succeeded: ${last:-never}." >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Post to the security channel
+        if: steps.audit.outputs.silent == 'true'
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.72.0
+        with:
+          webhook: ${{ secrets.security_webhook }}
+          color: failed
+          title: notify-audit has not succeeded for 2 hours in ${{ github.repository_owner }}
+          url: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/notify-audit.yaml
+          description: >-
+            Last success: ${{ steps.audit.outputs.last }}. No audit-log alert reaches this channel until
+            it runs again. Check that the workflow is enabled, why its last run failed, and whether its
+            clock still dispatches it.
+          mention_users: ${{ secrets.security_mention }}
+          dry_run: ${{ inputs.dry_run }}
+
   scan:
     runs-on: ubuntu-latest
     # The App key is a secret of the caller's governance environment, which no feature branch opens.

@@ -108,3 +108,36 @@ test("notify-stuck sends a stuck pull request waiting on a review to its request
     assert.match(event.description, / · review required · /, name);
   }
 });
+
+/** Runs the shipped notify-audit check, the caller's last success at `since` and notify-audit's at `last`. */
+function watch(t, { since = hoursBefore(1), last, webhook = "https://discord.test/hook" }) {
+  const w = workspace(t);
+  w.write("output", "");
+  w.stub(
+    "gh",
+    `const args = process.argv.slice(2);
+    if (args.includes('notify-audit.yaml')) console.log(${JSON.stringify(last ?? "")});
+    else if (args[0] === 'run') console.log(${JSON.stringify(since)});
+    else console.log(${JSON.stringify(until)});`
+  );
+  const env = {
+    GITHUB_REPOSITORY: "a-novel/.github",
+    GITHUB_RUN_ID: "1",
+    CALLER: "a-novel/.github/.github/workflows/notify-stuck.yaml@refs/heads/master",
+    WEBHOOK: webhook,
+  };
+  succeeds(w.bash(step(".github/workflows/notify-stuck-run.yaml", "audit"), env));
+  return w.read("output").match(/^silent=(.*)$/m)?.[1];
+}
+
+test("notify-stuck alerts once when notify-audit's last success turns 2 hours old", (t) => {
+  const cases = [
+    ["turned silent since the last run", { last: hoursBefore(2.5) }, "true"],
+    ["silent, already posted by an earlier run", { last: hoursBefore(4) }, "false"],
+    ["succeeded within 2 hours", { last: hoursBefore(0.5) }, "false"],
+    ["first run, silent", { since: "", last: hoursBefore(30) }, "true"],
+    ["no success on record", {}, "true"],
+    ["no security webhook", { last: hoursBefore(2.5), webhook: "" }, undefined],
+  ];
+  for (const [name, options, expected] of cases) assert.equal(watch(t, options), expected, name);
+});
