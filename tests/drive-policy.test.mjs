@@ -395,6 +395,57 @@ test("approval CLI links the browser rerun from either trigger", (t) => {
   }
 });
 
+test("an approval check GitHub cannot answer leaves the head unapproved instead of failing", async (t) => {
+  const f = fixture();
+  const approval = await respond("actions/runs/41/attempts/1");
+  const jobs = { total_count: 1, jobs: [{ name: "approval", status: "completed", conclusion: "success" }] };
+  const cases = [
+    ["pull_request", "refs/pull/1/merge", 200, true],
+    ["pull_request", "refs/pull/1/merge", 500, false],
+    ["merge_group", "refs/heads/gh-readonly-queue/master/pr-1-head", 500, false],
+    ["push", "refs/heads/master", 500, false],
+  ];
+  for (const [name, ref, status, approved] of cases) {
+    const ws = workspace(t);
+    ws.write(".visual/context.json", JSON.stringify({ baseline: "base" }));
+    ws.write(
+      "event.json",
+      JSON.stringify({
+        pull_request: { number: 1, head: { sha: "head" } },
+        merge_group: { base_sha: "base", head_sha: "head" },
+      })
+    );
+    const stub = ws.write(
+      "github.mjs",
+      `
+      const pr = ${JSON.stringify(f.pr)}, events = ${JSON.stringify(f.events)}, statuses = ${JSON.stringify(f.statuses)};
+      const approval = ${JSON.stringify(approval)}, jobs = ${JSON.stringify(jobs)};
+      globalThis.fetch = async (url) => new Response(${status} === 200 ? JSON.stringify(
+        url.includes('/pulls/') ? pr :
+        url.includes('/events') ? events :
+        url.includes('/statuses') ? statuses :
+        url.includes('/collaborators/') ? {permission: 'write'} :
+        url.includes('/jobs?') ? jobs : approval
+      ) : null, { status: ${status} });
+    `
+    );
+    const result = ws.run(
+      process.execPath,
+      ["--import", stub, `${root}node-actions/test-playwright/drive/policy.mjs`, "allow"],
+      {
+        GITHUB_REPOSITORY: "example/studio",
+        GITHUB_EVENT_NAME: name,
+        GITHUB_EVENT_PATH: `${ws.cwd}/event.json`,
+        GITHUB_REF: ref,
+        GITHUB_SHA: "head",
+      }
+    );
+    succeeds(result);
+    assert.equal(ws.read("env"), `VISUAL_APPROVED=${approved}\n`);
+    assert.equal(/::warning::.*HTTP 500/.test(result.stderr), status === 500);
+  }
+});
+
 test("a pull request comparison is recorded on its head, not GitHub's merge commit", (t) => {
   const cases = [
     ["pull_request", { pull_request: { head: { sha: "head" } } }, "head"],

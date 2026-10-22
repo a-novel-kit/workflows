@@ -293,7 +293,12 @@ async function summarizeApproval(env, policy, event) {
 async function allowRegeneration(env, policy, event) {
   const { baseline } = JSON.parse(await readFile(".visual/context.json", "utf8"));
   const allowed =
-    Boolean(baseline) && (await policy.allows(event, env.GITHUB_EVENT_NAME, testedHead(env), env.GITHUB_REF, baseline));
+    Boolean(baseline) &&
+    (await policy.allows(event, env.GITHUB_EVENT_NAME, testedHead(env), env.GITHUB_REF, baseline).catch((error) => {
+      // An unverified head counts as unapproved, which never grants more: matching screenshots still pass.
+      console.warn(`::warning::Could not verify screenshot approval, so changes stay blocked: ${error.message}`);
+      return false;
+    }));
   await appendFile(env.GITHUB_ENV, `VISUAL_APPROVED=${allowed}\n`);
 }
 
