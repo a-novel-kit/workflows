@@ -419,3 +419,24 @@ test("approve-bot approves the given commit only while it is the head", (t) => {
     assert.deepEqual(calls, expected, name);
   }
 });
+
+test("classify lets a ranges refresh through only as exactly what Google publishes now", async () => {
+  const published = ["8.8.4.0/24", "8.8.8.0/24"];
+  const path = "environments/production/foundation/google-service-ranges.json";
+  const refresh = diff(path, ['-  "8.8.4.0/24"', '+  "8.8.4.0/24",', '+  "8.8.8.0/24"']);
+  const ranges = (files, content, serviceRanges = async () => published) =>
+    classify({ files, bot, resolveTag, readFile: async () => content, serviceRanges });
+  const decision = async (...args) => (await ranges(...args)).decision;
+
+  assert.equal(await decision([refresh], `${JSON.stringify(published, null, 2)}\n`), "ranges");
+  assert.equal(await decision([refresh], JSON.stringify([...published, "1.0.0.0/8"])), "review");
+  assert.equal(await decision([refresh], "not json"), "review");
+  const unreachable = async () => {
+    throw new Error("HTTP 503");
+  };
+  assert.equal(await decision([refresh], JSON.stringify(published), unreachable), "review");
+  // The list passes only alone, and only as a change to the file already there.
+  const other = file(".github/workflows/main.yaml", [action(sha("a"), "v7.0.0")], [action(sha("b"), "v7.0.1")]);
+  assert.equal(await decision([refresh, other], JSON.stringify(published)), "review");
+  assert.equal(await decision([{ ...refresh, status: "added" }], JSON.stringify(published)), "review");
+});

@@ -7,8 +7,10 @@ description: >
   images in terraform.tfvars, and Dockerfile FROM lines taking a digest the same pull request pins
   there. It is "renovate" when the bot first enabled auto-merge, auto-merge is still on, and every
   changed line outside checksum files moves only a dependency reference's version, or a digest
-  together with its version. Anything else is "review", for a person to approve. A digest that
-  moves without its version marks a moved tag, so it always needs review.
+  together with its version. It is "ranges" when the pull request changes only a
+  google-service-ranges.json file, to exactly the list the google-service-ranges action computes from
+  Google's files now. Anything else is "review", for a person to approve. A digest that moves without
+  its version marks a moved tag, so it always needs review.
 
 inputs:
   github_token:
@@ -30,7 +32,7 @@ inputs:
 
 outputs:
   decision:
-    description: '"pin", "renovate" or "review".'
+    description: '"pin", "renovate", "ranges" or "review".'
     value: ${{ steps.classify.outputs.decision }}
   reason:
     description: One line explaining the decision.

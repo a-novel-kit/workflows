@@ -97,7 +97,7 @@ move a tag.
 | `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                      |
 | `check-changes`          | Detect uncommitted changes in a pathspec, and optionally fail.                                                   |
 | `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.           |
-| `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin or as a version update Renovate put on auto-merge.     |
+| `classify-bot-change`    | Strict auto-approval: pass a bot PR only as a release pin, a version update Renovate armed, or a ranges refresh. |
 | `codecov`                | Upload the coverage artifact to Codecov.                                                                         |
 | `collect-audit-alerts`   | Collect the audit-log entries that grant access or push past a rule, minus ignore rules and posted alerts.       |
 | `collect-warnings`       | Merge the warnings an org's default-branch runs raised in a window into one entry each, minus ignore rules.      |
@@ -109,6 +109,7 @@ move a tag.
 | `epic-membership`        | Resolve an Epic's member set: its frozen activation snapshot, else the open PRs labeled `epic:<N>`.              |
 | `epic-rollback`          | Revert a landed Epic's merged PRs through a new rollback Epic that lands the reverts together.                   |
 | `escalate`               | File or update a deduplicated escalation ticket, drive its board Status, and page a SEV1 through a webhook.      |
+| `google-service-ranges`  | Write Google's own IPv4 service ranges, goog.json minus cloud.json, for a firewall rule to match.                |
 | `lint-dockerfile`        | Run hadolint over the repository's Dockerfiles, advisory or gating; a repository without one passes.             |
 | `lint-shell`             | Run shellcheck over the repository's shell scripts and, opt-in, over its workflows' and actions' Bash run steps. |
 | `maintain-playwright`    | Promote successful master batches and delete superseded, merged or deleted branch evidence from Drive.           |
