@@ -134,7 +134,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.77.0
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.77.1
         with:
           roles: admin
       - name: Mint line token
@@ -173,7 +173,7 @@ jobs:
       contents: read
     steps:
       # Any user with write access can dispatch, so this gate keeps hotfixes admin-only.
-      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.77.0
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.77.1
         with:
           roles: admin
 
@@ -392,7 +392,7 @@ jobs:
       # create-line job skips this job and escalates nothing. A dry run only logs the escalation.
       - name: Escalate on failure
         if: ${{ failure() }}
-        uses: a-novel-kit/workflows/generic-actions/escalate@v1.77.0
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.77.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
