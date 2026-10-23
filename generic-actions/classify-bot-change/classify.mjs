@@ -1,11 +1,14 @@
 // Decide whether a dependency bot's pull request may merge without a person, for a repository whose
-// merges reach production. Only two shapes qualify: a release pin, and a version update that
-// Renovate itself put on auto-merge.
+// merges reach production. Only three shapes qualify: a release pin, a version update that
+// Renovate itself put on auto-merge, and a refresh of Google's service ranges to exactly what Google
+// publishes.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { googleServiceRanges } from "../google-service-ranges/ranges.mjs";
 
 const tfvars = /(^|\/)terraform\.tfvars$/;
+const serviceRangesFile = /(^|\/)google-service-ranges\.json$/;
 const releasePin = /"ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}"/;
 const releaseRef = /ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}/g;
 // A Dockerfile that builds on a release image takes the very digest its terraform.tfvars pins.
@@ -137,15 +140,39 @@ const review = (reason) => ({ decision: "review", reason });
 
 /**
  * Classify a pull request's changed files: "pin" for a release pin, "renovate" for a version
- * update Renovate put on auto-merge, "review" for anything a person must approve. files is the diff
- * of the exact commit the caller approves, which a comparison caps at 300 files.
- * autoMergeEnabledBy is whoever first enabled auto-merge and autoMergeArmed whether it is on now,
- * so a maintainer's hold stands. resolveTag(repository, tag) returns the commit a tag names, so a
- * moved action pin must be the commit of its new version.
+ * update Renovate put on auto-merge, "ranges" for a refresh of Google's service ranges, "review" for
+ * anything a person must approve. files is the diff of the exact commit the caller approves, which a
+ * comparison caps at 300 files. autoMergeEnabledBy is whoever first enabled auto-merge and
+ * autoMergeArmed whether it is on now, so a maintainer's hold stands. resolveTag(repository, tag)
+ * returns the commit a tag names, so a moved action pin must be the commit of its new version.
+ * readFile(filename) returns a file's content at that commit, and serviceRanges() Google's service
+ * ranges as they stand now.
  */
-export async function classify({ files, bot, autoMergeEnabledBy, autoMergeArmed, resolveTag }) {
+export async function classify({
+  files,
+  bot,
+  autoMergeEnabledBy,
+  autoMergeArmed,
+  resolveTag,
+  readFile,
+  serviceRanges,
+}) {
   if (files.length === 0) return review("it changes no file");
   if (files.length >= 300) return review("its comparison may stop at 300 files");
+
+  // A bot could write any range into the list, so it passes only as what Google publishes now.
+  if (files.length === 1 && serviceRangesFile.test(files[0].filename)) {
+    const [{ filename, status }] = files;
+    if (status !== "modified") return review(`${filename} is ${status}`);
+    try {
+      const proposed = JSON.stringify(JSON.parse(await readFile(filename)));
+      if (proposed === JSON.stringify(await serviceRanges()))
+        return { decision: "ranges", reason: "it sets Google's service ranges to exactly what Google publishes" };
+      return review(`${filename} differs from what Google publishes now`);
+    } catch {
+      return review(`${filename} or Google's lists could not be read`);
+    }
+  }
 
   const pinned = tfvarsPins(files);
   if (files.every((file) => pinsOnly(file, pinned)))
@@ -222,6 +249,15 @@ async function main() {
     autoMergeEnabledBy: timelineItems.nodes[0]?.actor?.login,
     autoMergeArmed: Boolean(autoMergeRequest?.enabledAt),
     resolveTag: tagCommit,
+    // A filename is the pull request author's choice, so each segment is encoded into the path.
+    readFile: async (filename) =>
+      gh(
+        "api",
+        `repos/${REPOSITORY}/contents/${filename.split("/").map(encodeURIComponent).join("/")}?ref=${HEAD_SHA}`,
+        "-H",
+        "Accept: application/vnd.github.raw+json"
+      ),
+    serviceRanges: googleServiceRanges,
   });
   // A filename is the pull request author's choice, so it never reaches the output as a new line.
   const line = reason.replace(/[\u0000-\u001f\u007f]/g, " ");

@@ -1,0 +1,25 @@
+name: google service ranges
+description: >
+  Write the IPv4 ranges of Google's own services to a file: every range in Google's goog.json minus
+  those in cloud.json, which Cloud customers can rent. A firewall rule matching them reaches any
+  Google frontend, such as one of the Gmail SMTP relay's, wherever DNS sends a client, and never a
+  customer's VM. classify-bot-change recomputes the same list to approve a pull request refreshing it.
+
+inputs:
+  path:
+    required: true
+    description: >
+      File to write: a sorted JSON array of CIDRs and nothing else, so it changes only when the
+      ranges do. A broken download fails the step and leaves the file untouched.
+
+runs:
+  using: composite
+  steps:
+    - name: Write Google's service ranges
+      shell: bash
+      env:
+        OUTPUT_PATH: ${{ inputs.path }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        node "$ACTION_PATH/ranges.mjs" "$OUTPUT_PATH"

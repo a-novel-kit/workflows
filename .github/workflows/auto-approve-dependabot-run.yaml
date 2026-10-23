@@ -35,8 +35,8 @@ on:
       strict:
         description: >-
           Set for a repository whose merges reach production. The engine then approves only a release
-          pin, or a version update Renovate itself put on auto-merge. Every other bot pull request
-          waits for a person.
+          pin, a version update Renovate itself put on auto-merge, or a refresh of Google's service
+          ranges to exactly what Google publishes. Every other bot pull request waits for a person.
         required: false
         type: boolean
         default: false
@@ -183,7 +183,7 @@ jobs:
       - name: Approve
         if: >-
           ${{ steps.proof.outputs.verified == 'true' && (!inputs.strict ||
-          steps.classify.outputs.decision == 'pin' || steps.classify.outputs.decision == 'renovate') }}
+          contains(fromJSON('["pin", "renovate", "ranges"]'), steps.classify.outputs.decision)) }}
         uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.76.1
         with:
           pull_request: ${{ steps.pr.outputs.url }}
@@ -194,9 +194,12 @@ jobs:
       # Auto-merge puts the approved pull request in the merge queue, which re-validates the required
       # checks and owns the merge method. `--squash` is the org's only merge method and serves a
       # repository with no queue. In strict mode, a Renovate update keeps the auto-merge Renovate
-      # enabled, so the step arms only a release pin.
+      # enabled, so the step arms only what a workflow opened in Renovate's place: a release pin or a
+      # ranges refresh.
       - name: Enable auto-merge
-        if: ${{ steps.proof.outputs.verified == 'true' && (!inputs.strict || steps.classify.outputs.decision == 'pin') }}
+        if: >-
+          ${{ steps.proof.outputs.verified == 'true' && (!inputs.strict ||
+          contains(fromJSON('["pin", "ranges"]'), steps.classify.outputs.decision)) }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PR: ${{ steps.pr.outputs.url }}
