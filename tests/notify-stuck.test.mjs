@@ -126,8 +126,8 @@ function watch(t, { since = hoursBefore(1), last, webhook = "https://discord.tes
     CALLER: "a-novel/.github/.github/workflows/notify-stuck.yaml@refs/heads/master",
     WEBHOOK: webhook,
   };
-  succeeds(w.bash(step(".github/workflows/notify-stuck-run.yaml", "audit"), env));
-  return w.read("output").match(/^silent=(.*)$/m)?.[1];
+  const stdout = succeeds(w.bash(step(".github/workflows/notify-stuck-run.yaml", "audit"), env));
+  return { silent: w.read("output").match(/^silent=(.*)$/m)?.[1], stdout };
 }
 
 test("notify-stuck alerts once when notify-audit's last success turns 2 hours old", (t) => {
@@ -136,8 +136,16 @@ test("notify-stuck alerts once when notify-audit's last success turns 2 hours ol
     ["silent, already posted by an earlier run", { last: hoursBefore(4) }, "false"],
     ["succeeded within 2 hours", { last: hoursBefore(0.5) }, "false"],
     ["first run, silent", { since: "", last: hoursBefore(30) }, "true"],
-    ["no success on record", {}, "true"],
     ["no security webhook", { last: hoursBefore(2.5), webhook: "" }, undefined],
   ];
-  for (const [name, options, expected] of cases) assert.equal(watch(t, options), expected, name);
+  for (const [name, options, expected] of cases) assert.equal(watch(t, options).silent, expected, name);
+});
+
+test("notify-stuck only warns when GitHub lists no notify-audit success", (t) => {
+  // An incident can empty both lists, the caller's own included.
+  for (const since of [hoursBefore(1), ""]) {
+    const { silent, stdout } = watch(t, { since });
+    assert.equal(silent, undefined, since);
+    assert.match(stdout, /^::warning::GitHub listed no successful notify-audit run in a-novel\/\.github/m, since);
+  }
 });
