@@ -93,21 +93,26 @@ jobs:
           fi
 
           # notify-audit runs every 30 minutes, so 2 hours is four runs missed. The alert posts in
-          # the run whose window, read as the scan reads it, holds that deadline. With no success on
-          # record, every run posts.
+          # the run whose window, read as the scan reads it, holds that deadline.
           workflow="${CALLER%@*}"
           since="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "${workflow##*/}" --status success \
             --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
           until="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
           last="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow notify-audit.yaml --status success \
             --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
+
+          # During an incident GitHub can list no run without an error, so an empty history only
+          # warns. The daily CI-warning digest reports a caller whose notify-audit never succeeded.
+          if [ -z "$last" ]; then
+            echo "::warning::GitHub listed no successful notify-audit run in $GITHUB_REPOSITORY, so this check could not tell whether it stopped."
+            exit 0
+          fi
+
           silent="$(jq -nr --arg since "$since" --arg until "$until" --arg last "$last" '
-            if $last == "" then true
-            else ($last | fromdateiso8601 + 7200 | todateiso8601) as $due | $due > $since and $due <= $until
-            end')"
+            ($last | fromdateiso8601 + 7200 | todateiso8601) as $due | $due > $since and $due <= $until')"
           echo "silent=$silent" >>"$GITHUB_OUTPUT"
-          echo "last=${last:-never}" >>"$GITHUB_OUTPUT"
-          echo "notify-audit last succeeded: ${last:-never}." >>"$GITHUB_STEP_SUMMARY"
+          echo "last=$last" >>"$GITHUB_OUTPUT"
+          echo "notify-audit last succeeded: $last." >>"$GITHUB_STEP_SUMMARY"
 
       - name: Post to the security channel
         if: steps.audit.outputs.silent == 'true'
