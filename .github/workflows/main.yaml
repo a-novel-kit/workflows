@@ -14,12 +14,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-node:
+  lint-js:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      # Calls this branch's setup-node directly, since lint-node pins setup-node to the last release.
+      # Calls this branch's setup-node directly, since the lint-node action pins setup-node to the last release.
       - uses: $/node-actions/setup-node
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
