@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [v1.81.0](./v1.81.0.md) | `lint-go`'s `working-directory`, `docker`'s `secret-envs` and `secret-files`, and `docker-job` are removed.                     |
 | [v1.79.0](./v1.79.0.md) | Repositories with a Sentry project record releases in Sentry and board the issues its App opens.                                |
 | [v1.78.0](./v1.78.0.md) | `lint-go` and `docker` take snake_case inputs; `docker-job` is deprecated for `docker` with `mode: job`.                        |
 | [v1.75.0](./v1.75.0.md) | `lint-shell`, `lint-dockerfile`, `lint-semgrep` and `lint-workflows` fail without their pins.                                   |
