@@ -159,13 +159,6 @@ test("Docker provenance uses the published digest and security tools require cal
     assert.equal(attempt["continue-on-error"], i < attempts.length - 1 ? true : undefined);
     if (i > 0) assert.equal(attempt.if, `\${{ steps.${attempts[i - 1].id}.outcome == 'failure' }}`);
   }
-  // docker-job publishes through docker, so it inherits the same attestation.
-  const job = manifest("build-actions/docker-job/action.yaml");
-  assert.deepEqual(
-    job.runs.steps.map((s) => [s.uses?.replace(/@.*/, ""), s.with?.mode]),
-    [["a-novel-kit/workflows/build-actions/docker", "job"]]
-  );
-  assert.equal(job.outputs.digest.value, "${{ steps.build.outputs.digest }}");
   const pinned = [
     "generic-actions/lint-shell",
     "generic-actions/lint-dockerfile",

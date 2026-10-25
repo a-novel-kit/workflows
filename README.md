@@ -50,8 +50,8 @@ update. A release that asks callers to change something comes with a
 | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `clean-images`    | Delete images once their branch or PR is gone; keep releases, open PRs, and `master` builds since the last minor. |
 | `clean-pr-images` | Delete a closed pull request's `pr-<N>` image from each package that has one.                                     |
-| `docker`          | Build an image, verify that it runs **healthy**, push it and attest its provenance.                               |
-| `docker-job`      | Build an image, verify that its run **exits 0**, push it and attest its provenance.                               |
+| `docker`          | Build an image, verify that it runs **healthy** or, in job mode, **exits 0**, push it and attest its provenance.  |
+| `docker-job`      | Deprecated, use `docker` with `mode: job`, which it runs.                                                         |
 
 `docker` and `docker-job` tag only the builds a deployment can name: pushes to the default branch,
 releases, and a pull request while it carries the `with-feature-env` label. The label tags the head it
@@ -163,7 +163,7 @@ check-migration-snapshots:
 
 #### `lint-go`
 
-`lint-go` runs `golangci-lint` from the module directory, a non-root one if `working-directory`
+`lint-go` runs `golangci-lint` from the module directory, a non-root one if `working_directory`
 names it. When that directory holds a `govulncheck.mod`, the action then runs the `govulncheck` it
 pins. Each vulnerability the code reaches becomes a warning, which the daily CI digest collects from
 the default branch, and the full report goes to the run summary. The scan never fails the job. Its
