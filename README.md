@@ -51,17 +51,15 @@ update. A release that asks callers to change something comes with a
 | `clean-images`    | Delete images once their branch or PR is gone; keep releases, open PRs, and `master` builds since the last minor. |
 | `clean-pr-images` | Delete a closed pull request's `pr-<N>` image from each package that has one.                                     |
 | `docker`          | Build an image, verify that it runs **healthy** or, in job mode, **exits 0**, push it and attest its provenance.  |
-| `docker-job`      | Deprecated, use `docker` with `mode: job`, which it runs.                                                         |
 
-`docker` and `docker-job` tag only the builds a deployment can name: pushes to the default branch,
-releases, and a pull request while it carries the `with-feature-env` label. The label tags the head it
-was added on, so the next push builds untagged until someone adds the label again. Every other build is
-pushed by digest alone, for the jobs of the same run that pull it, and its attestation stays out of the
-registry.
+`docker` tags only the builds a deployment can name: pushes to the default branch, releases, and a pull
+request while it carries the `with-feature-env` label. The label tags the head it was added on, so the next
+push builds untagged until someone adds the label again. Every other build is pushed by digest alone, for
+the jobs of the same run that pull it, and its attestation stays out of the registry.
 
-Both actions fail the job after a push unless GitHub signs and publishes SLSA provenance for the exact
-output digest. Each calling job grants the permissions of GitHub's attestation flow, and no
-`artifact-metadata: write`, since the actions create no linked-artifact record:
+`docker` fails the job after a push unless GitHub signs and publishes SLSA provenance for the exact output
+digest. Each calling job grants the permissions of GitHub's attestation flow, and no
+`artifact-metadata: write`, since the action creates no linked-artifact record:
 
 ```yaml
 permissions:

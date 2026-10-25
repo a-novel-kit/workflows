@@ -51,18 +51,6 @@ inputs:
   secret_files:
     description: "List of secret files to expose to the build (e.g., key=filename, MY_SECRET=./secret.txt)."
     required: false
-  secret-envs:
-    required: false
-    description: Deprecated, use secret_envs. A later release removes it.
-    deprecationMessage: >
-      Rename it secret_envs before a later release removes it, as
-      https://github.com/a-novel-kit/workflows/blob/master/docs/migrations/v1.78.0.md shows.
-  secret-files:
-    required: false
-    description: Deprecated, use secret_files. A later release removes it.
-    deprecationMessage: >
-      Rename it secret_files before a later release removes it, as
-      https://github.com/a-novel-kit/workflows/blob/master/docs/migrations/v1.78.0.md shows.
   cache:
     required: false
     description: >
@@ -171,8 +159,8 @@ runs:
         load: true
         tags: ghcr.io/${{ inputs.image_name }}:test
         file: ${{ inputs.file }}
-        secret-envs: ${{ inputs.secret_envs || inputs.secret-envs }}
-        secret-files: ${{ inputs.secret_files || inputs.secret-files }}
+        secret-envs: ${{ inputs.secret_envs }}
+        secret-files: ${{ inputs.secret_files }}
         secrets: ${{ inputs.secrets }}
     - name: wait for the test container
       if: ${{ inputs.skip_healthcheck != 'true' }}
@@ -202,8 +190,8 @@ runs:
         tags: ${{ steps.meta.outputs.tags || format('ghcr.io/{0}', inputs.image_name) }}
         labels: ${{ steps.labels.outputs.labels }}
         file: ${{ inputs.file }}
-        secret-envs: ${{ inputs.secret_envs || inputs.secret-envs }}
-        secret-files: ${{ inputs.secret_files || inputs.secret-files }}
+        secret-envs: ${{ inputs.secret_envs }}
+        secret-files: ${{ inputs.secret_files }}
         secrets: ${{ inputs.secrets }}
     # Rekor can stay slow for minutes, past the minute actions/attest spends on its own retries, so
     # a failed attempt runs again after a pause. All three attempts take the same inputs, and only
