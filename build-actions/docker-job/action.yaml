@@ -1,5 +1,7 @@
 name: build docker job
-description: Build an image from a Dockerfile, verify that its run exits 0, push it and attest its provenance.
+description: >
+  Deprecated, use build-actions/docker with mode set to job, which this action runs. Build an image
+  from a Dockerfile, verify that its run exits 0, push it and attest its provenance.
 
 inputs:
   file:
@@ -59,6 +61,10 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Warn that docker-job is deprecated
+      shell: bash
+      run: |
+        echo "::warning::build-actions/docker-job is deprecated. Call build-actions/docker with mode set to job before a later release removes it, as https://github.com/a-novel-kit/workflows/blob/master/docs/migrations/v1.78.0.md shows."
     - id: build
       uses: a-novel-kit/workflows/build-actions/docker@v1.77.1
       with:
@@ -72,6 +78,6 @@ runs:
         github_token: ${{ inputs.github_token }}
         context: ${{ inputs.context }}
         secrets: ${{ inputs.secrets }}
-        secret-envs: ${{ inputs.secret-envs }}
-        secret-files: ${{ inputs.secret-files }}
+        secret_envs: ${{ inputs.secret-envs }}
+        secret_files: ${{ inputs.secret-files }}
         cache: ${{ inputs.cache }}
