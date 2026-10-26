@@ -275,8 +275,10 @@ the line after `version`, and the base Renovate preset moves both together:
 ```
 
 `lint-dockerfile` takes `datasource=custom.hadolint depName=hadolint/hadolint` and the SHA-256 of
-`hadolint-linux-x86_64`. A download that does not match its pin fails the step. A release whose files
-change under an unchanged version gets a Renovate pull request that waits for a reviewer.
+`hadolint-linux-x86_64`, and `publish-actions/sentry-release` takes
+`datasource=custom.sentry-cli depName=getsentry/sentry-cli` and the SHA-256 of `sentry-cli-Linux-x86_64`.
+A download that does not match its pin fails the step. A release whose files change under an unchanged
+version gets a Renovate pull request that waits for a reviewer.
 
 A repository that needs its own gitleaks allowlist passes `config`, which replaces the shipped
 baseline. gitleaks drops a base config's allowlists when another config extends it, so the repository
@@ -288,12 +290,13 @@ workflow never reports and the PR never merges.
 
 ### `publish-actions`
 
-| Action                | Purpose                                                          |
-| --------------------- | ---------------------------------------------------------------- |
-| `deploy-release`      | Ask infra to deploy a release once all its images are published. |
-| `npm`                 | Attest the workspace packages' tarballs and publish them.        |
-| `release-core`        | Cut a release in CI: bump the version, tag, push, release.       |
-| `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line, not marked latest.  |
+| Action                | Purpose                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `deploy-release`      | Ask infra to deploy a release once all its images are published.                               |
+| `npm`                 | Attest the workspace packages' tarballs and publish them.                                      |
+| `release-core`        | Cut a release in CI: bump the version, tag, push, release.                                     |
+| `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line, not marked latest.                                |
+| `sentry-release`      | Record a release in Sentry with its commits and a production deploy, from the job that cut it. |
 
 ### Reusable workflows
 

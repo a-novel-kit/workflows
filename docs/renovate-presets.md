@@ -42,10 +42,10 @@ version: "1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974
 ```
 
 A workflow pin of a downloaded tool carries the SHA-256 of its release file on the line after
-`version`. The `custom.shellcheck` and `custom.hadolint` datasources read that file's digest from
-GitHub's release API, so one update moves the version and the hash. An update that keeps the version
-and changes the hash means someone replaced the release's files, so it waits for a reviewer, as do
-the database preset's pgBackRest and apko hashes.
+`version`. The `custom.shellcheck`, `custom.hadolint` and `custom.sentry-cli` datasources read that
+file's digest from GitHub's release API, so one update moves the version and the hash. An update that
+keeps the version and changes the hash means someone replaced the release's files, so it waits for a
+reviewer, as do the database preset's pgBackRest and apko hashes.
 
 ```yaml
 # renovate: datasource=custom.hadolint depName=hadolint/hadolint
