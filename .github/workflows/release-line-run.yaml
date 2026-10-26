@@ -156,7 +156,7 @@ jobs:
 
       - name: Cut the patch
         id: cut
-        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.79.0
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.80.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.37.2"
@@ -168,7 +168,7 @@ jobs:
       # The cut leaves the patch's tagged commit checked out in __hotfix.
       - name: Record the patch in Sentry
         if: ${{ !inputs.dry_run }}
-        uses: a-novel-kit/workflows/publish-actions/sentry-release@v1.79.0
+        uses: a-novel-kit/workflows/publish-actions/sentry-release@v1.80.0
         with:
           release_version: ${{ steps.cut.outputs.version }}
           path: __hotfix
@@ -189,7 +189,7 @@ jobs:
     permissions: {}
     steps:
       - name: Escalate the failed cut
-        uses: a-novel-kit/workflows/generic-actions/escalate@v1.79.0
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.80.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}

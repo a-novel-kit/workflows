@@ -66,7 +66,7 @@ runs:
       run: |
         echo "::warning::build-actions/docker-job is deprecated. Call build-actions/docker with mode set to job before a later release removes it, as https://github.com/a-novel-kit/workflows/blob/master/docs/migrations/v1.78.0.md shows."
     - id: build
-      uses: a-novel-kit/workflows/build-actions/docker@v1.79.0
+      uses: a-novel-kit/workflows/build-actions/docker@v1.80.0
       with:
         mode: job
         file: ${{ inputs.file }}
