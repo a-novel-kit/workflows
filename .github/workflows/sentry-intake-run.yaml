@@ -1,0 +1,73 @@
+name: sentry-intake (reusable)
+
+# Boards each GitHub issue that Sentry's GitHub App opens, so a production fault waits in the Triage
+# queue like any incoming report: Status Triage, typed Bug and labelled `sentry`. A person creates the
+# issue with the integration's button on a Sentry issue. The caller triggers on `issues: opened`,
+# grants `issues: write`, and passes the Agent App, which writes the board from the governance
+# environment.
+#
+# The App (`sentry`, ID 12637) opens the issue as its bot account and leaves
+# `performed_via_github_app` empty, so the author tells its issues apart. Any other issue skips the job.
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        description: Client id of the GitHub App that writes the org board. The default token cannot reach it.
+        required: true
+        type: string
+      project_id:
+        description: Node id (PVT_…) of the org project board.
+        required: true
+        type: string
+      kill_switch:
+        description: >-
+          Org-level halt, threaded from the caller's AGENT_KILL_SWITCH variable. Engaged, the issue is
+          typed and labelled but not boarded.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app_private_key:
+        description: Private key (PEM) of the App that client_id names.
+        required: true
+
+jobs:
+  intake:
+    if: github.event.issue.user.login == 'sentry[bot]'
+    runs-on: ubuntu-latest
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
+    # The job token types and labels the issue. board-write mints the Agent token for the board, so
+    # the App stays the board's single writer.
+    permissions:
+      issues: write
+    steps:
+      - name: Board the issue in Triage
+        uses: a-novel-kit/workflows/generic-actions/board-write@v1.78.0
+        with:
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.app_private_key }}
+          project_id: ${{ inputs.project_id }}
+          content_id: ${{ github.event.issue.node_id }}
+          field: Status
+          value: Triage
+          kill_switch: ${{ inputs.kill_switch }}
+
+      # The two writes are independent, so a failed board write still types and labels the issue.
+      - name: Type and label the issue
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/labels" -f "labels[]=sentry" --silent
+          # GitHub silently drops a type it does not let the token set, so the answer is checked.
+          type=$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/$NUMBER" -f type=Bug --jq '.type.name // ""')
+          if [ "$type" != Bug ]; then
+            echo "::error::GitHub did not set the Bug type on #$NUMBER."
+            exit 1
+          fi
+          echo "Typed #$NUMBER Bug and labelled it \`sentry\`." >> "$GITHUB_STEP_SUMMARY"

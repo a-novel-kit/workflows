@@ -1,0 +1,86 @@
+name: sentry release
+description: >
+  Record a release in Sentry from the job that cut it. It creates the release `<repository>@<version>`
+  in the Sentry project named after the repository, associates the commits since the previous release
+  through Sentry's GitHub integration, finalizes the release and records a `production` deploy. Run it
+  right after `release-core`, in the same job, since it reads that checkout of the release commit. An
+  empty `auth_token` skips it.
+
+inputs:
+  release_version:
+    required: true
+    description: >
+      The version cut, release-core's `version` output, such as 1.2.3. A leading v is dropped, so the
+      release is `<repository>@1.2.3`, the name the deployed service reports.
+  auth_token:
+    required: false
+    default: ""
+    description: >
+      Sentry organization auth token, a secret of the cut job's `release` environment. It names its
+      organization and region, so moving to another Sentry organization changes only the token. Empty
+      skips the step, for a repository whose environment holds none.
+  version:
+    required: true
+    description: >
+      sentry-cli release, with or without the leading v. The caller pins it so Renovate bumps it per
+      repository, with the annotation
+      `# renovate: datasource=custom.sentry-cli depName=getsentry/sentry-cli`.
+  sha256:
+    required: true
+    description: >
+      SHA-256 of that release's `sentry-cli-Linux-x86_64`, on the line right after `version`, so
+      Renovate moves both together. A missing pin or a download that does not match fails the step.
+
+runs:
+  using: composite
+  steps:
+    - name: Record the release
+      shell: bash
+      env:
+        RELEASE_VERSION: ${{ inputs.release_version }}
+        SENTRY_AUTH_TOKEN: ${{ inputs.auth_token }}
+        SENTRY_CLI_VERSION: ${{ inputs.version }}
+        SENTRY_CLI_SHA256: ${{ inputs.sha256 }}
+      run: |
+        set -euo pipefail
+        if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+          echo "No Sentry auth token, so no Sentry release." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if ! [[ "$RELEASE_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::release_version must be a version such as 1.2.3, got '$RELEASE_VERSION'"
+          exit 1
+        fi
+
+        bin="$RUNNER_TEMP/sentry-cli"
+        # The release is already cut, so the download retries rather than leave Sentry without it.
+        # `--retry-all-errors` also retries a transport-level reset, which plain `--retry` leaves fatal.
+        if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+          "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION#v}/sentry-cli-Linux-x86_64" \
+          -o "$bin"; then
+          echo "::error::failed to download sentry-cli ${SENTRY_CLI_VERSION} after 3 retries"
+          exit 1
+        fi
+        # The pin comes from the caller, never from the release, whose files and checksums an
+        # attacker holding the release can replace together.
+        if [ -z "$SENTRY_CLI_SHA256" ]; then
+          echo "::error::sentry-cli ${SENTRY_CLI_VERSION} has no pinned sha256: pin it beside version."
+          exit 1
+        elif ! echo "$SENTRY_CLI_SHA256  $bin" | sha256sum --check --quiet; then
+          echo "::error::sentry-cli ${SENTRY_CLI_VERSION} does not match the pinned sha256"
+          exit 1
+        fi
+        chmod +x "$bin"
+
+        # The token reaches sentry-cli through the environment only. sentry-cli reads the project from
+        # SENTRY_PROJECT, and the organization from the token.
+        export SENTRY_PROJECT="${GITHUB_REPOSITORY#*/}"
+        release="$SENTRY_PROJECT@${RELEASE_VERSION#v}"
+        "$bin" releases new "$release"
+        # --auto names the checkout's HEAD, the release commit, and Sentry reads the commits since the
+        # previous release from GitHub. A repository Sentry has not linked falls back to the checkout's
+        # history, where --ignore-missing takes the last 20 commits if the previous one is missing.
+        "$bin" releases set-commits "$release" --auto --ignore-missing
+        "$bin" releases finalize "$release"
+        "$bin" deploys new --release "$release" --env production
+        echo "Recorded the Sentry release \`$release\` with its commits and a production deploy." >>"$GITHUB_STEP_SUMMARY"
