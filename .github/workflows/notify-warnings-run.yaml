@@ -57,14 +57,14 @@ jobs:
 
       - name: Collect the warnings
         id: collect
-        uses: a-novel-kit/workflows/generic-actions/collect-warnings@v1.78.0
+        uses: a-novel-kit/workflows/generic-actions/collect-warnings@v1.79.0
         with:
           github_token: ${{ steps.token.outputs.token }}
           ignore: ${{ inputs.ignore }}
 
       - name: Post to the CI channel
         if: steps.collect.outputs.count != '0'
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.78.0
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.79.0
         with:
           webhook: ${{ secrets.webhook }}
           color: upcoming

@@ -300,7 +300,7 @@ runs:
       id: membership
       if: ${{ steps.discover.outputs.epic_number != '' }}
       continue-on-error: true
-      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.78.0
+      uses: a-novel-kit/workflows/generic-actions/epic-membership@v1.79.0
       with:
         epic_number: ${{ steps.discover.outputs.epic_number }}
         # The gate writes the snapshot to planning_repo, so epic-membership must read it there.

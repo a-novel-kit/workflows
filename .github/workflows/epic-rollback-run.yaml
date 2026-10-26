@@ -72,7 +72,7 @@ jobs:
     steps:
       # Any user with write access can dispatch, so these gates keep a rollback admin-only and
       # deliberate.
-      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.78.0
+      - uses: a-novel-kit/workflows/generic-actions/require-role@v1.79.0
         with:
           roles: admin
 
@@ -94,7 +94,7 @@ jobs:
           fi
           echo "Confirmation matches — proceeding with rollback of epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - uses: a-novel-kit/workflows/generic-actions/epic-rollback@v1.78.0
+      - uses: a-novel-kit/workflows/generic-actions/epic-rollback@v1.79.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
