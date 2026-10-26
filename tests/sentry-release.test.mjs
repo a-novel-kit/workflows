@@ -1,19 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { step, succeeds, workspace } from "./helpers.mjs";
+import { command, manifest, root, step, succeeds, workspace } from "./helpers.mjs";
 
 const release = "publish-actions/sentry-release/action.yaml";
 
-// The download stands in for sentry-cli: it logs each call with the project and token it sees.
+// The download stands in for sentry-cli: it logs each call with the directory, project and token it sees.
 function sentryCli(t) {
   const w = workspace(t);
   const binary = `#!${process.execPath}
 const { appendFileSync } = require("node:fs");
 const { SENTRY_PROJECT, SENTRY_AUTH_TOKEN } = process.env;
-appendFileSync("${w.cwd}/calls", JSON.stringify({ args: process.argv.slice(2), SENTRY_PROJECT, SENTRY_AUTH_TOKEN }) + "\\n");
+appendFileSync("${w.cwd}/calls", JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), SENTRY_PROJECT, SENTRY_AUTH_TOKEN }) + "\\n");
 `;
   w.stub(
     "curl",
@@ -30,7 +30,12 @@ appendFileSync("${w.cwd}/calls", JSON.stringify({ args: process.argv.slice(2), S
     SENTRY_CLI_VERSION: "3.8.2",
     SENTRY_CLI_SHA256: createHash("sha256").update(binary).digest("hex"),
   };
-  const run = (extra = {}) => w.bash(step(release, "Record the release"), { ...env, ...extra });
+  // The runner starts the step in the action's `path`, the workspace root unless the caller names one.
+  const run = (extra = {}, cwd = w.cwd) =>
+    command("bash", ["--noprofile", "--norc", "-c", step(release, "Record the release")], {
+      cwd,
+      env: { ...w.env, ...env, ...extra },
+    });
   const calls = () =>
     existsSync(join(w.cwd, "calls"))
       ? w
@@ -98,4 +103,54 @@ test("sentry-release skips without a token and runs nothing on a bad version or 
     assert.match(result.stdout, annotation);
     assert.deepEqual(calls(), [], JSON.stringify(extra));
   }
+});
+
+test("a hotfix cut records its patch from the release line it checked out and tagged", (t) => {
+  const { w, run, calls } = sentryCli(t);
+  // release-line-run hands sentry-release the cut's version and release-core-hotfix's checkout.
+  const hotfix = "publish-actions/release-core-hotfix/action.yaml";
+  const checkout = manifest(hotfix).runs.steps.find((s) => s.name === "Checkout").with.path;
+  const steps = manifest(".github/workflows/release-line-run.yaml").jobs.cut.steps;
+  const record = steps[steps.findIndex((s) => s.id === "cut") + 1];
+  assert.match(record.uses, /\/sentry-release@/);
+  assert.equal(record.with.release_version, "${{ steps.cut.outputs.version }}");
+  assert.equal(record.with.path, checkout);
+  assert.equal(manifest(release).runs.steps[0]["working-directory"], "${{ inputs.path }}");
+
+  const line = join(w.cwd, checkout);
+  mkdirSync(line);
+  const git = (...args) => succeeds(w.run("git", ["-C", line, ...args]));
+  git("init", "-q", "-b", "master");
+  w.write(`${checkout}/package.json`, '{"version":"1.2.3"}');
+  git("add", "package.json");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "baseline");
+  git("tag", "v1.2.3");
+  succeeds(w.run("git", ["init", "-q", "--bare", "remote.git"]));
+  git("remote", "add", "origin", join(w.cwd, "remote.git"));
+  git("push", "-q", "origin", "master:release/v1.2", "v1.2.3");
+  w.stub("gh", "");
+  const env = {
+    ...w.env,
+    GITHUB_ACTION_PATH: join(root, "publish-actions/release-core-hotfix"),
+    GITHUB_REPOSITORY: "a-novel/service-authentication",
+    GH_TOKEN: "release-token",
+    APP_SLUG: "fixture",
+    STAMP_NEEDED: "false",
+    BRANCH: "release/v1.2",
+    DRY_RUN: "false",
+  };
+  succeeds(command("bash", ["--noprofile", "--norc", "-c", step(hotfix, "cut")], { cwd: line, env }));
+  const version = w.read("output").match(/^version=(.+)$/m)[1];
+  succeeds(run({ RELEASE_VERSION: version }, join(w.cwd, record.with.path)));
+
+  // set-commits --auto reads the HEAD of the checkout it runs in, which the cut left on the tagged patch.
+  assert.equal(git("rev-parse", "HEAD"), git("rev-parse", "v1.2.4^{commit}"));
+  assert(calls().every((call) => call.cwd === realpathSync(line)));
+  assert.deepEqual(calls()[1].args, [
+    "releases",
+    "set-commits",
+    "service-authentication@1.2.4",
+    "--auto",
+    "--ignore-missing",
+  ]);
 });
