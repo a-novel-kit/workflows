@@ -5,7 +5,8 @@ name: release line (reusable)
 # the release App behind the protected `release` environment, the human gate on who may publish. It
 # pushes the bump commit to the line together with its tags, so the line's head is always its latest
 # patch. The caller triggers on pull_request_target, so GitHub runs the default branch's copy of the
-# caller and checks the `release` environment against the default branch.
+# caller and checks the `release` environment against the default branch. Given the caller's Sentry
+# token, the cut records the patch in Sentry as a regular release's cut does.
 #
 # A head that is already tagged has nothing to release. The caller serializes runs per line, and
 # each run reads the line's current head, so two backports merged together cut one patch and the
@@ -60,6 +61,12 @@ on:
         description: >
           Private key (PEM) of the App that release_client_id names. The caller passes it by name from
           its `release` environment, which only the cut job opens.
+        required: false
+      sentry_auth_token:
+        description: >
+          Sentry organization auth token, which records the patch as a Sentry release with its commits
+          and a production deploy. The caller passes it by name from its `release` environment. Empty
+          records nothing, for a repository without a Sentry project.
         required: false
       push_webhook:
         description: Chat webhook URL that receives a SEV1 escalation's push. Empty turns the push off.
@@ -148,6 +155,7 @@ jobs:
           done
 
       - name: Cut the patch
+        id: cut
         uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.79.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
@@ -156,6 +164,18 @@ jobs:
           client_id: ${{ inputs.release_client_id }}
           app_private_key: ${{ secrets.release_private_key }}
           dry_run: ${{ inputs.dry_run }}
+
+      # The cut leaves the patch's tagged commit checked out in __hotfix.
+      - name: Record the patch in Sentry
+        if: ${{ !inputs.dry_run }}
+        uses: a-novel-kit/workflows/publish-actions/sentry-release@v1.79.0
+        with:
+          release_version: ${{ steps.cut.outputs.version }}
+          path: __hotfix
+          auth_token: ${{ secrets.sentry_auth_token }}
+          # renovate: datasource=custom.sentry-cli depName=getsentry/sentry-cli
+          version: "3.8.2"
+          sha256: "c958865f9d4000183509ea21b1f04925d5390de6d8d87386b9e69f2b305070c3"
 
   # The `release` environment holds only the release key, so the escalation runs in the caller's
   # governance environment. A failed pending job escalates too.
