@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
-import { read } from "./helpers.mjs";
+import { read, root } from "./helpers.mjs";
 
 const preset = (name) => JSON.parse(read(`renovate/${name}.json`));
 const base = preset("base"),
@@ -118,6 +120,15 @@ test("Renovate extracts hidden workflow, action-image and database tool pins", (
   for (const [datasource, fixture, expected] of databasePins) {
     const manager = database.customManagers.find((m) => m.datasourceTemplate === datasource);
     assert.deepEqual(extract(manager, fixture), expected);
+  }
+});
+
+// An annotation the manager cannot read leaves its pin where it is for good, as cli_version was.
+test("Renovate reads every annotated pin in this repository's workflows", () => {
+  const workflow = base.customManagers.find((m) => m.description.includes("workflow with: blocks"));
+  for (const file of readdirSync(join(root, ".github/workflows"))) {
+    const content = read(`.github/workflows/${file}`);
+    assert.equal(extract(workflow, content).length, content.split("# renovate: ").length - 1, file);
   }
 });
 
