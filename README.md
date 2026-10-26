@@ -318,6 +318,7 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | `reconcile-board`             | Per-org fail-safe sweep that repairs the board and the `merge-gate` and `epic-freeze` checks.                     |
 | `release-line-run`            | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
 | `release-train-run`           | Admin-gated dispatch of `release-train` for one landed Epic.                                                      |
+| `sentry-intake-run`           | Board each issue Sentry's GitHub App opens in Triage, typed Bug and labelled `sentry`.                            |
 | `token-expiry`                | Post an organization's fine-grained personal access tokens to Discord as they near expiry.                        |
 
 ## Contributing
