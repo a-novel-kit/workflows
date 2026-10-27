@@ -7,9 +7,9 @@ name: notify-issues (reusable)
 # late or failed one. Issues in Backlog post nothing.
 #
 # A post goes to its repository's issues channel, or the org's when the repository has none. Its color
-# names the stage: purple for Triage, blue for Ready, gold for In review and green for the rest. A move
-# into Triage or Ready, and an assignee change, ping the assignees through the GitHub-to-Discord map, or
-# the repository's role when nobody is assigned.
+# names the stage: grey for Triage, blue for Ready, gold for In review, purple for Awaiting release, red
+# for Done and green for the rest. A move into Triage or Ready, and an assignee change, ping the
+# assignees through the GitHub-to-Discord map, or the repository's role when nobody is assigned.
 on:
   workflow_call:
     inputs:
@@ -117,8 +117,8 @@ jobs:
           # hence a day of margin. An item archived between the two scans appears in both.
           day="$(date -u -d "${since%T*} -1 day" +%F)"
           # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings. discord-post
-          # names its colors after CI states: released is purple, started blue, upcoming gold and
-          # succeeded green.
+          # names its colors after CI states: cancelled is grey, started blue, upcoming gold, released
+          # purple, failed red and succeeded green.
           events="$({ scan NOT_ARCHIVED ""; scan ARCHIVED "updated:>=$day"; } |
             jq -sc --arg since "$since" '[.[].data.node.items.nodes[]
               | select(.content.state != null and .status != null and .status.name != "Backlog")
@@ -133,7 +133,8 @@ jobs:
               | [.content.assignees.nodes[] | select(.login | endswith("[bot]") | not)] as $assignees
               | {
                   at: $event.at, ping: $event.ping,
-                  color: ({Triage: "released", Ready: "started", "In review": "upcoming"}[$status] // "succeeded"),
+                  color: ({Triage: "cancelled", Ready: "started", "In review": "upcoming",
+                    "Awaiting release": "released", Done: "failed"}[$status] // "succeeded"),
                   repo: .content.repository.nameWithOwner, number: .content.number, title: .content.title,
                   url: .content.url, user_ids: ($assignees | map(.databaseId | tostring) | join(" ")),
                   description: "\($event.what) · \(if $assignees == [] then "nobody assigned"
