@@ -2,9 +2,10 @@ name: sentry release
 description: >
   Record a release in Sentry from the job that cut it. It creates the release `<repository>@<version>`
   in the Sentry project named after the repository, associates the commits since the previous release
-  through Sentry's GitHub integration, finalizes the release and records a `production` deploy. Run it
-  right after `release-core` or `release-core-hotfix`, in the same job, since it reads the checkout of
-  the release commit that the cut leaves. An empty `auth_token` skips it.
+  through Sentry's GitHub integration and finalizes the release. Whatever puts the release in
+  production records its deploy, once production serves it. Run it right after `release-core` or
+  `release-core-hotfix`, in the same job, since it reads the checkout of the release commit that the
+  cut leaves. An empty `auth_token` skips it.
 
 inputs:
   release_version:
@@ -89,5 +90,4 @@ runs:
         # history, where --ignore-missing takes the last 20 commits if the previous one is missing.
         "$bin" releases set-commits "$release" --auto --ignore-missing
         "$bin" releases finalize "$release"
-        "$bin" deploys new --release "$release" --env production
-        echo "Recorded the Sentry release \`$release\` with its commits and a production deploy." >>"$GITHUB_STEP_SUMMARY"
+        echo "Recorded the Sentry release \`$release\` with its commits." >>"$GITHUB_STEP_SUMMARY"

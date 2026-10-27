@@ -48,14 +48,13 @@ appendFileSync("${w.cwd}/calls", JSON.stringify({ args: process.argv.slice(2), c
   return { w, run, calls, reset };
 }
 
-test("sentry-release names the release after the repository and records its commits and deploy", (t) => {
+test("sentry-release names the release after the repository and records its commits", (t) => {
   const { w, run, calls, reset } = sentryCli(t);
   const name = "service-authentication@1.2.3";
   const expected = [
     ["releases", "new", name],
     ["releases", "set-commits", name, "--auto", "--ignore-missing"],
     ["releases", "finalize", name],
-    ["deploys", "new", "--release", name, "--env", "production"],
   ];
   // A tag's leading v drops from both versions, and a re-run over the existing release succeeds.
   for (const [extra, runs] of [
