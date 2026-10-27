@@ -290,13 +290,13 @@ workflow never reports and the PR never merges.
 
 ### `publish-actions`
 
-| Action                | Purpose                                                                                        |
-| --------------------- | ---------------------------------------------------------------------------------------------- |
-| `deploy-release`      | Ask infra to deploy a release once all its images are published.                               |
-| `npm`                 | Attest the workspace packages' tarballs and publish them.                                      |
-| `release-core`        | Cut a release in CI: bump the version, tag, push, release.                                     |
-| `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line, not marked latest.                                |
-| `sentry-release`      | Record a release in Sentry with its commits and a production deploy, from the job that cut it. |
+| Action                | Purpose                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `deploy-release`      | Ask infra to deploy a release once all its images are published.       |
+| `npm`                 | Attest the workspace packages' tarballs and publish them.              |
+| `release-core`        | Cut a release in CI: bump the version, tag, push, release.             |
+| `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line, not marked latest.        |
+| `sentry-release`      | Record a release in Sentry with its commits, from the job that cut it. |
 
 ### Reusable workflows
 
