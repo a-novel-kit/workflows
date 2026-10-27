@@ -162,7 +162,7 @@ jobs:
       - name: Verify first-party release proofs
         id: proof
         if: ${{ steps.pr.outputs.skip != 'true' && steps.guard.outputs.skip != 'true' }}
-        uses: a-novel-kit/workflows/generic-actions/verify-release-proof@v1.80.0
+        uses: a-novel-kit/workflows/generic-actions/verify-release-proof@v1.80.1
         with:
           github_token: ${{ github.token }}
           pull_request: ${{ steps.pr.outputs.url }}
@@ -173,7 +173,7 @@ jobs:
       - name: Classify the change
         id: classify
         if: ${{ inputs.strict && steps.proof.outputs.verified == 'true' }}
-        uses: a-novel-kit/workflows/generic-actions/classify-bot-change@v1.80.0
+        uses: a-novel-kit/workflows/generic-actions/classify-bot-change@v1.80.1
         with:
           github_token: ${{ steps.token.outputs.token }}
           pull_request: ${{ steps.pr.outputs.url }}
@@ -184,7 +184,7 @@ jobs:
         if: >-
           ${{ steps.proof.outputs.verified == 'true' && (!inputs.strict ||
           contains(fromJSON('["pin", "renovate", "ranges"]'), steps.classify.outputs.decision)) }}
-        uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.80.0
+        uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.80.1
         with:
           pull_request: ${{ steps.pr.outputs.url }}
           github_token: ${{ steps.token.outputs.token }}
