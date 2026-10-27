@@ -56,7 +56,7 @@ test("notify-issues colors each Status change and pings for Triage, Ready and as
       "entered Triage",
       [item("Triage", after)],
       [],
-      { description: "Moved to Triage · nobody assigned", color: "released", ping: true, user_ids: "" },
+      { description: "Moved to Triage · nobody assigned", color: "cancelled", ping: true, user_ids: "" },
     ],
     [
       "entered In progress",
@@ -76,10 +76,16 @@ test("notify-issues colors each Status change and pings for Triage, Ready and as
       [item("Awaiting release", after, { assignees: kushuh, state: "CLOSED" })],
       {
         description: "Moved to Awaiting release · assigned to kushuh",
-        color: "succeeded",
+        color: "released",
         ping: false,
         user_ids: "1",
       },
+    ],
+    [
+      "closed as Done",
+      [],
+      [item("Done", after, { state: "CLOSED" })],
+      { description: "Moved to Done · nobody assigned", color: "failed", ping: false, user_ids: "" },
     ],
     [
       "unassigned in progress",
