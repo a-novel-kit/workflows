@@ -45,7 +45,7 @@ jobs:
       issues: write
     steps:
       - name: Board the issue in Triage
-        uses: a-novel-kit/workflows/generic-actions/board-write@v1.80.1
+        uses: a-novel-kit/workflows/generic-actions/board-write@v1.80.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
