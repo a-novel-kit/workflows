@@ -7,12 +7,6 @@ inputs:
   working_directory:
     required: false
     description: The Go module directory to lint and scan. Defaults to the repository root.
-  working-directory:
-    required: false
-    description: Deprecated, use working_directory. A later release removes it.
-    deprecationMessage: >
-      Rename it working_directory before a later release removes it, as
-      https://github.com/a-novel-kit/workflows/blob/master/docs/migrations/v1.78.0.md shows.
 
 runs:
   using: "composite"
@@ -23,7 +17,7 @@ runs:
     - id: setup-go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version-file: ${{ inputs.working_directory || inputs.working-directory || '.' }}/go.mod
+        go-version-file: ${{ inputs.working_directory || '.' }}/go.mod
         # Each Go action keeps its own cache, since setup-go keys one cache on go.sum for every Go job.
         cache: false
     - id: go-cache
@@ -40,7 +34,7 @@ runs:
     - id: golangci-version
       shell: bash
       env:
-        WORKING_DIRECTORY: ${{ inputs.working_directory || inputs.working-directory }}
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
       run: |
         set -euo pipefail
         cd "${WORKING_DIRECTORY:-.}"
@@ -50,7 +44,7 @@ runs:
     - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
       with:
         version: ${{ steps.golangci-version.outputs.version }}
-        working-directory: ${{ inputs.working_directory || inputs.working-directory }}
+        working-directory: ${{ inputs.working_directory }}
     # govulncheck.mod pins the scanner developers run locally, and a module without one skips it.
     # The scan reports and never fails the job: its database changes without a commit, and each Go
     # security release flags the standard library until Renovate moves the go directive, so a gate
@@ -58,7 +52,7 @@ runs:
     - name: govulncheck
       shell: bash
       env:
-        WORKING_DIRECTORY: ${{ inputs.working_directory || inputs.working-directory }}
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
       run: |
         set -euo pipefail
         cd "${WORKING_DIRECTORY:-.}"
