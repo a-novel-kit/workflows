@@ -168,6 +168,37 @@ test("unassociated direct commits cannot borrow another PR approval", async () =
   commits[1] = { sha: "queue-merge", parents: [{ sha: "base" }, { sha: "head" }] };
   assert.deepEqual(await f.policy.associated("base", "queue-merge", false), [f.pr]);
 });
+test("a release commit carries the approvals merged before it, vouched for by its own tag", async () => {
+  /** Whether master may regenerate at a release cut right after an approved merge, once mutated. */
+  async function allowed(mutate = () => {}) {
+    const f = fixture();
+    Object.assign(f.pr, { merged_at: "2026-10-27T23:05:38Z", merge_commit_sha: "head" });
+    const gap = {
+      commits: [
+        { sha: "head", parents: [{ sha: "base" }] },
+        { sha: "release", parents: [{ sha: "head" }], commit: { message: "chore(release): 0.12.1" } },
+      ],
+      tag: { object: { type: "commit", sha: "release" } },
+    };
+    mutate(gap);
+    f.github.request = async (path) => (path === "git/ref/tags/v0.12.1" ? gap.tag : { commits: gap.commits });
+    f.github.pages = async (path) => (path.includes("/head/") ? [f.pr] : []);
+    f.policy.proof = async () => "approved";
+    return f.policy.allows({}, "push", "release", "refs/heads/master", "base");
+  }
+
+  assert.equal(await allowed(), true);
+  const blocked = [
+    (gap) => (gap.tag = null),
+    (gap) => (gap.tag.object.sha = "head"),
+    (gap) => (gap.tag.object.type = "tag"),
+    (gap) => (gap.commits[1].commit.message = "chore(release): 0.12.1 by hand"),
+    (gap) => gap.commits[1].parents.push({ sha: "side" }),
+    // A release alone in the gap has no approval to carry, so a screenshot change of its own stays blocked.
+    (gap) => gap.commits.shift(),
+  ];
+  for (const mutate of blocked) assert.equal(await allowed(mutate), false);
+});
 test("squash queue commits are attributed through their queue entries, never by default", async () => {
   const f = fixture();
   const commits = [
