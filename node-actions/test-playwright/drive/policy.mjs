@@ -169,11 +169,25 @@ export class Policy {
     for (const commit of commits) {
       if (!covered.has(commit.sha)) {
         const parents = new Set((commit.parents ?? []).map((parent) => parent.sha));
-        if (parents.size < 2 || [...parents].some((parent) => parent !== base && !covered.has(parent))) return [];
+        const merge = parents.size > 1 && [...parents].every((parent) => parent === base || covered.has(parent));
+        if (!merge && !(await this.released(commit))) return [];
         covered.add(commit.sha);
       }
     }
     return [...pulls.values()];
+  }
+
+  /**
+   * Whether a commit is the version bump of a release, which reaches master without a pull request.
+   *
+   * Only admins and the release App create tags, so the v<version> tag naming the commit vouches for it. The message
+   * only locates that tag.
+   */
+  async released(commit) {
+    const version = commit.commit?.message.match(/^chore\(release\): ([\w.+-]+)$/)?.[1];
+    if (commit.parents?.length !== 1 || !version) return false;
+    const tag = await this.github.request(`git/ref/tags/v${version}`, { missing: true });
+    return tag?.object.type === "commit" && tag.object.sha === commit.sha;
   }
 
   async allows(event, eventName, sha, ref, baseline) {
