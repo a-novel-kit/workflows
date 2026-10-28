@@ -147,6 +147,12 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
     for (const name of yes) assert(matches(rule(group).matchPackageNames, name), name);
     for (const name of no) assert(!matches(rule(group).matchPackageNames, name), name);
   }
+  // A Node.js major brings its types along, by exact name, so code never typechecks against a newer runtime.
+  const node = rule("Node.js");
+  assert.deepEqual(node.matchUpdateTypes, ["major"]);
+  for (const name of ["node", "docker.io/library/node", "@types/node"]) assert(matches(node.matchDepNames, name), name);
+  for (const name of ["@sentry/node", "@types/nodemailer", "ghcr.io/a-novel/node"])
+    assert(!matches(node.matchDepNames, name), name);
   // A grouped branch runs every artifact update with the config of its first upgrade by depName.
   // That upgrade is an image here, so every group outside the gomod manager carries the Go module's tidy.
   const goGroups = base.packageRules.filter(

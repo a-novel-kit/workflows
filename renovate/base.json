@@ -225,6 +225,12 @@
       "groupName": "svelte vite toolchain"
     },
     {
+      "description": "Ship a Node.js major and its types in one reviewed PR: the image, setup-node's version and `@types/node`. Types ahead of the runtime let code typecheck against APIs the deployed image lacks. Names stay exact, since a `node` suffix also matches npm packages such as `@sentry/node`.",
+      "matchDepNames": ["node", "docker.io/library/node", "@types/node"],
+      "matchUpdateTypes": ["major"],
+      "groupName": "Node.js"
+    },
+    {
       "description": "Leave pnpm audit-managed overrides to the audit action. node-actions/audit runs `pnpm audit --fix=override` daily and pins vulnerable transitive dependencies to the minimal patched version within each consumer's supported range. Renovate's npm manager otherwise re-reads the override value as an ordinary dependency and bumps it to the latest major, pushing the pin past the parent's compatibility ceiling (e.g. undici v8 breaks jsdom's private wrap-handler.js deep-import). Audit owns these values; Renovate must not touch them. All three depTypes must stay listed: Renovate types package.json `pnpm.overrides` and its `overrides` alias, but overrides declared in pnpm-workspace.yaml (pnpm 10's preferred location) get `pnpm-workspace.overrides` \u2014 omit it and the guard silently no-ops for every workspace-level override.",
       "matchDepTypes": ["pnpm.overrides", "overrides", "pnpm-workspace.overrides"],
       "enabled": false
