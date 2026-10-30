@@ -56,6 +56,12 @@ jobs:
       github.event_name == 'status' ||
       github.event.pull_request.user.login == inputs.dependency_bot_login ||
       github.event.pull_request.user.login == inputs.dependabot_security_login
+    # A pull request's opening, its auto-merge and its stability status reach one head within seconds.
+    # Their runs take turns, so the guard sees the approval an earlier one made: each approval wakes
+    # every gate again.
+    concurrency:
+      group: auto-approve-${{ github.event.pull_request.head.sha || github.event.sha }}
+      cancel-in-progress: false
     # The default token makes the reads the App cannot: commit statuses, attestations and GitHub
     # Packages tarballs, with the diff they belong to. Every write uses the App.
     permissions:
@@ -107,6 +113,7 @@ jobs:
       # Renovate pull request it left off auto-merge, or that a person took off, waits for a person.
       # The first to enable auto-merge decided it; recover-prs re-arms a dropped pull request as the
       # agent. An update inside its release-age window waits for its green status to re-run the job.
+      # A head this App already approved gets no second review, though auto-merge is still armed.
       - name: Confirm the bot's commits, Renovate's auto-merge choice and the update's age
         id: guard
         if: ${{ steps.pr.outputs.skip != 'true' }}
@@ -116,6 +123,7 @@ jobs:
           PR: ${{ steps.pr.outputs.url }}
           BOT: ${{ steps.pr.outputs.author }}
           SHA: ${{ steps.pr.outputs.sha }}
+          AGENT: ${{ steps.token.outputs.app-slug }}
         run: |
           set -euo pipefail
           authors=$(gh pr view "$PR" --json commits \
@@ -134,7 +142,7 @@ jobs:
             exit 0
           fi
 
-          read -r branch first armed < <(gh api graphql -f owner="${GITHUB_REPOSITORY%/*}" \
+          read -r branch first armed approvals < <(gh api graphql -f owner="${GITHUB_REPOSITORY%/*}" \
             -f name="${GITHUB_REPOSITORY#*/}" -F number="${PR##*/}" -f query='
               query($owner: String!, $name: String!, $number: Int!) {
                 repository(owner: $owner, name: $name) { pullRequest(number: $number) {
@@ -143,9 +151,14 @@ jobs:
                   timelineItems(itemTypes: [AUTO_MERGE_ENABLED_EVENT], first: 1) {
                     nodes { ... on AutoMergeEnabledEvent { actor { login } } }
                   }
+                  reviews(states: APPROVED, last: 100) { nodes { author { login } commit { oid } } }
                 } }
               }' --jq '.data.repository.pullRequest |
-                "\(.headRefName) \(.timelineItems.nodes[0].actor.login // "none") \(.autoMergeRequest != null)"')
+                "\(.headRefName) \(.timelineItems.nodes[0].actor.login // "none") \(.autoMergeRequest != null) \(
+                  [.reviews.nodes[] | "\((.author.login // "") | rtrimstr("[bot]")):\(.commit.oid)"] | join(","))"')
+          if [[ ",$approvals," == *",$AGENT:$SHA,"* ]]; then
+            echo "approved=true" >> "$GITHUB_OUTPUT"
+          fi
           if [[ "$branch" == renovate/* ]] && { [ "${first%"[bot]"}" != "${BOT%"[bot]"}" ] || [ "$armed" != true ]; }; then
             echo "::notice::Not auto-approving — Renovate left this update to review, or a person took it off auto-merge."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -182,8 +195,8 @@ jobs:
 
       - name: Approve
         if: >-
-          ${{ steps.proof.outputs.verified == 'true' && (!inputs.strict ||
-          contains(fromJSON('["pin", "renovate", "ranges"]'), steps.classify.outputs.decision)) }}
+          ${{ steps.proof.outputs.verified == 'true' && steps.guard.outputs.approved != 'true' &&
+          (!inputs.strict || contains(fromJSON('["pin", "renovate", "ranges"]'), steps.classify.outputs.decision)) }}
         uses: a-novel-kit/workflows/generic-actions/approve-bot@v1.81.1
         with:
           pull_request: ${{ steps.pr.outputs.url }}
