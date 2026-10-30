@@ -12,8 +12,8 @@ const commit = ({ author = bot, committer = "web-flow", verified = true } = {}) 
   commit: { verification: { verified } },
 });
 
-/** Runs the guard against a stubbed gh and reports whether it withheld the approval. */
-function skips(
+/** Runs the guard against a stubbed gh and returns its outputs. */
+function guardOutput(
   t,
   { authors = bot, commits = [commit()], age = "success", choice = "renovate/x anovelbot-dependencies true" } = {}
 ) {
@@ -34,14 +34,18 @@ function skips(
     PR: "https://github.com/a-novel/infra/pull/7",
     BOT: bot,
     SHA: "c0ffee",
+    AGENT: "anovelbot-agent",
     AUTHORS: authors,
     COMMITS: JSON.stringify(commits),
     AGE: age,
     CHOICE: choice,
   };
   succeeds(w.bash(guard, env));
-  return w.read("output").includes("skip=true");
+  return w.read("output");
 }
+
+/** Reports whether the guard withheld the approval. */
+const skips = (t, options) => guardOutput(t, options).includes("skip=true");
 
 test("auto-approve trusts only signed bot commits, aged updates, and Renovate's own auto-merge choice", (t) => {
   const cases = [
@@ -60,5 +64,21 @@ test("auto-approve trusts only signed bot commits, aged updates, and Renovate's 
   ];
   for (const [name, options, skipped] of cases) {
     assert.equal(skips(t, options), skipped, name);
+  }
+});
+
+test("auto-approve reviews a head once", (t) => {
+  const choice = "renovate/x anovelbot-dependencies true";
+  const cases = [
+    ["no approval yet", `${choice} `, false],
+    ["this App approved the head", `${choice} kushuh:c0ffee,anovelbot-agent:c0ffee`, true],
+    ["this App approved an earlier head", `${choice} anovelbot-agent:0ld`, false],
+    ["someone else approved the head", `${choice} kushuh:c0ffee`, false],
+  ];
+  for (const [name, approvals, approved] of cases) {
+    const output = guardOutput(t, { choice: approvals });
+    assert.equal(output.includes("approved=true"), approved, name);
+    // A repeated run still arms auto-merge, so only the review is skipped.
+    assert.equal(output.includes("skip=true"), false, name);
   }
 });
