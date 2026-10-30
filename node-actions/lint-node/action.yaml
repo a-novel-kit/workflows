@@ -13,7 +13,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.81.1
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.81.2
       with:
         github_token: ${{ inputs.github_token }}
     - name: run lint
