@@ -34,6 +34,8 @@ runs:
       shell: bash
       env:
         WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        # Any proxy error falls back to the origin; Go's checksum database still verifies the source.
+        GOPROXY: "https://proxy.golang.org|direct"
       run: |
         set -euo pipefail
 
