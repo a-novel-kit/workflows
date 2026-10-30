@@ -71,7 +71,7 @@ runs:
           ~/go/pkg/mod
           ~/.cache/go-build
         key: ${{ steps.go-cache.outputs.cache-primary-key }}
-    - uses: a-novel-kit/workflows/generic-actions/check-changes@v1.81.0
+    - uses: a-novel-kit/workflows/generic-actions/check-changes@v1.81.1
       with:
         pathspec: ${{ inputs.working_directory || '.' }}
         fail_message: ${{ inputs.failure_message }}

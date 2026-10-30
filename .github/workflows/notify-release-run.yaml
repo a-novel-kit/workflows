@@ -61,7 +61,7 @@ jobs:
           echo "color=$color" >> "$GITHUB_OUTPUT"
 
       - name: Post to Discord
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.81.0
+        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.81.1
         with:
           webhook: ${{ secrets.webhook }}
           color: ${{ steps.color.outputs.color }}
