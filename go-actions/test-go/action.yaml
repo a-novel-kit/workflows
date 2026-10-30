@@ -81,6 +81,8 @@ runs:
         PACKAGES: ${{ runner.temp }}/go-test-packages.txt
         INCLUDE: ${{ inputs.include }}
         EXCLUDE: ${{ inputs.exclude }}
+        # Any proxy error falls back to the origin; Go's checksum database still verifies the source.
+        GOPROXY: "https://proxy.golang.org|direct"
       run: |
         # Lists the packages of every module from `go list -m`, since one `go list ./...` reaches a
         # single module of a Go workspace.
@@ -135,6 +137,7 @@ runs:
         TEST_FILE: ${{ inputs.test_file }}
         COVERAGE_FILE: ${{ inputs.coverage_file }}
         RACE: ${{ inputs.race }}
+        GOPROXY: "https://proxy.golang.org|direct"
       run: |
         set -euo pipefail
         # A read loop rather than mapfile, which macOS runners' Bash 3.2 lacks.
