@@ -34,7 +34,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.81.2
+      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.81.3
 ```
 
 Pin every reference to a release tag. The repository ships as one unit, so every reference in a
@@ -138,7 +138,7 @@ check-migration-snapshots:
         fetch-depth: 0
         persist-credentials: false
 
-    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.81.2
+    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.81.3
       with:
         path: internal/models/migrations
         base: ${{ github.event.pull_request.base.sha }}
@@ -252,7 +252,7 @@ repository on its own cadence without waiting on a workflows release. Annotate i
 resolve the datasource:
 
 ```yaml
-- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.81.2
+- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.81.3
   with:
     # renovate: datasource=github-releases depName=gitleaks/gitleaks
     version: "8.30.1"
@@ -265,7 +265,7 @@ way. `lint-shell` and `lint-dockerfile` download a release binary, so the caller
 the line after `version`, and the base Renovate preset moves both together:
 
 ```yaml
-- uses: a-novel-kit/workflows/generic-actions/lint-shell@v1.81.2
+- uses: a-novel-kit/workflows/generic-actions/lint-shell@v1.81.3
   with:
     # renovate: datasource=custom.shellcheck depName=koalaman/shellcheck
     version: "0.11.0"

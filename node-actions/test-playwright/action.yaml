@@ -92,7 +92,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.81.2
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.81.3
       with:
         github_token: ${{ inputs.github_token }}
         # A pull request's screenshot approval binds its head, so test that commit, not the branch tip.
