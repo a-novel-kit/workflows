@@ -123,6 +123,16 @@ test("classify lets through only a release pin or a version update Renovate put 
       "renovate",
     ],
     ["a shared preset bump", [preset], bot, "renovate"],
+    [
+      "a chart and a provider version argument",
+      [
+        file("modules/database-operator/main.tf", ['  version    = "v1.21.2"'], ['  version    = "v1.21.3"']),
+        file("environments/production/grafana/versions.tf", ['      version = "4.50.0"'], ['      version = "4.51.1"']),
+        lock,
+      ],
+      bot,
+      "renovate",
+    ],
     ["an update Renovate left for review", [bump], null, "review"],
     ["an update the agent queued", [bump], "anovelbot-agent", "review"],
     // A stolen dependency key can enable auto-merge itself, so the diff must hold on its own.
@@ -202,6 +212,24 @@ test("classify lets through only a release pin or a version update Renovate put 
     [
       "a version key outside workflows and actions",
       [file("config/server.yaml", ['  min-tls-version: "1.2"'], ['  min-tls-version: "1.0"'])],
+      bot,
+      "review",
+    ],
+    [
+      "an OpenTofu argument that only ends in version",
+      [
+        file(
+          "environments/production/foundation/edge.tf",
+          ['  min_tls_version = "1.2"'],
+          ['  min_tls_version = "1.0"']
+        ),
+      ],
+      bot,
+      "review",
+    ],
+    [
+      "a version argument with more on its line",
+      [file("modules/database-operator/main.tf", ['  version = "0.29.1"'], ['  version = "0.29.2" ; values = []'])],
       bot,
       "review",
     ],
