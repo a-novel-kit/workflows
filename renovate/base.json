@@ -49,13 +49,6 @@
         "$[draft = false and prerelease = false and $substring(tag_name, 0, 1) = 'v'].($version := $substringAfter(tag_name, 'v'); $published := published_at; assets[name = 'hadolint-linux-x86_64' and $match($string(digest), /^sha256:[a-f0-9]{64}$/)].{'version': $version, 'digest': $substring(digest, 7), 'releaseTimestamp': $published})",
         "{'releases': [$[$match(version, /^[0-9]+\\.[0-9]+\\.[0-9]+$/)]], 'sourceUrl': 'https://github.com/hadolint/hadolint'}"
       ]
-    },
-    "sentry-cli": {
-      "defaultRegistryUrlTemplate": "https://api.github.com/repos/getsentry/sentry-cli/releases?per_page=100",
-      "transformTemplates": [
-        "$[draft = false and prerelease = false].($version := tag_name; $published := published_at; assets[name = 'sentry-cli-Linux-x86_64' and $match($string(digest), /^sha256:[a-f0-9]{64}$/)].{'version': $version, 'digest': $substring(digest, 7), 'releaseTimestamp': $published})",
-        "{'releases': [$[$match(version, /^[0-9]+\\.[0-9]+\\.[0-9]+$/)]], 'sourceUrl': 'https://github.com/getsentry/sentry-cli'}"
-      ]
     }
   },
   "packageRules": [
@@ -88,7 +81,7 @@
     },
     {
       "description": "Give GitHub releases time to finish publishing binary assets and checksums before CI installs them. Apply the same delay to all release-backed tools instead of maintaining version-specific exceptions.",
-      "matchDatasources": ["github-releases", "custom.shellcheck", "custom.hadolint", "custom.sentry-cli"],
+      "matchDatasources": ["github-releases", "custom.shellcheck", "custom.hadolint"],
       "minimumReleaseAge": "1 hour"
     },
     {
@@ -225,7 +218,7 @@
       "groupName": "svelte vite toolchain"
     },
     {
-      "description": "Ship a Node.js major and its types in one reviewed PR: the image, setup-node's version and `@types/node`. Types ahead of the runtime let code typecheck against APIs the deployed image lacks. Names stay exact, since a `node` suffix also matches npm packages such as `@sentry/node`.",
+      "description": "Ship a Node.js major and its types in one reviewed PR: the image, setup-node's version and `@types/node`. Types ahead of the runtime let code typecheck against APIs the deployed image lacks. Names stay exact, since a `node` suffix also matches npm packages such as `@sveltejs/adapter-node`.",
       "matchDepNames": ["node", "docker.io/library/node", "@types/node"],
       "matchUpdateTypes": ["major"],
       "groupName": "Node.js"
