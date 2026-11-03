@@ -35,7 +35,10 @@ runs:
         registry-url: "https://npm.pkg.github.com"
     - id: pnpm-store
       shell: bash
-      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      run: |
+        set -euo pipefail
+        path="$(pnpm store path --silent)"
+        echo "path=$path" >> "$GITHUB_OUTPUT"
     # setup-node's own pnpm cache matches the exact lockfile only; this one falls back to the
     # closest store, so a lockfile change still installs warm.
     - id: pnpm-cache

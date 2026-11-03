@@ -115,7 +115,8 @@ runs:
           gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" --silent
         fi
         body="$(printf 'Re-resolves the apko locks. Every change below changes the images built from them.\n%s' "$SUMMARY")"
-        if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+        open="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')"
+        if [ -n "$open" ]; then
           gh pr edit "$BRANCH" --body "$body"
         else
           gh pr create --head "$BRANCH" --title "chore(deps): refresh apko locks" --body "$body"
