@@ -16,7 +16,7 @@ on:
           - minor
           - major
       dry_run:
-        description: Bump & report only — no commit, tag, push, or release
+        description: Bump and report only, with no commit, tag, push or release
         required: false
         type: boolean
         default: false

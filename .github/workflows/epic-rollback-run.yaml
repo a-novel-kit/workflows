@@ -89,10 +89,10 @@ jobs:
             exit 1
           fi
           if [ "${CONFIRM:-}" != "revert-epic-${EPIC}" ]; then
-            echo "::error::confirmation mismatch — type \"revert-epic-${EPIC}\" exactly to proceed."
+            echo "::error::confirmation mismatch: type \"revert-epic-${EPIC}\" exactly to proceed."
             exit 1
           fi
-          echo "Confirmation matches — proceeding with rollback of epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Confirmation matches; proceeding with rollback of epic:#${EPIC} (dry_run=${DRY_RUN:-true})." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: a-novel-kit/workflows/generic-actions/epic-rollback@v1.81.3
         with:

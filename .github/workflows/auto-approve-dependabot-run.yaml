@@ -129,7 +129,7 @@ jobs:
           authors=$(gh pr view "$PR" --json commits \
             -q '[.commits[].authors[].login // "unknown"] | unique | sort | join(",")')
           if [ "$authors" != "$BOT" ]; then
-            echo "::notice::Not auto-approving — commits by '${authors:-unknown}', expected only '$BOT'."
+            echo "::notice::Not auto-approving: commits by '${authors:-unknown}', expected only '$BOT'."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -137,7 +137,7 @@ jobs:
           unsigned=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/${PR##*/}/commits" | jq --arg bot "$BOT" \
             '[add[] | select(.author.login != $bot or .committer.login != "web-flow" or (.commit.verification.verified | not))] | length')
           if [ "$unsigned" != 0 ]; then
-            echo "::notice::Not auto-approving — $unsigned commit(s) not signed by GitHub for '$BOT'."
+            echo "::notice::Not auto-approving: $unsigned commit(s) not signed by GitHub for '$BOT'."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -160,7 +160,7 @@ jobs:
             echo "approved=true" >> "$GITHUB_OUTPUT"
           fi
           if [[ "$branch" == renovate/* ]] && { [ "${first%"[bot]"}" != "${BOT%"[bot]"}" ] || [ "$armed" != true ]; }; then
-            echo "::notice::Not auto-approving — Renovate left this update to review, or a person took it off auto-merge."
+            echo "::notice::Not auto-approving: Renovate left this update to review, or a person took it off auto-merge."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -168,7 +168,7 @@ jobs:
           age=$(GH_TOKEN="$STATUS_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/status" \
             --jq '[.statuses[] | select(.context == "renovate/stability-days")][0].state // "none"')
           if [ "$age" != none ] && [ "$age" != success ]; then
-            echo "::notice::Not auto-approving yet — renovate/stability-days is '$age'; its success re-runs this."
+            echo "::notice::Not auto-approving yet: renovate/stability-days is '$age'; its success re-runs this."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 

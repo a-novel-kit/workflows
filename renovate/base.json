@@ -70,12 +70,12 @@
       "allowedVersions": "<7"
     },
     {
-      "description": "Hold google.golang.org/grpc off v1.84.0 because CVE-2026-84445 is reported in that release while v1.83.2 remains fixed. The range admits every other release, so Renovate resumes on the first fixed stable patch \u2014 drop this rule then.",
+      "description": "Hold google.golang.org/grpc off v1.84.0 because CVE-2026-84445 is reported in that release while v1.83.2 remains fixed. The range admits every other release, so Renovate resumes on the first fixed stable patch; drop this rule then.",
       "matchPackageNames": ["google.golang.org/grpc"],
       "allowedVersions": "<1.84.0 || >1.84.0"
     },
     {
-      "description": "Hold GitHub-hosted Ubuntu runners below v26 until GitHub Actions offers the ubuntu-26.04 label. Renovate currently derives it from runner metadata even though actionlint and GitHub reject the unavailable label \u2014 drop this rule once the runner is generally available.",
+      "description": "Hold GitHub-hosted Ubuntu runners below v26 until GitHub Actions offers the ubuntu-26.04 label. Renovate currently derives it from runner metadata even though actionlint and GitHub reject the unavailable label; drop this rule once the runner is generally available.",
       "matchPackageNames": ["ubuntu"],
       "allowedVersions": "<26"
     },
@@ -224,7 +224,7 @@
       "groupName": "Node.js"
     },
     {
-      "description": "Leave pnpm audit-managed overrides to the audit action. node-actions/audit runs `pnpm audit --fix=override` daily and pins vulnerable transitive dependencies to the minimal patched version within each consumer's supported range. Renovate's npm manager otherwise re-reads the override value as an ordinary dependency and bumps it to the latest major, pushing the pin past the parent's compatibility ceiling (e.g. undici v8 breaks jsdom's private wrap-handler.js deep-import). Audit owns these values; Renovate must not touch them. All three depTypes must stay listed: Renovate types package.json `pnpm.overrides` and its `overrides` alias, but overrides declared in pnpm-workspace.yaml (pnpm 10's preferred location) get `pnpm-workspace.overrides` \u2014 omit it and the guard silently no-ops for every workspace-level override.",
+      "description": "Leave pnpm audit-managed overrides to the audit action. node-actions/audit runs `pnpm audit --fix=override` daily and pins vulnerable transitive dependencies to the minimal patched version within each consumer's supported range. Renovate's npm manager otherwise re-reads the override value as an ordinary dependency and bumps it to the latest major, pushing the pin past the parent's compatibility ceiling (e.g. undici v8 breaks jsdom's private wrap-handler.js deep-import). Audit owns these values; Renovate must not touch them. All three depTypes must stay listed: Renovate types package.json `pnpm.overrides` and its `overrides` alias, but overrides declared in pnpm-workspace.yaml (pnpm 10's preferred location) get `pnpm-workspace.overrides`. Omitting it makes the guard a silent no-op for every workspace-level override.",
       "matchDepTypes": ["pnpm.overrides", "overrides", "pnpm-workspace.overrides"],
       "enabled": false
     }
