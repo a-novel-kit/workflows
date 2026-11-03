@@ -74,6 +74,16 @@ test("discord-post pings exactly the ids it is given and repeats the title for p
   assert.equal(delivered(), "delivered=true");
 });
 
+test("discord-post keeps an embed's title, description and footer within 6000 characters", (t) => {
+  const { run, posts } = discord(t);
+  succeeds(run({ TITLE: "t".repeat(300), DESCRIPTION: "d".repeat(5000), FOOTER: "f".repeat(3000) }));
+  const [{ embeds }] = posts();
+  const { title, description, footer } = embeds[0];
+  assert.deepEqual([title.length, footer.text.length], [256, 2048]);
+  assert.equal(title.length + description.length + footer.text.length, 6000);
+  assert.match(description, /^d+…\n\n\[Read more\]\(https:\/\/github\.com\/a-novel\/infra\/actions\/runs\/1\)$/);
+});
+
 test("discord-post cuts a long description by character and links to the full text", (t) => {
   const { run, posts } = discord(t);
   succeeds(run({ DESCRIPTION: "é".repeat(5000), COLOR: "released" }));
