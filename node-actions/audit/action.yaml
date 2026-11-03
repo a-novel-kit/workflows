@@ -48,7 +48,8 @@ runs:
         pnpm audit --fix=override
         # The overrides are the audit's whole change. Without one, the run skips the format script,
         # which can take minutes.
-        if [ -z "$(git status --porcelain -- pnpm-workspace.yaml)" ]; then
+        changed="$(git status --porcelain -- pnpm-workspace.yaml)"
+        if [ -z "$changed" ]; then
           echo "No audit fixes."
           exit 0
         fi
@@ -64,7 +65,8 @@ runs:
         BRANCH: ${{ inputs.branch }}
       run: |
         set -euo pipefail
-        if [ -z "$(git status --porcelain -- pnpm-workspace.yaml pnpm-lock.yaml)" ]; then exit 0; fi
+        changed="$(git status --porcelain -- pnpm-workspace.yaml pnpm-lock.yaml)"
+        if [ -z "$changed" ]; then exit 0; fi
         # The default branch requires signed commits. GitHub signs a commit the App creates through
         # the API, never one it pushes.
         base="$(git rev-parse 'HEAD^{tree}')"
@@ -83,7 +85,8 @@ runs:
         else
           gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" --silent
         fi
-        if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+        open="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')"
+        if [ -z "$open" ]; then
           gh pr create --head "$BRANCH" --title "chore(security): audit fix" \
             --body "Pins the vulnerable transitive dependencies \`pnpm audit --fix=override\` reported to their patched versions."
         fi

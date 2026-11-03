@@ -73,7 +73,8 @@ runs:
         BASE: ${{ github.event.repository.default_branch }}
       run: |
         set -euo pipefail
-        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then git fetch --no-tags --quiet --unshallow origin; fi
+        shallow="$(git rev-parse --is-shallow-repository)"
+        if [ "$shallow" = true ]; then git fetch --no-tags --quiet --unshallow origin; fi
         git fetch --no-tags --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
         echo "ref=origin/$BASE" >> "$GITHUB_OUTPUT"
 

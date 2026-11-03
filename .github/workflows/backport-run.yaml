@@ -337,9 +337,15 @@ jobs:
               return 0
             fi
             # A clean backport is the reviewed fix unchanged, so the backport token writes it and the
-            # agent can approve it. A backport git fitted to different context stays the agent's.
-            if [ -n "${BACKPORT_TOKEN:-}" ] && [ "$(patch_of "$sha")" = "$(patch_of HEAD)" ]; then
-              writer="$BACKPORT_TOKEN" clean=true
+            # agent can approve it. A backport git fitted to different context stays the agent's, and so
+            # does one whose patch-id reads empty, since two empty ids are equal.
+            if [ -n "${BACKPORT_TOKEN:-}" ]; then
+              local fix_patch head_patch
+              fix_patch=$(patch_of "$sha")
+              head_patch=$(patch_of HEAD)
+              if [ -n "$fix_patch" ] && [ "$fix_patch" = "$head_patch" ]; then
+                writer="$BACKPORT_TOKEN" clean=true
+              fi
             fi
             git push --quiet origin "HEAD:refs/heads/$branch"
             # The release line requires signed commits, and GitHub signs only the commits an App makes

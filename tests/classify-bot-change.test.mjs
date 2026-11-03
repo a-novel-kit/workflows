@@ -419,8 +419,10 @@ test("approve-bot approves the given commit only while it is the head", (t) => {
     ["a head that stays keeps the approval", sha("c"), [sha("c"), sha("c")], [read, post, read]],
     ["a head that already moved is not approved", sha("c"), [sha("d")], [read]],
     ["a head that moves meanwhile withdraws the approval", sha("c"), [sha("c"), sha("d")], [read, post, read, dismiss]],
+    ["an unreadable head fails the step and approves nothing", sha("c"), ["FAIL"], [read], 1],
+    ["a head unreadable after the approval withdraws it", sha("c"), [sha("c"), "FAIL"], [read, post, read, dismiss]],
   ];
-  for (const [name, headSha, heads, expected] of cases) {
+  for (const [name, headSha, heads, expected, status = 0] of cases) {
     const w = workspace(t);
     w.write("heads", heads.join("\n"));
     w.stub(
@@ -431,6 +433,7 @@ test("approve-bot approves the given commit only while it is the head", (t) => {
       if (args.includes(".head.sha")) {
         const [next, ...rest] = fs.readFileSync(process.env.HEADS, "utf8").split("\\n");
         fs.writeFileSync(process.env.HEADS, rest.join("\\n"));
+        if (next === "FAIL") process.exit(1);
         console.log(next);
       } else if (args.includes(".id")) console.log("42");`
     );
@@ -442,7 +445,7 @@ test("approve-bot approves the given commit only while it is the head", (t) => {
       GH_LOG: `${w.cwd}/gh.log`,
       HEADS: `${w.cwd}/heads`,
     };
-    succeeds(w.bash(approve, env));
+    assert.equal(w.bash(approve, env).status, status, name);
     const calls = w.read("gh.log").trim().split("\n").map(JSON.parse);
     assert.deepEqual(calls, expected, name);
   }

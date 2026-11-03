@@ -138,7 +138,8 @@ runs:
         EPIC: ${{ inputs.epic_number }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
         DRY_RUN: ${{ inputs.dry_run }}
-        ACTOR: ${{ github.actor }}
+        # The person who started this attempt, whom require-role checked.
+        ACTOR: ${{ github.triggering_actor }}
       run: |
         set -euo pipefail
 
@@ -272,14 +273,16 @@ runs:
           return 1
         }
 
-        # Derive a repository's semver bump from its commits since the last tag. The release cuts the
-        # whole default branch since that tag, which can hold more than the Epic's own commits. The
-        # highest bump wins. A `!` or a BREAKING CHANGE footer gives major, any feat gives minor, and
-        # anything else gives patch. An empty range prints "none" and a failed read "__ERR__".
+        # Derive a repository's semver bump from its commits since the last tag, read as Conventional
+        # Commits 1.0.0. The release cuts the whole default branch since that tag, which can hold more
+        # than the Epic's own commits. The highest bump wins. A `!` or a BREAKING CHANGE footer gives
+        # major, any feat gives minor, and anything else gives patch. An empty range prints "none" and
+        # a failed read "__ERR__".
         #
-        # feat and `!` are read from subject lines, since a body line starting `feat:` is no type. The
-        # BREAKING CHANGE footer is read from the full body. The compare API supplies both, so the
-        # derivation needs no checkout.
+        # feat and `!` are read from subject lines, since a body line starting `feat:` is no type. A
+        # type matches in any case, and BREAKING CHANGE only in upper case (§15). The BREAKING CHANGE
+        # footer is read from the full body. The compare API supplies both, so the derivation needs no
+        # checkout.
         derive_bump() { # $1=owner/repo $2=last_tag ("" = first release) $3=default_branch
           local repo="$1" last="$2" head="$3" messages subjects bodies path paginate jq_messages
           if [ -z "$last" ]; then
@@ -288,8 +291,9 @@ runs:
             path="repos/$repo/commits"; paginate=false
             jq_messages='.[].commit.message | @json'
           else
-            # The compare API pages its commit list, so the read paginates to see every feat.
-            path="repos/$repo/compare/${last}...${head}"; paginate=true
+            # The compare API lists at most 250 commits unless the request names a page size, so the
+            # read pages by 100 to see every feat.
+            path="repos/$repo/compare/${last}...${head}?per_page=100"; paginate=true
             jq_messages='.commits[].commit.message | @json'
           fi
           # A failed read prints "__ERR__", which the caller records as a failure. An empty range
@@ -306,7 +310,7 @@ runs:
           fi
           if printf '%s\n' "$subjects" | grep -qE '^[[:alpha:]]+(\([^)]*\))?!:' \
             || printf '%s\n' "$bodies" | grep -qE '^BREAKING[ -]CHANGE:'; then printf 'major'
-          elif printf '%s\n' "$subjects" | grep -qE '^feat(\([^)]*\))?:'; then printf 'minor'
+          elif printf '%s\n' "$subjects" | grep -qiE '^feat(\([^)]*\))?:'; then printf 'minor'
           else printf 'patch'
           fi
         }

@@ -380,8 +380,8 @@ runs:
 
         if [ -z "$match" ]; then
           render_body "$now" 1
-          title="[$(printf '%s' "$SEV" | tr '[:lower:]' '[:upper:]')] $SUMMARY"
-          title=$(printf '%s' "$title" | cut -c1-200)
+          title="[${SEV^^}] $SUMMARY"
+          title="${title:0:200}"
           if [ "$DRY_RUN" = "true" ]; then
             echo "[dry-run] would FILE \"$title\" in $PLANNING_REPO (label $ESC_LABEL) and drive board Status → \"$TARGET_STATUS\"." | tee -a "$GITHUB_STEP_SUMMARY"
             emit created false "" "" ""; exit 0

@@ -134,7 +134,8 @@ runs:
         PLANNING_REPO: ${{ inputs.planning_repo }}
         DRY_RUN: ${{ inputs.dry_run }}
         MAX_ROLLBACK_REPOS: ${{ inputs.max_rollback_repos }}
-        ACTOR: ${{ github.actor }}
+        # The person who started this attempt, whom require-role checked.
+        ACTOR: ${{ github.triggering_actor }}
       run: |
         set -euo pipefail
 
@@ -203,7 +204,8 @@ runs:
           fi
           since=$(printf '%s' "$marker" | jq -r '(.since // "") | tostring')
           [ -n "$since" ] || return 0
-          shown=$(printf '%s' "$since" | tr -d '\r\n' | cut -c1-64)
+          shown="${since//[$'\r\n']/}"
+          shown="${shown:0:64}"
           if ! [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
             || ! since_epoch=$(date -u -d "$since" +%s 2>/dev/null) \
             || [ "$since_epoch" -gt "$(( $(date -u +%s) + 300 ))" ]; then
@@ -477,7 +479,8 @@ runs:
         REASON: ${{ inputs.reason }}
         PROJECT_ID: ${{ inputs.project_id }}
         PLANNING_REPO: ${{ inputs.planning_repo }}
-        ACTOR: ${{ github.actor }}
+        # The person who started this attempt, whom require-role checked.
+        ACTOR: ${{ github.triggering_actor }}
       run: |
         set -euo pipefail
 

@@ -34,7 +34,9 @@ inputs:
   description:
     required: false
     default: ""
-    description: Markdown body, cut to Discord's 4096 characters.
+    description: >
+      Markdown body, cut to Discord's 4096 characters, or shorter when the title and footer leave
+      less of the embed's 6000.
   color:
     required: true
     description: >
@@ -111,6 +113,8 @@ runs:
 
         # Mobile push notifications show `content` and skip the embed, so a pinged message repeats its
         # title there. jq slices strings by codepoint, so a cut never splits a multibyte character.
+        # Discord also caps the title, description and footer of an embed at 6000 characters together,
+        # so the description takes what the other two leave, up to its own 4096.
         payload=$(jq -cn \
           --arg title "$TITLE" --arg url "$URL" --arg description "$DESCRIPTION" \
           --arg footer "$FOOTER" --argjson bar "$bar" \
@@ -118,14 +122,17 @@ runs:
           def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
           (($roles | map("<@&\(.)>")) + ($users | map("<@\(.)>"))) as $pings
           | (if $url == "" then "" else "\n\n[Read more](\($url))" end) as $more
+          | ($title | cut(256)) as $heading
+          | ($footer | cut(2048)) as $note
+          | ([4096, 6000 - ($heading | length) - ($note | length)] | min) as $room
           | {
               embeds: [
-                {title: ($title | cut(256)), color: $bar}
+                {title: $heading, color: $bar}
                 + (if $url == "" then {} else {url: $url} end)
                 + (if $description == "" then {}
-                   elif ($description | length) > 4096 then {description: (($description | cut(4096 - ($more | length))) + $more)}
+                   elif ($description | length) > $room then {description: (($description | cut($room - ($more | length))) + $more)}
                    else {description: $description} end)
-                + (if $footer == "" then {} else {footer: {text: ($footer | cut(2048))}} end)
+                + (if $footer == "" then {} else {footer: {text: $note}} end)
               ],
               allowed_mentions: {parse: [], roles: $roles, users: $users}
             }

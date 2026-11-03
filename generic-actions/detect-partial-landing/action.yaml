@@ -612,7 +612,8 @@ runs:
             # The marker is attacker-controlled issue content, and GitHub reads workflow commands line by
             # line. A raw value with an embedded newline forges its own `::error::` or `::stop-commands::`
             # line, so the warnings show one bounded line.
-            shown=$(printf '%s' "$since" | tr -d '\r\n' | cut -c1-64)
+            shown="${since//[$'\r\n']/}"
+            shown="${shown:0:64}"
             if ! [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
               echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is not an ISO-8601 UTC instant (YYYY-MM-DDTHH:MM:SSZ) — ignoring it and scoping to the Epic's whole history."
             elif ! since_epoch=$(date -u -d "$since" +%s 2>/dev/null); then

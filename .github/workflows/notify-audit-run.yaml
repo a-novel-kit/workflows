@@ -88,3 +88,5 @@ jobs:
           name: notify-audit-seen
           path: ${{ steps.collect.outputs.seen }}
           retention-days: 1
+          # The next run reads this artifact, and a re-run's upload replaces the earlier attempt's.
+          overwrite: true

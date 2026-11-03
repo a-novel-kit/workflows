@@ -11,13 +11,11 @@ jobs:
     environment:
       name: governance
       deployment: false
+    # Renovate writes as the Dependencies App, with the token the action mints from its key. The job
+    # token only reads GitHub Packages, for Renovate and for the commands it runs, such as
+    # pnpm install.
     permissions:
-      checks: write
-      statuses: write
-      contents: write
-      # generic-actions/renovate wires GITHUB_TOKEN as the npm.pkg.github.com token, and an
-      # explicit permissions block drops packages to none, so read is granted back here or
-      # Renovate cannot resolve private GitHub Packages dependencies.
+      contents: read
       packages: read
     steps:
       - uses: $/generic-actions/renovate
