@@ -185,7 +185,9 @@ function main() {
   // A run finishing in the window started at most a day before it.
   const created = iso(Date.parse(since) - day);
 
-  const repos = JSON.parse(gh(["api", "--paginate", "--slurp", `orgs/${GITHUB_REPOSITORY_OWNER}/repos`])).flat();
+  const repos = JSON.parse(
+    gh(["api", "--paginate", "--slurp", `orgs/${GITHUB_REPOSITORY_OWNER}/repos?per_page=100`])
+  ).flat();
   const suites = [];
   for (const { full_name, default_branch, archived } of repos) {
     if (archived) continue;

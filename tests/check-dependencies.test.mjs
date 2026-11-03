@@ -16,7 +16,7 @@ function gate(
     "gh",
     `const args = process.argv.slice(2);
     require("fs").appendFileSync(process.env.GH_LOG, JSON.stringify(args) + "\\n");
-    const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
+    const path = (args.find((arg) => arg.startsWith("repos/")) ?? "").split("?")[0];
     if (args.includes("DELETE")) process.exit(0);
     if (path.endsWith("/files")) console.log(process.env.FILES);
     else if (path.endsWith("/commits")) console.log(process.env.COMMITS);

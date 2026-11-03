@@ -73,7 +73,8 @@ runs:
         KILL_SWITCH: ${{ inputs.kill_switch }}
       run: |
         set -euo pipefail
-        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "::error::AGENT_KILL_SWITCH engaged — [Agent] automation is halted org-wide; refusing to run the release train. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) before releasing."
@@ -218,6 +219,10 @@ runs:
         #
         # `sort -V` across both forms relies on the single go.mod that release-core enforces. A
         # repository that moved its module carries both forms and can get the wrong one.
+        #
+        # `sort -V` ranks release versions as SemVer 2.0.0 §11 does. It ranks a pre-release such as
+        # `v1.0.0-rc.1` after `v1.0.0`, against §11.3. release-core cuts no pre-release, so the
+        # deviation matters only for a tag made by hand.
         latest_tag() { # $1=owner/repo
           local refs
           for attempt in 1 2 3; do
@@ -295,7 +300,7 @@ runs:
           # One JSON string per message keeps multi-line bodies apart, so one read yields both views.
           bodies=$(printf '%s' "$messages" | jq -r '.')
           subjects=$(printf '%s' "$messages" | jq -r 'split("\n")[0]')
-          if [ -z "$(printf '%s' "$subjects" | tr -d '[:space:]')" ]; then
+          if [ -z "${subjects//[[:space:]]/}" ]; then
             [ -z "$last" ] && { printf 'minor'; return 0; }
             printf 'none'; return 0
           fi

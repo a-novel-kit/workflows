@@ -292,7 +292,8 @@ runs:
         # The halt acts just before dispatch, once freeze_post is defined, so a halted per-PR run posts
         # its hold through the dry-run gate.
         kill_engaged=true
-        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$switch" in
           "" | 0 | off | false | no | disabled) kill_engaged=false ;;
         esac
         # Per-PR inputs become GraphQL arguments and API path components. Per-PR mode fails open on
@@ -312,7 +313,7 @@ runs:
           fi
         fi
 
-        # tr lowercases portably to Bash 3.
+        # tr folds bytes, so only an ASCII spelling of "false" runs live.
         dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
         [ "$dry" = false ] || dry=true
 

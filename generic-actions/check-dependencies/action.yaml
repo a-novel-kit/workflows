@@ -37,7 +37,7 @@ runs:
           exit 0
         fi
 
-        manifests="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' |
+        manifests="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files?per_page=100" --paginate --jq '.[].filename' |
           grep -E '(^|/)(go\.work|[^/]+\.mod|package\.json|pnpm-workspace\.yaml)$' || true)"
         if [ -z "$manifests" ]; then
           echo "No dependency manifest changed."
@@ -46,7 +46,7 @@ runs:
 
         # A person's commit on a bot's branch is gated like any other change.
         if [ "$AUTHOR_TYPE" = Bot ]; then
-          authors="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" --paginate --jq '.[].author.type // "none"')"
+          authors="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits?per_page=100" --paginate --jq '.[].author.type // "none"')"
           if ! grep -qvx Bot <<<"$authors"; then
             echo "A bot wrote this pull request and every commit on it."
             exit 0
@@ -54,7 +54,7 @@ runs:
         fi
 
         # Labels are read live, so a rerun sees the labels the pull request has now.
-        labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --paginate --jq '.[].name')"
+        labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels?per_page=100" --paginate --jq '.[].name')"
         if grep -qxF "$LABEL" <<<"$labels"; then
           if [ "$ACTION" != synchronize ]; then
             echo "::notice::Dependency change acknowledged by \"$LABEL\"."

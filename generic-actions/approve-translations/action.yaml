@@ -55,12 +55,13 @@ runs:
         set -euo pipefail
         # A job reruns only once its whole run has completed.
         status=missing
-        for _ in $(seq 1 80); do
+        for _ in {1..80}; do
           run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WORKFLOW" --commit "$HEAD_SHA" \
             --limit 1 --json databaseId,event,status --jq '.[0] // empty')
           # A pull_request run reads the labels as it starts, except on a push, and a label change
           # starts a new run. Such a run needs no rerun.
-          if [ "$(jq -r '.event // empty' <<<"${run:-null}")" = pull_request ]; then exit 0; fi
+          event=$(jq -r '.event // empty' <<<"${run:-null}")
+          if [ "$event" = pull_request ]; then exit 0; fi
           status=$(jq -r '.status // "missing"' <<<"${run:-null}")
           if [ "$status" = completed ]; then break; fi
           sleep 20

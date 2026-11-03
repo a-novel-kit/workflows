@@ -67,7 +67,8 @@ runs:
         # Org-level halt, read before the derivation. Only an explicit off-token runs. A composite
         # action has no early return, so the `exit 0` here leaves the later steps to run. The guard
         # sets a `halted` output instead, and both board-write steps check it.
-        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "AGENT_KILL_SWITCH engaged — skipping board-status derivation (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"

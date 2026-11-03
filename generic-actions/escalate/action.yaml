@@ -226,7 +226,7 @@ runs:
         # Collapsing also keeps the title on one line and keeps a ::workflow-command:: out of the log
         # lines that echo these values. The body keeps its newlines, since the ticket step reads it
         # from the input and writes it only to a --body-file.
-        oneline() { printf '%s' "$1" | tr -d '\r' | tr '\n' ' '; }
+        oneline() { local value="${1//$'\r'/}"; printf '%s' "${value//$'\n'/ }"; }
         clean_summary=$(oneline "$SUMMARY")
         clean_mention=$(oneline "${MENTION:-}")
         clean_push_mention=$(oneline "${PUSH_MENTION:-}")
@@ -391,7 +391,7 @@ runs:
             --color B60205 --description "Automated governance escalation (escalate action)." >/dev/null 2>&1 || true
           url=$(gh issue create --repo "$PLANNING_REPO" --title "$title" \
             --body-file "$RUNNER_TEMP/esc_body.md" --label "$ESC_LABEL")
-          num=$(printf '%s' "$url" | grep -oE '[0-9]+$')
+          num=${url##*/}
           node=$(gh issue view "$num" --repo "$PLANNING_REPO" --json id -q .id)
           echo "Filed escalation #$num ($url)." | tee -a "$GITHUB_STEP_SUMMARY"
           emit created true "$num" "$node" "$url"
@@ -402,11 +402,12 @@ runs:
         url=$(printf '%s' "$match" | jq -r '.url')
         node=$(printf '%s' "$match" | jq -r '.id')
         ebody=$(printf '%s' "$match" | jq -r '.body // ""')
-        # Both parses carry a fallback. A grep that matches nothing returns non-zero, and `set -e`
-        # then aborts the step before the default below applies.
-        first=$(printf '%s' "$ebody" | grep -oE 'escalate:first=[^ ]+' | head -1 | sed 's/.*escalate:first=//') || first=""
-        [ -n "$first" ] || first="$now"
-        count=$(printf '%s' "$ebody" | grep -oE 'escalate:count=[0-9]+' | head -1 | grep -oE '[0-9]+' || echo 0)
+        # The first marker of each kind wins, and a body that lost one starts it over.
+        first="$now"
+        count=0
+        first_marker=$'escalate:first=([^ \n]+)'
+        [[ $ebody =~ $first_marker ]] && first="${BASH_REMATCH[1]}"
+        [[ $ebody =~ escalate:count=([0-9]+) ]] && count="${BASH_REMATCH[1]}"
         # 10# forces base 10, so a hand-edited count such as 08 does not fail as bad octal.
         count=$((10#$count + 1))
         render_body "$first" "$count"
@@ -479,7 +480,7 @@ runs:
         # webhook that never answers. Discord answers 204 on success, 429 when rate limited and 5xx
         # transiently. curl runs without --fail, so the loop reads each code and retries.
         max=3
-        for attempt in $(seq 1 "$max"); do
+        for ((attempt = 1; attempt <= max; attempt++)); do
           # curl prints "000" through -w on a transport failure and exits non-zero. The fallback sits
           # outside the substitution, so it only stops `set -e` and the code stays three digits.
           code=$(curl -sS --connect-timeout 5 --max-time 15 \
