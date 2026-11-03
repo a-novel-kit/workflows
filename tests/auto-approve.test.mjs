@@ -12,10 +12,18 @@ const commit = ({ author = bot, committer = "web-flow", verified = true } = {}) 
   commit: { verification: { verified } },
 });
 
+/** A commit status as the REST API lists it, newest first; Renovate posts the release age as the bot. */
+const status = (state, creator = bot) => ({ context: "renovate/stability-days", state, creator: { login: creator } });
+
 /** Runs the guard against a stubbed gh and returns its outputs. */
 function guardOutput(
   t,
-  { authors = bot, commits = [commit()], age = "success", choice = "renovate/x anovelbot-dependencies true" } = {}
+  {
+    authors = bot,
+    commits = [commit()],
+    statuses = [status("success")],
+    choice = "renovate/x anovelbot-dependencies true",
+  } = {}
 ) {
   const w = workspace(t);
   w.write("output", "");
@@ -24,8 +32,8 @@ function guardOutput(
     `const args = process.argv.slice(2);
     if (args[0] === "pr") console.log(process.env.AUTHORS);
     else if (args[1] === "graphql") console.log(process.env.CHOICE);
-    else if (args.includes("--slurp")) console.log(JSON.stringify([JSON.parse(process.env.COMMITS)]));
-    else if (args.some((arg) => arg.endsWith("/status"))) console.log(process.env.AGE);`
+    else if (args.some((arg) => arg.includes("/statuses"))) console.log(JSON.stringify([JSON.parse(process.env.STATUSES)]));
+    else if (args.includes("--slurp")) console.log(JSON.stringify([JSON.parse(process.env.COMMITS)]));`
   );
   const env = {
     GITHUB_REPOSITORY: "a-novel/infra",
@@ -37,7 +45,7 @@ function guardOutput(
     AGENT: "anovelbot-agent",
     AUTHORS: authors,
     COMMITS: JSON.stringify(commits),
-    AGE: age,
+    STATUSES: JSON.stringify(statuses),
     CHOICE: choice,
   };
   succeeds(w.bash(guard, env));
@@ -54,7 +62,14 @@ test("auto-approve trusts only signed bot commits, aged updates, and Renovate's 
     // A push can claim the bot's email and sign as its pusher; only GitHub signs as web-flow.
     ["a pushed commit claiming the bot", { commits: [commit(), commit({ committer: "kushuh" })] }, true],
     ["an unverified commit", { commits: [commit({ verified: false })] }, true],
-    ["an update still aging", { age: "pending" }, true],
+    ["an update still aging", { statuses: [status("pending")] }, true],
+    [
+      "an aging update another login marked stable",
+      { statuses: [status("success", "kushuh"), status("pending")] },
+      true,
+    ],
+    ["an update the bot marked stable after aging", { statuses: [status("success"), status("pending")] }, false],
+    ["an update Renovate gives no release age", { statuses: [] }, false],
     // The branch, the first to enable auto-merge, and whether it is on now.
     ["a Renovate update left to review", { choice: "renovate/x none false" }, true],
     ["a Renovate update a person took off auto-merge", { choice: "renovate/x anovelbot-dependencies false" }, true],
