@@ -1,5 +1,3 @@
-# Managed by `a-novel repo update` — edit the template in stack, not this copy.
-#
 # Reports this repository to the org's Discord server. A failed `main` or `release` run on the
 # default branch posts to the CI channel and pings the repository's role, and the run that turns the
 # branch green again posts without a ping. Watching `release` catches a release that fails after
@@ -51,6 +49,8 @@ jobs:
 
   release:
     if: github.event_name == 'release'
+    # The engine reads the release from the event and posts through its webhook alone.
+    permissions: {}
     uses: a-novel-kit/workflows/.github/workflows/notify-release-run.yaml@v1.81.3
     secrets:
       webhook: ${{ secrets.RELEASES_WEBHOOK }}
