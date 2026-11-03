@@ -197,10 +197,12 @@ test("release train distinguishes read failure, empty history and release types"
   w.stub(
     "gh",
     `
+    require('node:fs').appendFileSync('calls', JSON.stringify(process.argv.slice(2)) + '\\n');
     if (process.env.API_FAIL === 'true') process.exit(1);
     for (const message of JSON.parse(process.env.MESSAGES)) console.log(JSON.stringify(message));
   `
   );
+  // Conventional Commits 1.0.0 §15: a type matches in any case, and BREAKING CHANGE only in upper case.
   const cases = [
     [[], "v1.0.0", false, "none"],
     [[], "", false, "minor"],
@@ -208,14 +210,25 @@ test("release train distinguishes read failure, empty history and release types"
     [[], "", true, "__ERR__"],
     [["fix: predicate"], "v1.0.0", false, "patch"],
     [["feat: endpoint"], "v1.0.0", false, "minor"],
+    [["Feat(API): endpoint"], "v1.0.0", false, "minor"],
     [["feat(proto)!: remove field"], "v1.0.0", false, "major"],
     [["fix: change\n\nBREAKING CHANGE: contract"], "v1.0.0", false, "major"],
+    [["fix: change\n\nbreaking change: prose"], "v1.0.0", false, "patch"],
     [["docs: examples\n\nfeat: quoted example"], "v1.0.0", false, "patch"],
   ];
   for (const [messages, tag, failed, expected] of cases) {
     const env = { MESSAGES: JSON.stringify(messages), API_FAIL: String(failed) };
     assert.equal(succeeds(w.bash(`${script}\nderive_bump "$@"`, env, ["owner/repo", tag, "master"])), expected);
   }
+  // Without a page size the compare API stops at 250 commits, so the read pages by 100.
+  const compare = ["api", "repos/owner/repo/compare/v1.0.0...master?per_page=100", "--paginate"];
+  assert(
+    w
+      .read("calls")
+      .trim()
+      .split("\n")
+      .some((line) => JSON.stringify(JSON.parse(line).slice(0, 3)) === JSON.stringify(compare))
+  );
 });
 
 test("release train waits for a cut's approval and never for a rehearsal", (t) => {
