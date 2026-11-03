@@ -93,6 +93,7 @@ runs:
       env:
         VERSION: ${{ inputs.version }}
       run: |
+        set -euo pipefail
         echo "minor=${VERSION%.*}" >> "$GITHUB_OUTPUT"
         echo "major=${VERSION%%.*}" >> "$GITHUB_OUTPUT"
     - id: meta

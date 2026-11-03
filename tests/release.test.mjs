@@ -14,7 +14,7 @@ const releaseScript = (name) => join(root, "publish-actions/release-core", `${na
 
 test("release guard treats branch names as data and refuses a cut without the release key", (t) => {
   const w = workspace(t);
-  const guard = step("publish-actions/release-core/action.yaml", "Guard — default branch and credentials");
+  const guard = step("publish-actions/release-core/action.yaml", "guard");
   for (const ref of ["master", "feature", "$(touch injected)"]) {
     const env = { REF_NAME: ref, DEFAULT_BRANCH: "master", DRY_RUN: "false", HAS_KEY: "true" };
     assert.equal(w.bash(guard, env).status, ref === "master" ? 0 : 1);

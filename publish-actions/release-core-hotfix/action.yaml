@@ -102,6 +102,7 @@ runs:
       working-directory: __hotfix
       shell: bash
       run: |
+        set -euo pipefail
         if node -e "process.exit(require('./package.json').scripts?.['prepublish:doc']?0:1)" 2>/dev/null; then
           echo "needed=true" >> "$GITHUB_OUTPUT"
         else
@@ -154,16 +155,15 @@ runs:
         # tag and the line must descend from it.
         baseline=$(node -p "require('./package.json').version")
         if ! git rev-parse -q --verify "refs/tags/v${baseline}" >/dev/null; then
-          echo "::error::baseline v${baseline} (this ref's package.json version) is not a released tag — a hotfix must be cut from a release tag, not an arbitrary commit."
+          echo "::error::baseline v${baseline} (this ref's package.json version) is not a released tag; a hotfix must be cut from a release tag, not an arbitrary commit."
           exit 1
         fi
         if ! git merge-base --is-ancestor "refs/tags/v${baseline}" HEAD; then
-          echo "::error::HEAD does not descend from baseline v${baseline} — the release line was not cut from that release tag."
+          echo "::error::HEAD does not descend from baseline v${baseline}; the release line was not cut from that release tag."
           exit 1
         fi
 
-        node "$RC/bump.mjs"
-        version=$(node -p "require('./package.json').version")
+        version=$(node "$RC/bump.mjs")
 
         # Refresh doc version refs where a prepublish:doc script exists. The env var skips pnpm's
         # pre-run install, which needs npm-registry auth.
@@ -180,7 +180,7 @@ runs:
         while IFS= read -r t; do
           [ -n "$t" ] || continue
           if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
-            echo "::error::tag $t already exists — refusing to overwrite (stale baseline or a re-run?)."
+            echo "::error::tag $t already exists; refusing to overwrite (stale baseline or a re-run?)."
             exit 1
           fi
         done <<< "$tags"
@@ -193,7 +193,7 @@ runs:
           echo "__TAGS__"
         } >> "$GITHUB_OUTPUT"
         {
-          echo "Hotfix **$version** (patch of v${baseline}) — tags:"
+          echo "Hotfix **$version** (patch of v${baseline}), tags:"
           printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
         } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -226,4 +226,4 @@ runs:
         # which is how notify-release tells a hotfix apart.
         gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" --target "$BRANCH" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes --latest=false
-        echo "- ✓ hotfix released $(printf '%s\n' "$tags" | grep -c .) tag(s), root \`$root_tag\` (not latest)" | tee -a "$GITHUB_STEP_SUMMARY"
+        echo "- ✓ hotfix released ${#tag_refs[@]} tag(s), root \`$root_tag\` (not latest)" | tee -a "$GITHUB_STEP_SUMMARY"

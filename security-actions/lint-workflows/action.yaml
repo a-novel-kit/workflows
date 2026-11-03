@@ -41,7 +41,7 @@ runs:
         set -euo pipefail
 
         if [ ! -d .github/workflows ]; then
-          echo "no .github/workflows — nothing to audit."
+          echo "no .github/workflows, so nothing to audit."
           exit 0
         fi
 
