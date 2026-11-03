@@ -113,6 +113,7 @@ jobs:
       # Renovate pull request it left off auto-merge, or that a person took off, waits for a person.
       # The first to enable auto-merge decided it; recover-prs re-arms a dropped pull request as the
       # agent. An update inside its release-age window waits for its green status to re-run the job.
+      # Anyone who can push may post a status under any name, so only the bot's own counts.
       # A head this App already approved gets no second review, though auto-merge is still armed.
       - name: Confirm the bot's commits, Renovate's auto-merge choice and the update's age
         id: guard
@@ -165,8 +166,8 @@ jobs:
             exit 0
           fi
 
-          age=$(GH_TOKEN="$STATUS_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/status" \
-            --jq '[.statuses[] | select(.context == "renovate/stability-days")][0].state // "none"')
+          age=$(GH_TOKEN="$STATUS_TOKEN" gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$SHA/statuses?per_page=100" |
+            jq -r --arg bot "$BOT" '[add[] | select(.context == "renovate/stability-days" and .creator.login == $bot)][0].state // "none"')
           if [ "$age" != none ] && [ "$age" != success ]; then
             echo "::notice::Not auto-approving yet: renovate/stability-days is '$age'; its success re-runs this."
             echo "skip=true" >> "$GITHUB_OUTPUT"
