@@ -67,12 +67,17 @@ runs:
         if [ -z "$(git status --porcelain -- pnpm-workspace.yaml pnpm-lock.yaml)" ]; then exit 0; fi
         # The default branch requires signed commits. GitHub signs a commit the App creates through
         # the API, never one it pushes.
-        tree="$(for path in pnpm-workspace.yaml pnpm-lock.yaml; do
-          jq -n --arg path "$path" --rawfile content "$path" '{path: $path, mode: "100644", type: "blob", content: $content}'
-        done | jq -s --arg base "$(git rev-parse 'HEAD^{tree}')" '{base_tree: $base, tree: .}' |
-          gh api "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)"
+        base="$(git rev-parse 'HEAD^{tree}')"
+        parent="$(git rev-parse HEAD)"
+        tree="$(jq -n --arg base "$base" --rawfile workspace pnpm-workspace.yaml --rawfile lock pnpm-lock.yaml '{
+          base_tree: $base,
+          tree: [
+            {path: "pnpm-workspace.yaml", mode: "100644", type: "blob", content: $workspace},
+            {path: "pnpm-lock.yaml", mode: "100644", type: "blob", content: $lock}
+          ]
+        }' | gh api "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)"
         commit="$(gh api "repos/$GITHUB_REPOSITORY/git/commits" -f message="chore(security): audit fix" \
-          -f tree="$tree" -f "parents[]=$(git rev-parse HEAD)" --jq .sha)"
+          -f tree="$tree" -f "parents[]=$parent" --jq .sha)"
         if gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --silent 2>/dev/null; then
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" -f sha="$commit" -F force=true --silent
         else

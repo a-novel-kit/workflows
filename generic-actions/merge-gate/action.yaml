@@ -163,7 +163,8 @@ runs:
         # ---- Organization-wide halt, read before any membership work ------------------------
         # The switch fails toward halting, so only an explicit off-token runs the gate. The halt
         # precedes every other verdict, so it holds every pull request and dequeues every merge group.
-        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
             post_check failure "Automation halted org-wide by AGENT_KILL_SWITCH — holding this PR. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to resume; the next event or reconcile sweep re-evaluates."
@@ -761,7 +762,8 @@ runs:
 
         # A dry run stops here, before the first write, and reports the decision, the member set and
         # the exact payload. The member list is what a reviewer checks, because a frozen set is final.
-        if [ "$(printf '%s' "${SNAPSHOT_DRY_RUN:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+        snapshot_dry_run=$(printf '%s' "${SNAPSHOT_DRY_RUN:-false}" | tr '[:upper:]' '[:lower:]')
+        if [ "$snapshot_dry_run" = true ]; then
           {
             echo "Epic #${EPIC}: dry run — would write a \"${do}\" activation snapshot. The Epic body is untouched, so a repeated pass reports this same transition."
             echo "  set judged ($(printf '%s' "$cur" | jq 'length') member(s)):"

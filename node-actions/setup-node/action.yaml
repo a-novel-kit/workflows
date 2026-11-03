@@ -49,6 +49,7 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
+        set -euo pipefail
         pnpm config set "@a-novel:registry" "https://npm.pkg.github.com"
         pnpm config set "@a-novel-kit:registry" "https://npm.pkg.github.com"
         pnpm config set "//npm.pkg.github.com/:_authToken" "$GITHUB_TOKEN"

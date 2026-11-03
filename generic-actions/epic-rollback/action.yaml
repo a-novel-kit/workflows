@@ -91,7 +91,8 @@ runs:
         KILL_SWITCH: ${{ inputs.kill_switch }}
       run: |
         set -euo pipefail
-        case "$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
             echo "::error::AGENT_KILL_SWITCH engaged — [Agent] automation is halted org-wide; refusing to run epic-rollback. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) deliberately before rolling back."
@@ -168,7 +169,7 @@ runs:
           exit 1
         fi
 
-        # `tr` lowercases because ${VAR,,} needs Bash 4.
+        # tr folds bytes, so only an ASCII spelling of "false" runs live.
         dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
         [ "$dry" = false ] || dry=true
 
@@ -498,7 +499,7 @@ runs:
           echo "::error::could not open the rollback-Epic issue in ${ORG}/${PLANNING_REPO} (issues:write?)."
           exit 1
         fi
-        M=$(printf '%s' "$epic_url" | grep -oE '[0-9]+$' || true)
+        M=${epic_url##*/}
         if ! [[ "$M" =~ ^[0-9]+$ ]]; then
           echo "::error::could not parse the rollback-Epic number from \"${epic_url}\"."
           exit 1
@@ -624,7 +625,7 @@ runs:
           fi
           rm -rf "$dir"
 
-          pr_num=$(printf '%s' "$pr_url" | grep -oE '[0-9]+$')
+          pr_num=${pr_url##*/}
           produced=$(jq -cn --argjson acc "$produced" --arg repo "$repo" --argjson num "$pr_num" \
             --argjson draft "$draft" '$acc + [{repo:$repo, number:$num, draft:$draft}]')
           echo "${repo}: opened $([ "$draft" = true ] && echo 'DRAFT ' )revert PR #${pr_num} ($pr_url)." | tee -a "$GITHUB_STEP_SUMMARY"

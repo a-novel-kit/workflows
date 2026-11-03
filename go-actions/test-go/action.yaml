@@ -84,45 +84,42 @@ runs:
         # Any proxy error falls back to the origin; Go's checksum database still verifies the source.
         GOPROXY: "https://proxy.golang.org|direct"
       run: |
+        set -euo pipefail
+
         # Lists the packages of every module from `go list -m`, since one `go list ./...` reaches a
         # single module of a Go workspace.
         #
         # An empty set fails. gotestsum given no package tests `.`, which holds no tests in most
         # modules, and passes with coverage reduced to its `mode: set` header.
         discover_modules() {
-          local root modules mod packages
+          local root modules mod
+          local patterns=()
 
           if ! root=$(go list .); then
-            echo "::error::go list . failed — cannot derive the module path prefix"
+            echo "::error::go list . failed, so the module path prefix is unknown"
             return 1
           fi
 
           if ! modules=$(go list -m); then
-            echo "::error::go list -m failed — cannot enumerate the modules"
+            echo "::error::go list -m failed, so the modules are unknown"
             return 1
           fi
 
-          : >"$PACKAGES"
+          for mod in $modules; do patterns+=("${mod//$root/.}/..."); done
 
-          for mod in $modules; do
-            if ! packages=$(go list "${mod//$root/.}/..."); then
-              echo "::error::go list failed for module ${mod}"
-              return 1
-            fi
-
-            # A module may list no package, or the filters may drop all of them. Only an empty set
-            # overall fails, below.
-            [ -n "$packages" ] || continue
-
-            printf '%s\n' "$packages" >>"$PACKAGES"
-          done
+          # A module may list no package, or the filters may drop all of them. Only an empty set
+          # overall fails, below.
+          if ! go list "${patterns[@]}" >"$PACKAGES"; then
+            echo "::error::go list failed for the modules"
+            return 1
+          fi
 
           # An empty pattern filters nothing: `.` keeps every path, and `^$` drops none.
           grep -E -- "${INCLUDE:-.}" "$PACKAGES" | grep -vE -- "${EXCLUDE:-^$}" >"$PACKAGES.kept"
           mv "$PACKAGES.kept" "$PACKAGES"
 
           if [ ! -s "$PACKAGES" ]; then
-            echo "::error::discovery produced no packages — the test run would report success having run nothing"
+            echo "::error::discovery produced no packages, and a test run without any reports success"
             return 1
           fi
         }

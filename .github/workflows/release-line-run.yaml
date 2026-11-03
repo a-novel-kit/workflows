@@ -141,12 +141,12 @@ jobs:
             if [ "$active" = "0" ]; then
               break
             elif [ "$active" = "err" ]; then
-              echo "::warning::couldn't read in-flight release runs (gh error) — retrying in 30s."
+              echo "::warning::couldn't read in-flight release runs (gh error); retrying in 30s."
             else
-              echo "⏳ ${active} release run(s) actively in flight — waiting 30s before re-checking…"
+              echo "⏳ ${active} release run(s) actively in flight; waiting 30s before re-checking…"
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::a release has been actively in flight (or its status unreadable) > 30m — aborting the cut; retry once it completes."
+              echo "::error::a release has been actively in flight (or its status unreadable) > 30m, so the cut aborts; retry once it completes."
               exit 1
             fi
             sleep 30

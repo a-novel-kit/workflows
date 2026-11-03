@@ -1,9 +1,16 @@
 import { writeFileSync } from "node:fs";
 import { stripVTControlCharacters } from "node:util";
 
+const SCREENSHOT_ASSERTION = /\btoHaveScreenshot\b/;
+/** A comparison attachment's screenshot name and role, as in `home-actual.png`. */
+const COMPARISON_IMAGE = /^(.*)-(expected|actual|diff)\.png$/;
+const MISSING_REFERENCE = /\.png(?:, writing actual)?\.$/;
+
 /** Append a value to the list a WeakMap holds for the key. */
 function append(map, key, value) {
-  map.set(key, [...(map.get(key) ?? []), value]);
+  const values = map.get(key);
+  if (values) values.push(value);
+  else map.set(key, [value]);
 }
 
 /** Records public Playwright events so visual approval cannot hide another assertion failure. */
@@ -20,19 +27,19 @@ export default class VisualReporter {
   }
 
   onStepEnd(_test, result, step) {
-    if (step.category !== "expect" || !/\btoHaveScreenshot\b/.test(step.title)) return;
+    if (step.category !== "expect" || !SCREENSHOT_ASSERTION.test(step.title)) return;
     this.screenshots.set(result, (this.screenshots.get(result) ?? 0) + 1);
     const images = {};
     let name;
     for (const attachment of step.attachments) {
-      const match = attachment.name.match(/^(.*)-(expected|actual|diff)\.png$/);
+      const match = attachment.name.match(COMPARISON_IMAGE);
       if (match && attachment.contentType === "image/png" && attachment.path) {
         name = match[1];
         images[match[2]] = attachment.path;
       }
     }
     const message = stripVTControlCharacters(step.error?.message ?? "").replace(/^Error: /, "");
-    const missing = message.startsWith("A snapshot doesn't exist at ") && /\.png(?:, writing actual)?\.$/.test(message);
+    const missing = message.startsWith("A snapshot doesn't exist at ") && MISSING_REFERENCE.test(message);
     const attached = (suffix) =>
       step.attachments.some((attachment) => attachment.contentType === "image/png" && attachment.name.endsWith(suffix));
     // Stable mismatch evidence distinguishes a reviewable diff from capture/timeout failures.

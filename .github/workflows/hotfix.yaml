@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       line:
-        description: 'X.Y line to patch (e.g. "1.4") — its release line branches from the latest vX.Y.* tag'
+        description: 'X.Y line to patch, such as "1.4"; its release line branches from the latest vX.Y.* tag'
         required: true
         type: string
       fix_refs:

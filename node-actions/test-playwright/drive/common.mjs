@@ -72,12 +72,16 @@ export class GitHub {
         await backoff(attempt);
         continue;
       }
-      if (response.status >= 500 && attempt < 2) {
-        await backoff(attempt);
-        continue;
+      if (!response.ok) {
+        // An unread body holds its connection open.
+        await response.body?.cancel();
+        if (response.status >= 500 && attempt < 2) {
+          await backoff(attempt);
+          continue;
+        }
+        if (missing && response.status === 404) return null;
+        throw new Failure(`GitHub request failed (HTTP ${response.status})`);
       }
-      if (missing && response.status === 404) return null;
-      if (!response.ok) throw new Failure(`GitHub request failed (HTTP ${response.status})`);
       const text = await response.text();
       return text ? JSON.parse(text) : null;
     }
@@ -101,8 +105,7 @@ export class GitHub {
   }
 
   async current(sha, runId, attempt) {
-    const ref = await this.request("git/ref/heads/master");
-    const run = await this.request(`actions/runs/${runId}`);
+    const [ref, run] = await Promise.all([this.request("git/ref/heads/master"), this.request(`actions/runs/${runId}`)]);
     return (
       ref.object.sha === sha &&
       run.head_sha === sha &&

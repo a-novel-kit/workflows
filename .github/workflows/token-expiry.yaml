@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           now=$(date -u +%s)
 
-          # ── Ping policy — edit here ─────────────────────────────────────────────────────────────
+          # ---- Ping policy: edit here ------------------------------------------------------------
           # Ping once as the percentage of lifetime remaining crosses below each milestone. The rule
           # is stateless: it fires when yesterday's percentage was above the milestone and today's is
           # at or below it. It also pings every day within FINAL_STRETCH_DAYS of expiry, counting an
@@ -81,7 +81,6 @@ jobs:
           # derivable lifetime still gets the final-stretch pings.
           LIFETIME_MILESTONES="50 30 10"
           FINAL_STRETCH_DAYS=7
-          # ────────────────────────────────────────────────────────────────────────────────────────
 
           # Prints a human ping reason, or nothing to stay silent. $1 days-left, $2 lifetime-days.
           ping_reason() {
@@ -304,9 +303,7 @@ jobs:
             echo "  - ${name} (${login}): ${status} — PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
 
             target="admin"
-            if [ -n "${DEFAULT_MENTION:-}" ]; then
-              echo "::add-mask::$DEFAULT_MENTION"   # defensive: keep the admin id out of logs
-            else
+            if [ -z "${DEFAULT_MENTION:-}" ]; then
               target="no-one"
               echo "::warning::no admin (default_mention) configured — posting ${name} without a ping."
             fi

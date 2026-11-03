@@ -351,7 +351,10 @@ export async function cleanup(drive, github, resultsId, referencesId) {
   for (const batch of await drive.batches(resultsId)) {
     const [branch, completed] = await github.branch(batch);
     if (branch === null) await drive.remove(batch);
-    else if (completed) byBranch.set(branch, [...(byBranch.get(branch) ?? []), batch]);
+    else if (completed) {
+      if (!byBranch.has(branch)) byBranch.set(branch, []);
+      byBranch.get(branch).push(batch);
+    }
   }
   for (const [branchName, batches] of byBranch) {
     const newest = batches.sort(rank).at(-1);

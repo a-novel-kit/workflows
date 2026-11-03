@@ -47,10 +47,6 @@ runs:
               <<<"${EVENT_LABELS:-null}" >/dev/null
         }
 
-        collect_changes() { # $1=output file
-          git diff --name-status --no-renames -z "${BASE}...HEAD" -- "$PATH_TO_CHECK" > "$1"
-        }
-
         classify_changes() { # $1=name-status file
           VIOLATIONS=()
           local status file
@@ -109,7 +105,7 @@ runs:
 
         changes=$(mktemp)
         trap 'rm -f "$changes"' EXIT
-        if ! collect_changes "$changes"; then
+        if ! git diff --name-status --no-renames -z "${BASE}...HEAD" -- "$PATH_TO_CHECK" > "$changes"; then
           printf '::error::failed to compare %s...HEAD under %s\n' "$BASE" "$PATH_TO_CHECK"
           exit 1
         fi

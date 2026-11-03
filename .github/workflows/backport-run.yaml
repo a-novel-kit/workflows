@@ -371,7 +371,7 @@ jobs:
             fixes+=("$sha")
           done
           if ! baseline=$(release_baseline "$LINE") || [ -z "$baseline" ]; then
-            echo "::error::no released tag on line v${LINE}.x — nothing to backport to."
+            echo "::error::no released tag on line v${LINE}.x; nothing to backport to."
             exit 1
           fi
           ensure_release_line "$LINE" "$baseline"

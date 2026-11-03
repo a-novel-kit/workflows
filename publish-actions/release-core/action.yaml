@@ -52,7 +52,7 @@ runs:
     # A tag cut from another branch names the wrong commit, so any other ref fails before a token
     # is minted. A cut whose job is outside the `release` environment reads an empty key. Every later
     # step reads the dry_run this guard resolves.
-    - name: Guard — default branch and credentials
+    - name: Guard the default branch and credentials
       id: guard
       shell: bash
       env:
@@ -63,7 +63,7 @@ runs:
       run: |
         set -euo pipefail
         if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
-          echo "::error::releases run from the default branch ($DEFAULT_BRANCH) only — got '$REF_NAME'"
+          echo "::error::releases run from the default branch ($DEFAULT_BRANCH) only, got '$REF_NAME'"
           exit 1
         fi
         dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
@@ -109,6 +109,7 @@ runs:
       id: stamp
       shell: bash
       run: |
+        set -euo pipefail
         if node -e "process.exit(require('./package.json').scripts?.['prepublish:doc']?0:1)" 2>/dev/null; then
           echo "needed=true" >> "$GITHUB_OUTPUT"
         else
@@ -157,15 +158,13 @@ runs:
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
 
         # Plain Node bumps every workspace package.json, which skips pnpm's cold-store dependency checks.
-        node "$GITHUB_ACTION_PATH/bump.mjs"
+        version=$(node "$GITHUB_ACTION_PATH/bump.mjs")
 
         # Refresh doc version refs through `a-novel publish stamp` where that script exists.
         # The env var skips pnpm's pre-run install, which would need npm-registry auth.
         if [ "$STAMP_NEEDED" = "true" ]; then
           PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm run prepublish:doc
         fi
-
-        version=$(node -p "require('./package.json').version")
 
         # plan.mjs stamps in-repository version references, self-pins included, and prints the tags.
         tags=$(node "$GITHUB_ACTION_PATH/plan.mjs" --self-pins)
@@ -179,7 +178,7 @@ runs:
           echo "__TAGS__"
         } >> "$GITHUB_OUTPUT"
         {
-          echo "Release **$version** (bump: $RELEASE_TYPE) — tags:"
+          echo "Release **$version** (bump: $RELEASE_TYPE), tags:"
           printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
         } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -207,4 +206,4 @@ runs:
           git push --atomic origin "HEAD:$BRANCH" "${tag_refs[@]}"
         gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes
-        echo "- ✓ released $(printf '%s\n' "$tags" | grep -c .) tag(s), root \`$root_tag\`" | tee -a "$GITHUB_STEP_SUMMARY"
+        echo "- ✓ released ${#tag_refs[@]} tag(s), root \`$root_tag\`" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -94,7 +94,7 @@ runs:
         # as web-flow, which GitHub does only for a commit it writes for the bot itself.
         bot_written=false
         if [ "$AUTHOR_TYPE" = Bot ]; then
-          unsigned="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" |
+          unsigned="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR/commits?per_page=100" |
             jq '[add[] | select(.author.type != "Bot" or .committer.login != "web-flow" or (.commit.verification.verified | not))] | length')" ||
             hold "the commits"
           [ "$unsigned" = 0 ] && bot_written=true
@@ -124,7 +124,7 @@ runs:
         # stands, and only an approval of the current head counts.
         approver=""
         if [ "$bot_written" = false ]; then
-          reviews="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
+          reviews="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews?per_page=100" --paginate \
             --jq '.[] | select(.state != "COMMENTED") | [.user.login, .user.type, .state, .commit_id] | @tsv')" ||
             hold "the reviews"
           while IFS=$'\t' read -r login type state commit; do
@@ -135,9 +135,9 @@ runs:
           done < <(awk -F'\t' 'NF { last[$1] = $0 } END { for (login in last) print last[login] }' <<<"$reviews")
         fi
 
-        labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --paginate --jq '.[].name')" ||
+        labels="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels?per_page=100" --paginate --jq '.[].name')" ||
           hold "the labels"
-        applied="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/events" --paginate \
+        applied="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/events?per_page=100" --paginate \
           --jq '.[] | select(.event == "labeled") | [.label.name, .actor.login, .actor.type] | @tsv')" ||
           hold "the label history"
         privileged="$(tr ',' '\n' <<<"$PRIVILEGED" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d')"

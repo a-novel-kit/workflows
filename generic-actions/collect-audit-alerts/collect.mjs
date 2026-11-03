@@ -209,7 +209,8 @@ export function groups(alerts) {
   const byKey = new Map();
   for (const entry of alerts) {
     const key = JSON.stringify([entry.action, entry.actor, ...targets.map((field) => text(entry[field]))]);
-    byKey.set(key, [...(byKey.get(key) ?? []), entry]);
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(entry);
   }
   return [...byKey.values()].map((entries) => ({ entries }));
 }

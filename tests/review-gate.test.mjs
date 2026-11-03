@@ -30,7 +30,7 @@ function evaluate(
     "gh",
     `import * as fs from 'node:fs';
     const args = process.argv.slice(2);
-    const path = args.find((arg) => arg.startsWith("repos/")) ?? "";
+    const path = (args.find((arg) => arg.startsWith("repos/")) ?? "").split("?")[0];
     fs.appendFileSync("reads", path + "\\n");
     if (path.endsWith("/check-runs")) {
       fs.writeFileSync("check.json", fs.readFileSync(0, "utf8"));

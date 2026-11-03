@@ -74,9 +74,7 @@ runs:
         case "$rc" in
           0) ;;
           3)
-            sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9-]*\).*/\1/p' "$report" | while read -r id; do
-              echo "::warning title=govulncheck::$id is reachable from this module; see the job summary."
-            done
+            sed -n 's/^Vulnerability #[0-9]*: \(GO-[0-9-]*\).*/::warning title=govulncheck::\1 is reachable from this module; see the job summary./p' "$report"
             ;;
           *) echo "::warning title=govulncheck::The scan did not run (exit $rc); see the job log." ;;
         esac

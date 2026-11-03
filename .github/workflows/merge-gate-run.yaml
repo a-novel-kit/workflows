@@ -104,7 +104,8 @@ jobs:
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          if printf '%s' "$LABELS" | grep -qE '"epic:[0-9]+"'; then
+          set -euo pipefail
+          if [[ $LABELS =~ \"epic:[0-9]+\" ]]; then
             echo "member=true" >> "$GITHUB_OUTPUT"
           else
             echo "member=false" >> "$GITHUB_OUTPUT"

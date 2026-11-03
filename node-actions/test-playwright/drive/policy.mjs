@@ -15,6 +15,9 @@ function testsHead(run, sha) {
 export class Policy {
   constructor(github) {
     this.github = github;
+    this.runUrl = new RegExp(
+      `^https://github\\.com/${RegExp.escape(github.repository)}/actions/runs/(\\d+)/attempts/(\\d+)$`
+    );
   }
 
   post(path, body = {}) {
@@ -89,10 +92,7 @@ export class Policy {
   }
 
   runTarget(status) {
-    const repository = RegExp.escape(this.github.repository);
-    return status.target_url?.match(
-      new RegExp(`^https://github\\.com/${repository}/actions/runs/(\\d+)/attempts/(\\d+)$`)
-    );
+    return status.target_url?.match(this.runUrl);
   }
 
   async proof(pr, baseline, before) {
@@ -249,8 +249,7 @@ export class Policy {
     const pulls = await this.github.pages(`pulls?state=open&head=${owner}:${encodeURIComponent(run.head_branch)}`);
     const pr = pulls.find((candidate) => candidate.head.sha === run.head_sha && this.ownPullRequest(candidate));
     if (!pr) return null;
-    const label = await this.latestLabel(pr);
-    const receipt = await this.latestStatus(pr.head.sha, APPROVAL);
+    const [label, receipt] = await Promise.all([this.latestLabel(pr), this.latestStatus(pr.head.sha, APPROVAL)]);
     // Until a receipt follows the label change, its own approval run is pending and refreshes instead.
     return label && receipt?.created_at >= label.created_at ? this.refresh(pr, receipt.created_at) : null;
   }
