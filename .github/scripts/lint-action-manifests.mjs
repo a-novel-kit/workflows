@@ -29,13 +29,22 @@ export function violations(source) {
   return hits;
 }
 
+/** A `uses:` line's reference and the text after it, the version comment of a pinned action. */
+const USES = /^\s*(?:-\s+)?uses:\s*["']?([^\s"']+)["']?(.*)$/;
+/** References that resolve inside A-Novel or to a container image, which pinning leaves alone. */
+const FIRST_PARTY = /^(\.\/|\$\/|docker:\/\/|a-novel-kit\/)/;
+const COMMIT = /@[0-9a-f]{40}$/;
+const VERSION_COMMENT = /^\s+#\s*v\d+\.\d+\.\d+\s*$/;
+
 /** Find third-party actions not pinned as `owner/repo@<commit> # vX.Y.Z`, the form Renovate keeps current. */
 export function unpinned(source) {
-  return source.split("\n").flatMap((text, index) => {
-    const [, uses, rest] = /^\s*(?:-\s+)?uses:\s*["']?([^\s"']+)["']?(.*)$/.exec(text) ?? [];
-    if (!uses || /^(\.\/|\$\/|docker:\/\/|a-novel-kit\/)/.test(uses)) return [];
-    return /@[0-9a-f]{40}$/.test(uses) && /^\s+#\s*v\d+\.\d+\.\d+\s*$/.test(rest) ? [] : [{ line: index + 1, uses }];
-  });
+  const hits = [];
+  for (const [index, text] of source.split("\n").entries()) {
+    const [, uses, rest] = USES.exec(text) ?? [];
+    if (!uses || FIRST_PARTY.test(uses) || (COMMIT.test(uses) && VERSION_COMMENT.test(rest))) continue;
+    hits.push({ line: index + 1, uses });
+  }
+  return hits;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
