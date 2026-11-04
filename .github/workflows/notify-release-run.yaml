@@ -1,7 +1,7 @@
 name: notify-release (reusable)
 
 # Announces each published release in Discord with its notes, as GitHub shows them. Each governed
-# repository calls this engine on `release: published`, from the `notify.yaml` that repocfg renders.
+# repository calls this engine on `release: published`, from its own `notify.yaml`.
 # release-core and release-core-hotfix create releases with an App token, so the event fires for
 # every release.
 on:
