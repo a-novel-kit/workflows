@@ -1,7 +1,7 @@
 name: release line (reusable)
 
 # Cuts a release line's next patch when a backport pull request merges into `release/**`. Each
-# governed repository calls this engine from the `hotfix.yaml` that repocfg renders. The cut runs as
+# governed repository calls this engine from its own `hotfix.yaml`. The cut runs as
 # the release App behind the protected `release` environment, the human gate on who may publish. It
 # pushes the bump commit to the line together with its tags, so the line's head is always its latest
 # patch. The caller triggers on pull_request_target, so GitHub runs the default branch's copy of the
@@ -60,11 +60,6 @@ on:
         description: >
           Private key (PEM) of the App that release_client_id names. The caller passes it by name from
           its `release` environment, which only the cut job opens.
-        required: false
-      sentry_auth_token:
-        description: >
-          Deprecated and ignored, since Sentry is retired. Callers may drop it now, and the next
-          planned major removes it.
         required: false
       push_webhook:
         description: Chat webhook URL that receives a SEV1 escalation's push. Empty turns the push off.

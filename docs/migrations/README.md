@@ -4,7 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| [v1.82.0](./v1.82.0.md) | `sentry-release` and `sentry-intake-run` are removed; `release-line-run` ignores `sentry_auth_token`.                           |
+| [v1.82.0](./v1.82.0.md) | `sentry-release` and `sentry-intake-run` are removed; `release-line-run` drops `sentry_auth_token`.                             |
 | [v1.81.0](./v1.81.0.md) | `lint-go`'s `working-directory`, `docker`'s `secret-envs` and `secret-files`, and `docker-job` are removed.                     |
 | [v1.79.0](./v1.79.0.md) | Repositories with a Sentry project record releases in Sentry and board the issues its App opens.                                |
 | [v1.78.0](./v1.78.0.md) | `lint-go` and `docker` take snake_case inputs; `docker-job` is deprecated for `docker` with `mode: job`.                        |
