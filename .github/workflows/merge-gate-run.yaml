@@ -1,7 +1,7 @@
 name: merge-gate (reusable)
 
 # Gates a repository's pull requests and coordinates the landing of Epic members. Each governed
-# repository calls this engine from the `merge-gate.yaml` that repocfg renders.
+# repository calls this engine from its own `merge-gate.yaml`.
 on:
   workflow_call:
     inputs:

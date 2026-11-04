@@ -1,7 +1,7 @@
 name: epic-rollback (reusable)
 
 # Reverts a landed Epic's merged members across repositories and lands the reverts together. Each
-# governed repository calls this engine from the `epic-rollback.yaml` dispatch that repocfg renders.
+# governed repository calls this engine from its own `epic-rollback.yaml` dispatch.
 # The rollback undoes merged code, so the job opens with an admin check and a typed confirmation.
 on:
   workflow_call:

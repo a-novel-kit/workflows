@@ -20,8 +20,9 @@ place this repository in the tooling layer.
 GitHub shows each action's `name` and `description` to its callers, and the README catalog copies them
 by hand. Update the README in the same change.
 
-The workflows with a "Managed by `a-novel repo update`" banner, and `.github/CODEOWNERS`, are rendered
-from the stack's repocfg templates. Change them there.
+Each repository owns its governance callers, such as `merge-gate.yaml`, and its
+`.github/CODEOWNERS`. a-novel-kit/stack#983 retired the templates that rendered them, so a change to a
+caller lands in every repository that carries it.
 
 ## Versioning
 

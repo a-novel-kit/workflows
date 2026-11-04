@@ -19,8 +19,8 @@ Composite actions package the steps of a job, reusable workflows package whole j
 [Renovate presets](./docs/renovate-presets.md) carry the shared dependency policy. A repository
 references them by path, pinned to a release tag, instead of copying CI logic.
 
-The governance workflows that the stack's `a-novel repo update` renders into each repository, such as
-`merge-gate.yaml` and `review-gate.yaml`, are thin callers of the reusable workflows and actions here.
+The governance workflows each repository carries, such as `merge-gate.yaml` and `review-gate.yaml`,
+are thin callers of the reusable workflows and actions here.
 
 ## Using an action
 

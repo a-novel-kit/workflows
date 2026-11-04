@@ -1,7 +1,7 @@
 name: auto-approve-dependabot (reusable)
 
 # Approves and queues a repository's trusted dependency-bot pull requests. Each governed repository
-# calls this engine from the `auto-approve-dependabot.yaml` that repocfg renders, and the engine runs
+# calls this engine from its own `auto-approve-dependabot.yaml`, and the engine runs
 # in that repository's context. A Renovate update merges alone only when Renovate itself put it on
 # auto-merge, so the updates its presets leave to review, such as majors, wait for a person.
 #

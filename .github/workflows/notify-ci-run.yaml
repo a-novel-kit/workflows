@@ -1,7 +1,7 @@
 name: notify-ci (reusable)
 
 # Tells a repository's owners in Discord when its default branch breaks, and when it turns green
-# again. Each governed repository calls this engine from the `notify.yaml` that repocfg renders, on
+# again. Each governed repository calls this engine from its own `notify.yaml`, on
 # the `workflow_run` completion of `main` and `release`, so a release that fails after tagging
 # reports too. A failure pings the repository's Discord role, and the recovery posts without a ping.
 on:

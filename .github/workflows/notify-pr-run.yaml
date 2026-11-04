@@ -1,9 +1,9 @@
 name: notify-pr (reusable)
 
 # Tells people in Discord where each pull request stands, without the dependency bots' noise. Each
-# governed repository calls this engine on pull request, review and failed CI events, from the
-# `notify.yaml` and `notify-reviews.yaml` that repocfg renders. Drafts post nothing, and a post
-# never pings the person who caused it.
+# governed repository calls this engine on pull request, review and failed CI events, from its own
+# `notify.yaml` and `notify-reviews.yaml`. Drafts post nothing, and a post never pings the person who
+# caused it.
 #
 # A person's pull request posts to its repository's reviews channel, or the org's when there is none.
 # It posts when it waits on a review, gets one, merges or drops out of the merge queue. A review
