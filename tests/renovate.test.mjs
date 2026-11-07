@@ -140,7 +140,7 @@ test("Renovate groups compatible libraries and runtimes after the npm catch-all"
     ["playwright runtime", ["playwright", "@playwright/test"], ["@vitest/browser-playwright"]],
     ["vitest monorepo", ["vitest", "@vitest/browser-playwright"], ["playwright"]],
     ["svelte vite toolchain", ["vite", "@sveltejs/vite-plugin-svelte"], ["svelte"]],
-    ...["json-keys", "authentication", "narrative-engine", "genai"].map(serviceGroup),
+    ...["json-keys", "authentication", "narrative-engine", "genai", "profile"].map(serviceGroup),
   ];
   for (const [group, yes, no] of groups) {
     assert(base.packageRules.indexOf(rule(group)) > catchAll);

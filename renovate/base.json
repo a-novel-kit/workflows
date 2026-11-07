@@ -188,6 +188,11 @@
       "postUpdateOptions": ["gomodTidy", "pnpmDedupe"]
     },
     {
+      "matchPackageNames": ["/.*a-novel\\/service-profile.*/"],
+      "groupName": "service profile",
+      "postUpdateOptions": ["gomodTidy", "pnpmDedupe"]
+    },
+    {
       "description": "Keep the pre-1.0 uikit package family together and require review because minor releases may break consumers.",
       "matchPackageNames": ["/^@a-novel-kit\\/uikit(?:-|$)/"],
       "matchCurrentVersion": "/^0\\./",
