@@ -4,15 +4,17 @@ description: >
   issues feed of an org's `.github` repository. Each repository keeps its channel webhooks as its own
   secrets, which no other repository can read, so the action dispatches that repository's
   notify-post.yaml once with all of its posts, in the order they came, and the repository posts
-  them. A failed dispatch ends as a warning, like a failed post: a repository without
-  notify-post.yaml, or posts beyond the 65,535 characters GitHub allows a dispatch's inputs, lose
-  that repository's posts.
+  them. The App's token reaches its own org alone, so a post about another org's repository, such
+  as a board item from that org, goes to the calling repository, whose channels are its org's. A
+  failed dispatch ends as a warning, like a failed post: a repository without notify-post.yaml, or
+  posts beyond the 65,535 characters GitHub allows a dispatch's inputs, lose that repository's
+  posts.
 
 inputs:
   posts:
     required: true
     description: >
-      JSON array of posts. Each names its "repo" ("<org>/<repo>" in the workflow's organization) and
+      JSON array of posts. Each names its "repo" ("<org>/<repo>") and
       carries what notify-post.yaml posts: "title", "url", "description", "color", "ping" (true pings
       the GitHub users in "user_ids", else the repository's role) and "user_ids" (GitHub numeric ids,
       space-separated).
@@ -46,7 +48,10 @@ runs:
         dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
         [ "$dry" = false ] || dry=true
         echo "dry=$dry" >>"$GITHUB_OUTPUT"
-        echo "repositories=$(jq -r '[.[].repo | split("/")[1]] | unique | join(",")' <<<"$POSTS")" >>"$GITHUB_OUTPUT"
+        posts=$(jq -c --arg owner "$GITHUB_REPOSITORY_OWNER" --arg self "$GITHUB_REPOSITORY" \
+          'map(if .repo | startswith("\($owner)/") then . else .repo = $self end)' <<<"$POSTS")
+        echo "posts=$posts" >>"$GITHUB_OUTPUT"
+        echo "repositories=$(jq -r '[.[].repo | split("/")[1]] | unique | join(",")' <<<"$posts")" >>"$GITHUB_OUTPUT"
 
     - name: Mint dispatch token
       id: token
@@ -64,7 +69,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
-        POSTS: ${{ inputs.posts }}
+        POSTS: ${{ steps.targets.outputs.posts }}
         CHANNEL: ${{ inputs.channel }}
         DRY: ${{ steps.targets.outputs.dry }}
       run: |

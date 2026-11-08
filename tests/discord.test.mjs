@@ -187,16 +187,24 @@ test("discord-dispatch warns for a failed dispatch, writes a dry run to the summ
   assert.deepEqual(unknown.calls, []);
 });
 
-test("discord-dispatch scopes its token to the target repositories and posts only on a false dry run", (t) => {
+test("discord-dispatch scopes its token to its org's target repositories and posts only on a false dry run", (t) => {
+  const other = posted(4, "a-novel-kit/.github");
   const cases = [
     [[posted(1), posted(2, "a-novel/service-genai"), posted(3)], "false", "infra,service-genai", "false"],
     [[posted(1)], " FALSE ", "infra", "false"],
     [[posted(1)], "yes", "infra", "true"],
     [[], "false", "", "false"],
+    // The App's token reaches its own org alone, so another org's post goes to the caller.
+    [[posted(1), other], "false", ".github,infra", "false"],
   ];
   for (const [posts, dryRun, repositories, dry] of cases) {
     const w = workspace(t);
-    succeeds(w.bash(targets, { POSTS: JSON.stringify(posts), DRY_RUN: dryRun }));
-    assert.deepEqual(w.read("output").trimEnd().split("\n"), [`dry=${dry}`, `repositories=${repositories}`]);
+    const env = { POSTS: JSON.stringify(posts), DRY_RUN: dryRun };
+    succeeds(w.bash(targets, { ...env, GITHUB_REPOSITORY_OWNER: "a-novel", GITHUB_REPOSITORY: "a-novel/.github" }));
+    const output = (name) => w.read("output").match(new RegExp(`^${name}=(.*)$`, "m"))[1];
+    assert.equal(output("dry"), dry);
+    assert.equal(output("repositories"), repositories);
+    const routed = posts.map((post) => (post === other ? { ...post, repo: "a-novel/.github" } : post));
+    assert.deepEqual(JSON.parse(output("posts")), routed);
   }
 });
