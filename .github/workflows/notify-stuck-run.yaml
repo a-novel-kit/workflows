@@ -8,9 +8,9 @@ name: notify-stuck (reusable)
 # posts every pull request stuck at that moment.
 #
 # The post goes to the dependencies channel and pings the repository's role. A pull request waiting
-# on a person's review posts to its repository's reviews channel too, or the org's when the
-# repository has none. That post pings the requested reviewers, else the role, and the dependencies
-# post stays quiet.
+# on a person's review posts to its repository's reviews channel too, which that repository posts
+# itself through its notify-post.yaml, since only it reads its REVIEWS_WEBHOOK secret. That post pings
+# the requested reviewers, else the role, and the dependencies post stays quiet.
 #
 # The same clock watches the caller repository's notify-audit, which cannot report its own silence.
 # When its last success turns 2 hours old, the security channel hears it once.
@@ -33,11 +33,6 @@ on:
         type: string
         default: "{}"
         description: JSON map from "<org>/<repo>" to the Discord role id that a stuck pull request pings.
-      bws_server_url:
-        required: false
-        type: string
-        default: ""
-        description: Bitwarden server holding the GitHub-to-Discord map. Empty means the US cloud.
       dry_run:
         required: false
         type: string
@@ -50,17 +45,6 @@ on:
       dependencies_webhook:
         required: false
         description: Discord webhook of the dependencies channel. Empty skips those posts.
-      reviews_webhook:
-        required: false
-        description: >-
-          Discord webhook of the org's reviews channel, for repositories missing from
-          reviews_webhooks. Empty skips their posts.
-      reviews_webhooks:
-        required: false
-        description: JSON map from "<org>/<repo>" to the webhook of that repository's reviews channel.
-      bws_access_token:
-        required: false
-        description: Bitwarden token that reads the GitHub-to-Discord map. Empty posts without user pings.
       security_webhook:
         required: false
         description: >-
@@ -135,7 +119,7 @@ jobs:
     environment:
       name: governance
       deployment: false
-    # The default token reads the caller's runs. The pull requests go through the App.
+    # The default token reads the caller's runs. The pull requests and dispatches use the App.
     permissions:
       actions: read
     outputs:
@@ -214,16 +198,25 @@ jobs:
                     (.dropped.nodes[0].reason // empty | "last dropped: \(ascii_downcase | gsub("_"; " "))")
                   ] | join(" · "))
                 }]')"
-          echo "events=$events" >>"$GITHUB_OUTPUT"
+          echo "events=$(jq -c 'map(del(.review_description, .user_ids))' <<<"$events")" >>"$GITHUB_OUTPUT"
+          echo "reviews=$(jq -c '[.[] | select(.review) | {repo, title: "\(.repo)#\(.number) · \(.title)", url,
+            description: .review_description, color: "in-progress", ping: true, user_ids}]' <<<"$events")" >>"$GITHUB_OUTPUT"
           echo "$(jq length <<<"$events") stuck pull request(s) between ${since:-the start} and $until." >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch the review posts
+        if: steps.scan.outputs.reviews != '[]'
+        uses: a-novel-kit/workflows/generic-actions/discord-dispatch@v1.82.1
+        with:
+          posts: ${{ steps.scan.outputs.reviews }}
+          channel: reviews
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
+          dry_run: ${{ inputs.dry_run }}
 
   post:
     needs: scan
     if: needs.scan.outputs.events != '[]'
     runs-on: ubuntu-latest
-    environment:
-      name: governance
-      deployment: false
     permissions: {}
     strategy:
       # One post at a time keeps the channel under Discord's rate limit.
@@ -240,29 +233,4 @@ jobs:
           url: ${{ matrix.event.url }}
           description: ${{ matrix.event.description }}
           mention_roles: ${{ !matrix.event.review && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
-          dry_run: ${{ inputs.dry_run }}
-
-      # The posting job resolves the reviewers, because masked Discord ids cannot cross a job boundary.
-      - name: Resolve the reviewers
-        id: reviewers
-        if: matrix.event.review && matrix.event.user_ids != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.82.1
-        with:
-          github_user_ids: ${{ matrix.event.user_ids }}
-          bws_access_token: ${{ secrets.bws_access_token }}
-          bws_server_url: ${{ inputs.bws_server_url }}
-
-      - name: Post to the reviews channel
-        if: matrix.event.review
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.82.1
-        with:
-          webhook: ${{ secrets.reviews_webhook }}
-          webhooks: ${{ secrets.reviews_webhooks }}
-          repository: ${{ matrix.event.repo }}
-          color: in-progress
-          title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
-          url: ${{ matrix.event.url }}
-          description: ${{ matrix.event.review_description }}
-          mention_users: ${{ steps.reviewers.outputs.discord_ids }}
-          mention_roles: ${{ matrix.event.user_ids == '' && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
           dry_run: ${{ inputs.dry_run }}
