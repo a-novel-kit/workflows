@@ -101,7 +101,8 @@ move a tag.
 | `collect-warnings`       | Merge the warnings an org's default-branch runs raised in a window into one entry each, minus ignore rules.      |
 | `derive-status`          | Derive the board Status of the issues a PR closes from the PR's current state.                                   |
 | `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
-| `discord-post`           | Post one state-colored Discord embed to its repository's channel; pings only the ids given.                      |
+| `discord-dispatch`       | Hand a central feed's posts to each repository's `notify-post.yaml`, which reads that repository's webhooks.     |
+| `discord-post`           | Post one state-colored Discord embed to a channel webhook; pings only the ids given.                             |
 | `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked and fail-soft.                          |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App, so it queues once green.                                    |
 | `epic-membership`        | Resolve an Epic's member set: its frozen activation snapshot, else the open PRs labeled `epic:<N>`.              |

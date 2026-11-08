@@ -2,10 +2,12 @@ name: notify-pr (reusable)
 
 # Tells people in Discord where each pull request stands, without the dependency bots' noise. Each
 # governed repository calls this engine on pull request, review and failed CI events, from its own
-# `notify.yaml` and `notify-reviews.yaml`. Drafts post nothing, and a post never pings the person who
-# caused it.
+# `notify.yaml` and `gates.yaml`. Drafts post nothing, and a post never pings the person who caused
+# it.
 #
-# A person's pull request posts to its repository's reviews channel, or the org's when there is none.
+# A person's pull request posts to its repository's reviews channel: the caller passes its
+# REVIEWS_WEBHOOK secret, and a repository secret wins over the org's of the same name, so a
+# repository without its own channel posts to the org's.
 # It posts when it waits on a review, gets one, merges or drops out of the merge queue. A review
 # request pings the reviewers. A review or a drop pings the owners: the assignees, else the
 # assignees of the issues it closes, else the repository's role. A bot's pull request posts to the
@@ -43,12 +45,7 @@ on:
         description: Private key (PEM) of the App that client_id names.
       reviews_webhook:
         required: false
-        description: >-
-          Discord webhook of the org's reviews channel, for repositories missing from
-          reviews_webhooks. Empty skips their posts.
-      reviews_webhooks:
-        required: false
-        description: JSON map from "<org>/<repo>" to the webhook of that repository's reviews channel.
+        description: Discord webhook of the repository's reviews channel. Empty skips those posts.
       dependencies_webhook:
         required: false
         description: Discord webhook of the dependencies channel, where bots' pull requests post. Empty skips those posts.
@@ -344,7 +341,6 @@ jobs:
           webhook: >-
             ${{ steps.state.outputs.channel == 'reviews' && secrets.reviews_webhook ||
             steps.state.outputs.channel == 'dependencies' && secrets.dependencies_webhook || '' }}
-          webhooks: ${{ steps.state.outputs.channel == 'reviews' && secrets.reviews_webhooks || '' }}
           color: ${{ steps.state.outputs.color }}
           title: ${{ steps.state.outputs.title }}
           url: ${{ steps.state.outputs.url }}

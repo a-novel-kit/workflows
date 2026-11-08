@@ -9,8 +9,6 @@ const post = step("generic-actions/discord-post/action.yaml", "post");
 const webhook = "https://discord.invalid/api/webhooks/1/token";
 const defaults = {
   WEBHOOK: webhook,
-  WEBHOOKS: "",
-  REPOSITORY: "a-novel/infra",
   TITLE: "master CI failed in a-novel/infra",
   URL: "https://github.com/a-novel/infra/actions/runs/1",
   DESCRIPTION: "",
@@ -122,23 +120,83 @@ test("discord-post skips without a webhook or on a dry run, and rejects caller m
   assert.deepEqual(posts(), []);
 });
 
-test("discord-post posts to its repository's entry in the webhook map, masked, and falls back to webhook", (t) => {
-  const mapped = "https://discord.invalid/api/webhooks/2/infra";
-  const routes = { "a-novel/infra": mapped, "a-novel/.github": "https://discord.invalid/api/webhooks/3/meta" };
-  const webhooks = JSON.stringify(routes);
-  const route = (env) => {
-    const { run, urls } = discord(t);
-    return { stdout: succeeds(run(env)), urls: urls() };
-  };
+const targets = step("generic-actions/discord-dispatch/action.yaml", "targets");
+const dispatch = step("generic-actions/discord-dispatch/action.yaml", "dispatch");
 
-  const picked = route({ WEBHOOKS: webhooks });
-  assert.deepEqual(picked.urls, [mapped]);
-  assert(picked.stdout.split("\n").includes(`::add-mask::${mapped}`));
-  assert.deepEqual(route({ WEBHOOKS: webhooks, REPOSITORY: "a-novel/service-genai" }).urls, [webhook]);
-  const invalid = route({ WEBHOOKS: "not json" });
-  assert.deepEqual(invalid.urls, [webhook]);
-  assert.match(invalid.stdout, /::warning::webhooks is not a JSON object/);
-  const quiet = route({ WEBHOOKS: webhooks, WEBHOOK: "", REPOSITORY: "a-novel/service-genai" });
-  assert.deepEqual(quiet.urls, []);
-  assert.match(quiet.stdout, /::notice::No Discord webhook configured/);
+/** Runs the shipped dispatch over `posts`, with a gh that logs each call and fails for `failing`. */
+function dispatchPosts(t, posts, { channel = "issues", dry = "false", failing = "" } = {}) {
+  const w = workspace(t);
+  w.write("summary", "");
+  w.stub(
+    "gh",
+    `const args = process.argv.slice(2);
+    require('node:fs').appendFileSync('calls', JSON.stringify(args) + '\\n');
+    process.exit(args[args.indexOf('--repo') + 1] === process.env.FAILING ? 1 : 0);`
+  );
+  const result = w.bash(dispatch, { POSTS: JSON.stringify(posts), CHANNEL: channel, DRY: dry, FAILING: failing });
+  const calls = existsSync(join(w.cwd, "calls")) ? w.read("calls").trimEnd().split("\n").map(JSON.parse) : [];
+  return { result, calls, summary: w.read("summary") };
+}
+
+const posted = (number, repo = "a-novel/infra") => ({
+  repo,
+  title: `${repo}#${number} · Wire the feed`,
+  url: `https://github.com/${repo}/issues/${number}`,
+  description: "Moved to Ready\nwith a \\ backslash",
+  color: "started",
+  ping: true,
+  user_ids: "1",
+});
+const bare = ({ repo, ...post }) => post;
+
+test("discord-dispatch hands each repository its posts in one dispatch, in order", (t) => {
+  const posts = [posted(1), posted(2, "a-novel/service-genai"), posted(3)];
+  const { result, calls } = dispatchPosts(t, posts);
+  succeeds(result);
+  const sent = Object.fromEntries(
+    calls.map((args) => {
+      assert.deepEqual(args.slice(0, 3), ["workflow", "run", "notify-post.yaml"]);
+      assert.equal(args[args.indexOf("channel=issues") - 1], "-f");
+      const inputs = args.filter((arg) => arg.startsWith("posts="));
+      return [args[args.indexOf("--repo") + 1], JSON.parse(inputs[0].slice("posts=".length))];
+    })
+  );
+  assert.deepEqual(sent, {
+    "a-novel/infra": [bare(posts[0]), bare(posts[2])],
+    "a-novel/service-genai": [bare(posts[1])],
+  });
+});
+
+test("discord-dispatch warns for a failed dispatch, writes a dry run to the summary, and rejects caller mistakes", (t) => {
+  const posts = [posted(1), posted(2, "a-novel/service-genai")];
+  const failed = dispatchPosts(t, posts, { channel: "reviews", failing: "a-novel/service-genai" });
+  assert.match(
+    succeeds(failed.result),
+    /::warning::Could not dispatch notify-post.yaml in a-novel\/service-genai; its 1 reviews post\(s\) are lost\./
+  );
+  assert.equal(failed.calls.length, 2);
+  assert.match(failed.summary, /Dispatched 1 reviews post\(s\) to a-novel\/infra\./);
+
+  const dry = dispatchPosts(t, posts, { dry: "true" });
+  succeeds(dry.result);
+  assert.deepEqual(dry.calls, []);
+  assert.match(dry.summary, /\[dry-run\] would dispatch 1 issues post\(s\) to a-novel\/infra/);
+
+  const unknown = dispatchPosts(t, posts, { channel: "ci" });
+  assert.equal(unknown.result.status, 1);
+  assert.deepEqual(unknown.calls, []);
+});
+
+test("discord-dispatch scopes its token to the target repositories and posts only on a false dry run", (t) => {
+  const cases = [
+    [[posted(1), posted(2, "a-novel/service-genai"), posted(3)], "false", "infra,service-genai", "false"],
+    [[posted(1)], " FALSE ", "infra", "false"],
+    [[posted(1)], "yes", "infra", "true"],
+    [[], "false", "", "false"],
+  ];
+  for (const [posts, dryRun, repositories, dry] of cases) {
+    const w = workspace(t);
+    succeeds(w.bash(targets, { POSTS: JSON.stringify(posts), DRY_RUN: dryRun }));
+    assert.deepEqual(w.read("output").trimEnd().split("\n"), [`dry=${dry}`, `repositories=${repositories}`]);
+  }
 });

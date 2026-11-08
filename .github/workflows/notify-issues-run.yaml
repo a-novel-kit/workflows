@@ -6,10 +6,12 @@ name: notify-issues (reusable)
 # assignees changed, since the caller's previous successful run. The next run therefore catches up a
 # late or failed one. Issues in Backlog post nothing.
 #
-# A post goes to its repository's issues channel, or the org's when the repository has none. Its color
-# names the stage: grey for Triage, blue for Ready, gold for In review, purple for Awaiting release, red
-# for Done and green for the rest. A move into Triage or Ready, and an assignee change, ping the
-# assignees through the GitHub-to-Discord map, or the repository's role when nobody is assigned.
+# Each repository posts its own issues, since only it reads its ISSUES_WEBHOOK secret: the engine
+# dispatches its notify-post.yaml once per run with that repository's posts, in event order. A
+# repository without its own channel posts to the org's. A post's color names the stage: grey for
+# Triage, blue for Ready, gold for In review, purple for Awaiting release, red for Done and green for
+# the rest. A move into Triage or Ready, and an assignee change, ping the assignees through the
+# GitHub-to-Discord map, or the repository's role when nobody is assigned.
 on:
   workflow_call:
     inputs:
@@ -23,36 +25,15 @@ on:
         description: >-
           Client id of the GitHub App that reads the org board and its issues. The default token
           cannot read an org board.
-      roles:
-        required: false
-        type: string
-        default: "{}"
-        description: JSON map from "<org>/<repo>" to the Discord role id that an unassigned issue pings.
-      bws_server_url:
-        required: false
-        type: string
-        default: ""
-        description: Bitwarden server holding the GitHub-to-Discord map. Empty means the US cloud.
       dry_run:
         required: false
         type: string
         default: "false"
-        description: When "true", write each message to the step summary instead of posting it.
+        description: When "true", write each dispatch to the step summary instead of sending it.
     secrets:
       private_key:
         required: true
         description: Private key (PEM) of the App that client_id names.
-      webhook:
-        required: false
-        description: >-
-          Discord webhook of the org's issues channel, for repositories missing from webhooks. Empty
-          skips their posts.
-      webhooks:
-        required: false
-        description: JSON map from "<org>/<repo>" to the webhook of that repository's issues channel.
-      bws_access_token:
-        required: false
-        description: Bitwarden token that reads the GitHub-to-Discord map. Empty posts without user pings.
 
 jobs:
   scan:
@@ -61,11 +42,9 @@ jobs:
     environment:
       name: governance
       deployment: false
-    # The default token reads the caller's previous run. The board goes through the App.
+    # The default token reads the caller's previous run. The board and dispatches use the App.
     permissions:
       actions: read
-    outputs:
-      events: ${{ steps.scan.outputs.events }}
     steps:
       - name: Mint board token
         id: token
@@ -119,7 +98,7 @@ jobs:
           # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings. discord-post
           # names its colors after CI states: cancelled is grey, started blue, upcoming gold, released
           # purple, failed red and succeeded green.
-          events="$({ scan NOT_ARCHIVED ""; scan ARCHIVED "updated:>=$day"; } |
+          posts="$({ scan NOT_ARCHIVED ""; scan ARCHIVED "updated:>=$day"; } |
             jq -sc --arg since "$since" '[.[].data.node.items.nodes[]
               | select(.content.state != null and .status != null and .status.name != "Backlog")
               | .status.name as $status
@@ -135,48 +114,21 @@ jobs:
                   at: $event.at, ping: $event.ping,
                   color: ({Triage: "cancelled", Ready: "started", "In review": "upcoming",
                     "Awaiting release": "released", Done: "failed"}[$status] // "succeeded"),
-                  repo: .content.repository.nameWithOwner, number: .content.number, title: .content.title,
+                  repo: .content.repository.nameWithOwner,
+                  title: "\(.content.repository.nameWithOwner)#\(.content.number) · \(.content.title)",
                   url: .content.url, user_ids: ($assignees | map(.databaseId | tostring) | join(" ")),
                   description: "\($event.what) · \(if $assignees == [] then "nobody assigned"
                     else "assigned to \($assignees | map(.login) | join(", "))" end)"
-                }] | unique_by(.url) | sort_by(.at)')"
-          echo "events=$events" >>"$GITHUB_OUTPUT"
-          echo "$(jq length <<<"$events") issue(s) to post since $since." >>"$GITHUB_STEP_SUMMARY"
+                }] | unique_by(.url) | sort_by(.at) | map(del(.at))')"
+          echo "posts=$posts" >>"$GITHUB_OUTPUT"
+          echo "$(jq length <<<"$posts") issue(s) to post since $since." >>"$GITHUB_STEP_SUMMARY"
 
-  post:
-    needs: scan
-    if: needs.scan.outputs.events != '[]'
-    runs-on: ubuntu-latest
-    environment:
-      name: governance
-      deployment: false
-    permissions: {}
-    strategy:
-      # One post at a time keeps the channel in event order and under Discord's rate limit.
-      max-parallel: 1
-      matrix:
-        event: ${{ fromJSON(needs.scan.outputs.events) }}
-    steps:
-      # The posting job resolves the assignees, because masked Discord ids cannot cross a job boundary.
-      - name: Resolve the assignees
-        id: users
-        if: matrix.event.ping && matrix.event.user_ids != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.82.1
+      - name: Dispatch the posts
+        if: steps.scan.outputs.posts != '[]'
+        uses: a-novel-kit/workflows/generic-actions/discord-dispatch@v1.82.1
         with:
-          github_user_ids: ${{ matrix.event.user_ids }}
-          bws_access_token: ${{ secrets.bws_access_token }}
-          bws_server_url: ${{ inputs.bws_server_url }}
-
-      - name: Post to Discord
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.82.1
-        with:
-          webhook: ${{ secrets.webhook }}
-          webhooks: ${{ secrets.webhooks }}
-          repository: ${{ matrix.event.repo }}
-          color: ${{ matrix.event.color }}
-          title: ${{ matrix.event.repo }}#${{ matrix.event.number }} · ${{ matrix.event.title }}
-          url: ${{ matrix.event.url }}
-          description: ${{ matrix.event.description }}
-          mention_users: ${{ steps.users.outputs.discord_ids }}
-          mention_roles: ${{ matrix.event.ping && matrix.event.user_ids == '' && fromJSON(inputs.roles || '{}')[matrix.event.repo] || '' }}
+          posts: ${{ steps.scan.outputs.posts }}
+          channel: issues
+          client_id: ${{ inputs.client_id }}
+          app_private_key: ${{ secrets.private_key }}
           dry_run: ${{ inputs.dry_run }}

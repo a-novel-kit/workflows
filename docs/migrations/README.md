@@ -4,6 +4,7 @@ One immutable guide per release that asks consumers to change something. Newest 
 
 | Version                 | Summary                                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| [v1.83.0](./v1.83.0.md) | Each repository keeps its own Discord webhooks; the `.github` feeds dispatch its `notify-post.yaml`; the maps are removed.      |
 | [v1.82.0](./v1.82.0.md) | `sentry-release` and `sentry-intake-run` are removed; `release-line-run` drops `sentry_auth_token`.                             |
 | [v1.81.0](./v1.81.0.md) | `lint-go`'s `working-directory`, `docker`'s `secret-envs` and `secret-files`, and `docker-job` are removed.                     |
 | [v1.79.0](./v1.79.0.md) | Repositories with a Sentry project record releases in Sentry and board the issues its App opens.                                |

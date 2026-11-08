@@ -40,7 +40,7 @@ function scan(t, live, archived = []) {
       CALLER: "a-novel/.github/.github/workflows/notify-issues.yaml@refs/heads/master",
     })
   );
-  return { events: JSON.parse(w.read("output").match(/^events=(.*)$/m)[1]), filter: w.read("filter") };
+  return { events: JSON.parse(w.read("output").match(/^posts=(.*)$/m)[1]), filter: w.read("filter") };
 }
 
 test("notify-issues colors each Status change and pings for Triage, Ready and assignee changes", (t) => {
@@ -134,9 +134,11 @@ test("notify-issues posts each issue once, in event order, with archived items f
     [item("Awaiting release", "2026-10-12T10:05:00Z", { number: 10, state: "CLOSED" }), review]
   );
   assert.deepEqual(
-    events.map((event) => `${event.repo}#${event.number}`),
-    ["a-novel/infra#9", "a-novel/infra#10", "a-novel/infra#8"]
+    events.map((event) => event.title),
+    ["a-novel/infra#9 · Wire the feed", "a-novel/infra#10 · Wire the feed", "a-novel/infra#8 · Wire the feed"]
   );
+  // Each post carries exactly what discord-dispatch hands over.
+  assert.deepEqual(Object.keys(events[0]).sort(), ["color", "description", "ping", "repo", "title", "url", "user_ids"]);
   assert.equal(filter, "filter=updated:>=2026-10-11");
 });
 

@@ -45,7 +45,8 @@ function scan(t, node, since = hoursBefore(2)) {
     STUCK_HOURS: "2",
   };
   succeeds(w.bash(step(".github/workflows/notify-stuck-run.yaml", "scan"), env));
-  return JSON.parse(w.read("output").match(/^events=(.*)$/m)[1]);
+  const output = (name) => JSON.parse(w.read("output").match(new RegExp(`^${name}=(.*)$`, "m"))[1]);
+  return { events: output("events"), reviews: output("reviews") };
 }
 
 test("notify-stuck posts each green bot pull request outside the queue once, after the threshold", (t) => {
@@ -72,7 +73,8 @@ test("notify-stuck posts each green bot pull request outside the queue once, aft
     ],
   ];
   for (const [name, node, expected, since] of cases) {
-    const events = scan(t, node, since);
+    const { events, reviews } = scan(t, node, since);
+    assert.deepEqual(reviews, [], name);
     assert.deepEqual(
       events.map(({ repo, description, review }) => ({ repo, description, review })),
       expected ? [{ repo: "a-novel/service-authentication", description: expected, review: false }] : [],
@@ -98,14 +100,25 @@ test("notify-stuck sends a stuck pull request waiting on a review to its request
     ],
     ["nobody", requested(), "**Stuck waiting on a review** · nobody requested", ""],
   ];
-  for (const [name, reviewRequests, review_description, user_ids] of cases) {
-    const [event] = scan(t, pull({ reviewDecision: "REVIEW_REQUIRED", reviewRequests }));
+  for (const [name, reviewRequests, description, user_ids] of cases) {
+    const { events, reviews } = scan(t, pull({ reviewDecision: "REVIEW_REQUIRED", reviewRequests }));
     assert.deepEqual(
-      { review: event.review, review_description: event.review_description, user_ids: event.user_ids },
-      { review: true, review_description, user_ids },
+      reviews,
+      [
+        {
+          repo: "a-novel/service-authentication",
+          title: "a-novel/service-authentication#1526 · chore(deps): refresh apko locks",
+          url: "https://github.com/a-novel/service-authentication/pull/1526",
+          description,
+          color: "in-progress",
+          ping: true,
+          user_ids,
+        },
+      ],
       name
     );
-    assert.match(event.description, / · review required · /, name);
+    assert.equal(events[0].review, true, name);
+    assert.match(events[0].description, / · review required · /, name);
   }
 });
 
