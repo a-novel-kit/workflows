@@ -95,22 +95,31 @@ export class Policy {
     return status.target_url?.match(this.runUrl);
   }
 
-  async proof(pr, baseline, before) {
-    const status = await this.latestStatus(pr.head.sha, COMPARISON, before);
+  /** The commit's latest successful comparison, when a browser run of main for one of these events posted it. */
+  async comparison(sha, events, before) {
+    const status = await this.latestStatus(sha, COMPARISON, before);
     if (!status || status.state !== "success") return null;
     const match = this.runTarget(status);
     if (!match) return null;
     const run = await this.github.request(`actions/runs/${match[1]}/attempts/${match[2]}`);
     if (
-      run.head_sha !== pr.head.sha ||
+      run.head_sha !== sha ||
       run.head_repository?.full_name !== this.github.repository ||
       run.path !== ".github/workflows/main.yaml" ||
-      !HEAD_EVENTS.includes(run.event) ||
+      !events.includes(run.event) ||
       !(await this.github.successfulBrowserRun({ properties: { run_id: match[1], attempt: match[2] } }))
     )
       return null;
-    if (status.description === "approved" && (await this.approved(pr, before))) return "approved";
-    return status.description === `matched:${baseline}` ? "matched" : null;
+    return status;
+  }
+
+  async proof(pr, baseline, before) {
+    const head = await this.comparison(pr.head.sha, HEAD_EVENTS, before);
+    if (head?.description === "approved" && (await this.approved(pr, before))) return "approved";
+    if (head?.description === `matched:${baseline}`) return "matched";
+    // A head run can name a baseline that an earlier merge replaced. The merge group tested the commit that landed.
+    const landed = pr.merged_at && (await this.comparison(pr.merge_commit_sha, ["merge_group"], before));
+    return landed?.description === `matched:${baseline}` ? "matched" : null;
   }
 
   /** Same-repository PRs queued for master, by the merge-queue commit GitHub built for each. */
