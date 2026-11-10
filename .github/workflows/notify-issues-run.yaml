@@ -125,7 +125,7 @@ jobs:
 
       - name: Dispatch the posts
         if: steps.scan.outputs.posts != '[]'
-        uses: a-novel-kit/workflows/generic-actions/discord-dispatch@v1.83.1
+        uses: a-novel-kit/workflows/generic-actions/discord-dispatch@v1.83.2
         with:
           posts: ${{ steps.scan.outputs.posts }}
           channel: issues
