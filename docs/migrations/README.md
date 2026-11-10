@@ -2,6 +2,7 @@
 
 One immutable guide per release that asks consumers to change something. Newest first.
 
+- [v1.84.0](./v1.84.0.md): `release-core` sizes each release from its commits and drops `release_type`, a major ships from a `v<N>` branch, and guides are written as `v1.84.0.md`.
 - [v1.83.0](./v1.83.0.md): Each repository keeps its own Discord webhooks; the `.github` feeds dispatch its `notify-post.yaml`; the maps are removed.
 - [v1.82.0](./v1.82.0.md): `sentry-release` and `sentry-intake-run` are removed; `release-line-run` drops `sentry_auth_token`.
 - [v1.81.0](./v1.81.0.md): `lint-go`'s `working-directory`, `docker`'s `secret-envs` and `secret-files`, and `docker-job` are removed.
