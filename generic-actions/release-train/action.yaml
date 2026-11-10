@@ -1,9 +1,8 @@
 name: release train
 description: >
   Release every repository an Epic landed in, from one dispatch. The action finds the repositories
-  of the Epic's merged `epic:<N>` pull requests, derives each one's semver bump from the commits
-  since its last tag, and dispatches that repository's own `release.yaml` to cut the release. That
-  workflow takes `release_type` and `dry_run` inputs, and owns the bump, the tag, the push and the
+  of the Epic's merged `epic:<N>` pull requests and dispatches each one's own `release.yaml` to cut
+  the release. That workflow takes a `dry_run` input, and owns the size, the tag, the push and the
   GitHub Release with its own token. The repositories release independently, in any order. Ordering
   releases across Epics is left to the caller.
 
@@ -124,7 +123,7 @@ runs:
         repositories: ${{ inputs.planning_repo }}
         permission-issues: write
 
-    - name: Reconstruct the Epic, derive bumps, drive each release.yaml
+    - name: Reconstruct the Epic, drive each release.yaml
       shell: bash
       env:
         # Every bare `gh` call reads with the read token. The dispatch token applies inline to the
@@ -261,58 +260,19 @@ runs:
           return 1
         }
 
-        # Print a jq filter's output for an API path, paginated on request, retrying transient
-        # errors. Returns 1 when every attempt fails.
-        commit_messages() { # $1=api path  $2=jq filter  $3=paginate(true|false)
-          local out attempt page=()
-          [ "$3" = "true" ] && page=(--paginate)
+        # Prints "none" when the default branch holds nothing since the last tag, "pending" when it
+        # does or no tag exists, and "__ERR__" when every read fails. The release sizes itself.
+        pending_release() { # $1=owner/repo $2=last_tag ("" = first release) $3=default_branch
+          local ahead attempt
+          [ -n "$2" ] || { printf 'pending'; return 0; }
           for attempt in 1 2 3; do
-            out=$(gh api "$1" "${page[@]}" --jq "$2" 2>/dev/null) && { printf '%s' "$out"; return 0; }
+            if ahead=$(gh api "repos/$1/compare/$2...$3" --jq .ahead_by 2>/dev/null); then
+              [ "$ahead" = 0 ] && printf 'none' || printf 'pending'
+              return 0
+            fi
             [ "$attempt" -lt 3 ] && sleep 2
           done
-          return 1
-        }
-
-        # Derive a repository's semver bump from its commits since the last tag, read as Conventional
-        # Commits 1.0.0. The release cuts the whole default branch since that tag, which can hold more
-        # than the Epic's own commits. The highest bump wins. A `!` or a BREAKING CHANGE footer gives
-        # major, any feat gives minor, and anything else gives patch. An empty range prints "none" and
-        # a failed read "__ERR__".
-        #
-        # feat and `!` are read from subject lines, since a body line starting `feat:` is no type. A
-        # type matches in any case, and BREAKING CHANGE only in upper case (§15). The BREAKING CHANGE
-        # footer is read from the full body. The compare API supplies both, so the derivation needs no
-        # checkout.
-        derive_bump() { # $1=owner/repo $2=last_tag ("" = first release) $3=default_branch
-          local repo="$1" last="$2" head="$3" messages subjects bodies path paginate jq_messages
-          if [ -z "$last" ]; then
-            # A first release reads one page of recent default-branch commits, and an empty page
-            # gives minor.
-            path="repos/$repo/commits"; paginate=false
-            jq_messages='.[].commit.message | @json'
-          else
-            # The compare API lists at most 250 commits unless the request names a page size, so the
-            # read pages by 100 to see every feat.
-            path="repos/$repo/compare/${last}...${head}?per_page=100"; paginate=true
-            jq_messages='.commits[].commit.message | @json'
-          fi
-          # A failed read prints "__ERR__", which the caller records as a failure. An empty range
-          # skips the repository as nochange and keeps the run green, so the two stay apart.
-          if ! messages=$(commit_messages "$path" "$jq_messages" "$paginate"); then
-            printf '__ERR__'; return 0
-          fi
-          # One JSON string per message keeps multi-line bodies apart, so one read yields both views.
-          bodies=$(printf '%s' "$messages" | jq -r '.')
-          subjects=$(printf '%s' "$messages" | jq -r 'split("\n")[0]')
-          if [ -z "${subjects//[[:space:]]/}" ]; then
-            [ -z "$last" ] && { printf 'minor'; return 0; }
-            printf 'none'; return 0
-          fi
-          if printf '%s\n' "$subjects" | grep -qE '^[[:alpha:]]+(\([^)]*\))?!:' \
-            || printf '%s\n' "$bodies" | grep -qE '^BREAKING[ -]CHANGE:'; then printf 'major'
-          elif printf '%s\n' "$subjects" | grep -qiE '^feat(\([^)]*\))?:'; then printf 'minor'
-          else printf 'patch'
-          fi
+          printf '__ERR__'
         }
 
         # Dispatch a repository's release.yaml and print the run id, which `return_run_details`
@@ -322,11 +282,11 @@ runs:
         #
         # Inputs travel as strings, which the dispatches API takes whatever an input's declared type.
         # release.yaml declares dry_run a boolean, so "true" and "false" reach it as booleans.
-        dispatch_release() { # $1=owner/repo $2=default_branch $3=release_type $4=run_dry(true|false)
-          local repo="$1" ref="$2" rt="$3" rdry="$4" ts resp run_id
+        dispatch_release() { # $1=owner/repo $2=default_branch $3=run_dry(true|false)
+          local repo="$1" ref="$2" rdry="$3" ts resp run_id
           ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          resp=$(jq -n --arg ref "$ref" --arg rt "$rt" --arg dry "$rdry" \
-            '{ref:$ref, inputs:{release_type:$rt, dry_run:$dry}, return_run_details:true}' \
+          resp=$(jq -n --arg ref "$ref" --arg dry "$rdry" \
+            '{ref:$ref, inputs:{dry_run:$dry}, return_run_details:true}' \
             | GH_TOKEN="$DISPATCH_TOKEN" gh api \
               "repos/$repo/actions/workflows/release.yaml/dispatches" --method POST --input - 2>/dev/null || echo "")
           run_id=$(printf '%s' "$resp" | jq -r '.workflow_run_id // empty' 2>/dev/null || echo "")
@@ -430,13 +390,12 @@ runs:
         fi
         echo "### ${repo_n} repo(s) in epic:#${EPIC}" | tee -a "$GITHUB_STEP_SUMMARY"
 
-        # ================= 2. Per repo: resume-skip → derive bump → rehearse → cut → receipt =======
+        # ================= 2. Per repo: resume-skip → rehearse → cut → receipt ======================
         receipts='[]'
         had_failure=false
 
         # Appends the current $repo's receipt. $1 is its status: shipped, rehearsed, skipped, nochange,
-        # botched, parked or failed:<why>. $2 is the cut tag, or the bump for a rehearsal, and empty
-        # records a null tag.
+        # botched, parked or failed:<why>. $2 is the cut tag, and empty records a null tag.
         receipt() { # $1=status $2=tag
           receipts=$(jq -cn --argjson a "$receipts" --arg r "$repo" --arg s "$1" --arg t "${2:-}" \
             '$a + [{repo:$r, tag:(if $t == "" then null else $t end), status:$s}]')
@@ -453,7 +412,7 @@ runs:
         # Releases the ledger's repository $1, whose Epic merge is $2. Each outcome records one
         # receipt and returns.
         release_repo() { # $1=owner/repo $2=merge sha
-          local repo="$1" merge_sha="$2" default_branch="" attempt last tc bump rid concl before after newtag=""
+          local repo="$1" merge_sha="$2" default_branch="" attempt last tc pending rid concl before after newtag=""
 
           # Resolve the default branch once, with retries, and fail closed on an unresolved ref.
           for attempt in 1 2 3; do
@@ -496,20 +455,20 @@ runs:
             fi
           fi
 
-          # -- Not shipped: derive the bump ---------------------------------------------------------
-          bump=$(derive_bump "$repo" "$last" "$default_branch")
-          if [ "$bump" = "__ERR__" ]; then
-            unfinished failed:bumpread "- ❌ **${repo}** — commit-range read failed after retries; skipping (fail-closed, never assume nothing-to-release)."
+          # -- Not shipped: is there anything to release? -------------------------------------------
+          pending=$(pending_release "$repo" "$last" "$default_branch")
+          if [ "$pending" = "__ERR__" ]; then
+            unfinished failed:rangeread "- ❌ **${repo}** — commit-range read failed after retries; skipping (fail-closed, never assume nothing-to-release)."
             return 0
           fi
-          if [ "$bump" = "none" ]; then
+          if [ "$pending" = "none" ]; then
             echo "- ⏭️  **${repo}** has nothing new since \`${last}\` — skipping." | tee -a "$GITHUB_STEP_SUMMARY"
             receipt nochange
             return 0
           fi
 
           # -- Rehearse: release.yaml with dry_run=true must succeed --------------------------------
-          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" true); then
+          if ! rid=$(dispatch_release "$repo" "$default_branch" true); then
             unfinished failed:dispatch "- ❌ **${repo}** — could not dispatch the rehearsal."
             return 0
           fi
@@ -519,19 +478,19 @@ runs:
             return 0
           fi
           if [ "$concl" != "success" ]; then
-            unfinished "failed:${concl}" "- ❌ **${repo}** — rehearsal (${bump}) did not pass (${concl}); not cutting."
+            unfinished "failed:${concl}" "- ❌ **${repo}** — rehearsal did not pass (${concl}); not cutting."
             return 0
           fi
 
           if [ "$dry" != "false" ]; then
-            echo "- 🧪 **${repo}** — rehearsed **${bump}** OK (dry-run; no tag cut)." | tee -a "$GITHUB_STEP_SUMMARY"
-            receipt rehearsed "$bump"
+            echo "- 🧪 **${repo}** — rehearsed OK (dry-run; no tag cut)." | tee -a "$GITHUB_STEP_SUMMARY"
+            receipt rehearsed
             return 0
           fi
 
           # -- Cut: snapshot tags, dispatch live, poll, recover the new tag from the tag-set diff -----
           before=$(tag_set "$repo")
-          if ! rid=$(dispatch_release "$repo" "$default_branch" "$bump" false); then
+          if ! rid=$(dispatch_release "$repo" "$default_branch" false); then
             unfinished failed:dispatch "- ❌ **${repo}** — could not dispatch the live release."
             return 0
           fi
@@ -552,18 +511,18 @@ runs:
           done
 
           if [ "$concl" != "success" ]; then
-            unfinished "failed:${concl}" "::error::${repo} — live release ${bump} did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A tag it left without a published Release blocks a re-dispatch until someone publishes that Release or deletes the tag."
+            unfinished "failed:${concl}" "::error::${repo} — live release did not complete cleanly (conclusion=${concl}, new tag='${newtag:-none}'). A tag it left without a published Release blocks a re-dispatch until someone publishes that Release or deletes the tag."
             return 0
           fi
           if [ -n "$newtag" ]; then
-            echo "- ✅ **${repo}** — released \`${newtag}\` (${bump})." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "- ✅ **${repo}** — released \`${newtag}\`." | tee -a "$GITHUB_STEP_SUMMARY"
             receipt shipped "$newtag"
             return 0
           fi
           # The run succeeded, so a tag was cut, but the lagging ref index does not show it yet.
           # Success is recorded with a null tag, and a resume confirms the tag from live tags. The
           # run conclusion alone decides, since a first release has no earlier tag to compare.
-          echo "- ✅ **${repo}** — release ${bump} ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- ✅ **${repo}** — release ran clean (new tag not yet visible; resume will confirm)." | tee -a "$GITHUB_STEP_SUMMARY"
           receipt shipped
         }
 
@@ -577,7 +536,7 @@ runs:
           (.[] | "| \(.repo) | \(
             if .status=="shipped" then (if .tag then "✅ `"+.tag+"`" else "✅ shipped" end)
             elif .status=="skipped" then "⏭️ already `"+.tag+"`"
-            elif .status=="rehearsed" then "🧪 rehearsed "+.tag
+            elif .status=="rehearsed" then "🧪 rehearsed"
             elif .status=="nochange" then "— nothing new"
             elif .status=="botched" then "⚠️ tag `"+.tag+"` without a Release — repair"
             elif .status=="parked" then "⏸️ parked (release-env approval)"

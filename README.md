@@ -291,7 +291,7 @@ workflow never reports and the PR never merges.
 | --------------------- | ---------------------------------------------------------------- |
 | `deploy-release`      | Ask infra to deploy a release once all its images are published. |
 | `npm`                 | Attest the workspace packages' tarballs and publish them.        |
-| `release-core`        | Cut a release in CI: bump the version, tag, push, release.       |
+| `release-core`        | Cut a release in CI, sized from its commits or a `v<N>` branch.  |
 | `release-core-hotfix` | Cut the next patch of a `release/vX.Y` line, not marked latest.  |
 
 ### Reusable workflows
