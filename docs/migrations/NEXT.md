@@ -1,0 +1,14 @@
+# Upgrading to NEXT
+
+Corrects the v1.84.0 guide, where the release replaced every mention of the pending guide's name
+with its version.
+
+## Do I need to act?
+
+**No.** A guide written after reading v1.84.0 still belongs in `docs/migrations/NEXT.md`.
+
+## Read `v1.84.0.md` as `NEXT.md` in the v1.84.0 guide
+
+Its summary, its section on writing guides and its template name the file `v1.84.0.md` and the title
+`# Upgrading to v1.84.0`. All of them mean `NEXT.md` and `# Upgrading to NEXT`, which stay the names
+to write. A release now replaces the word only in a guide's title, so a guide can name the file.

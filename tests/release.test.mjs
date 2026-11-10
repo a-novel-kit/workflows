@@ -365,7 +365,7 @@ test("a release names the pending guide after its version and indexes it, newest
     [null, `# Migration guides\n\n${entry}`],
   ];
   const guide =
-    "# Upgrading to NEXT\n\nMoves the thing to the\nother thing.\n\n## Do I need to act?\n\nNo, NEXTGEN stays.\n";
+    "# Upgrading to NEXT\n\nMoves the thing to the\nother thing.\n\n## Do I need to act?\n\nNo: `NEXT.md` stays named.\n";
   const plan = (w) => w.run(process.execPath, [releaseScript("plan")], { GITHUB_REPOSITORY: "a-novel-kit/example" });
 
   for (const [index, expected] of indexes) {

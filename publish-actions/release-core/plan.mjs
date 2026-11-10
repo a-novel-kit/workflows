@@ -20,8 +20,9 @@ function publishGuide(release) {
   const draft = `${guides}/NEXT.md`;
   if (!existsSync(draft)) return;
 
-  // The paragraph under the title is the guide's one-line summary, however it wraps.
-  const text = readFileSync(draft, "utf8").replace(/\bNEXT\b/g, release);
+  // Only the title takes the version, since the body may name the NEXT.md file itself. The paragraph
+  // under the title is the guide's one-line summary, however it wraps.
+  const text = readFileSync(draft, "utf8").replace(/^(#.*)\bNEXT\b/, `$1${release}`);
   const [, summary] = text.split("\n\n");
   if (!summary) throw new Error(`${draft} needs a one-line summary under its title`);
 
