@@ -119,6 +119,78 @@ test("proof requires a successful browser job and matching baseline", async () =
   }
 });
 
+/** An approved PR behind a merged one, whose head run matched a baseline that another merge then replaced. */
+function staleMerge() {
+  const f = fixture();
+  Object.assign(f.pr, { merged_at: "2026-09-01T12:00:00Z", merge_commit_sha: "approved-landed" });
+  const stale = {
+    number: 2,
+    state: "closed",
+    merged_at: "2026-09-01T11:00:00Z",
+    merge_commit_sha: "landed",
+    head: { sha: "stale-head", repo: { full_name: "example/studio" } },
+    base: { ref: "master" },
+  };
+  const url = (run) => `https://github.com/example/studio/actions/runs/${run}/attempts/1`;
+  const repository = { full_name: "example/studio" };
+  const path = ".github/workflows/main.yaml";
+  const headStatus = { ...f.comparison, description: "matched:old-base", target_url: url(43) };
+  const group = {
+    ...f.comparison,
+    created_at: "2026-09-01T10:30:00Z",
+    description: "matched:base",
+    target_url: url(44),
+  };
+  const groupRun = { head_sha: "landed", head_repository: repository, path, event: "merge_group" };
+  const runs = {
+    43: { head_sha: "stale-head", head_repository: repository, path, event: "pull_request" },
+    44: groupRun,
+  };
+  const statuses = { "stale-head": [headStatus], landed: [group], head: f.statuses };
+
+  f.github.pages = async (route) => (route.startsWith("issues/") ? f.events : statuses[route.split("/")[1]]);
+  f.github.request = async (route) => runs[route.match(/runs\/(\d+)/)?.[1]] ?? respond(route);
+  return { ...f, stale, group, groupRun };
+}
+
+test("a merged PR's merge group proves the match its older head run cannot", async () => {
+  const f = staleMerge();
+  assert.equal(await f.policy.proof(f.stale, "base", f.stale.merged_at), "matched");
+
+  const refused = [
+    (s) => (s.group.description = "matched:old-base"),
+    (s) => (s.group.description = "approved"),
+    (s) => (s.group.state = "failure"),
+    (s) => (s.group.creator = { login: "someone" }),
+    (s) => (s.group.created_at = "2026-09-01T11:30:00Z"),
+    (s) => (s.group.target_url = "https://github.com/other/repo/actions/runs/44/attempts/1"),
+    (s) => (s.groupRun.event = "push"),
+    (s) => (s.groupRun.head_sha = "other"),
+    (s) => (s.groupRun.path = ".github/workflows/other.yaml"),
+    (s) => (s.groupRun.head_repository = { full_name: "fork/studio" }),
+    (s) => (s.github.successfulBrowserRun = async () => false),
+    (s) => delete s.stale.merged_at,
+  ];
+  for (const mutate of refused) {
+    const s = staleMerge();
+    mutate(s);
+    assert.equal(await s.policy.proof(s.stale, "base", "2026-09-01T11:00:00Z"), null);
+  }
+});
+
+test("master keeps an approved change whose reference an earlier merge never published", async () => {
+  const allowed = (s) => s.policy.allows({}, "push", "approved-landed", "refs/heads/master", "base");
+
+  const f = staleMerge();
+  f.policy.associated = async () => [f.stale, f.pr];
+  assert.equal(await allowed(f), true);
+
+  const unproven = staleMerge();
+  unproven.policy.associated = async () => [unproven.stale, unproven.pr];
+  unproven.group.description = "matched:old-base";
+  assert.equal(await allowed(unproven), false);
+});
+
 test("a branch run is allowed only for an approved, open, same-repository PR still at the tested head", async () => {
   const cases = [
     ["pull_request", () => {}, true],
