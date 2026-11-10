@@ -41,7 +41,8 @@ A third-party action is pinned to its release commit, as `owner/repo@<sha> # vX.
 of these actions run beside an App's private key, and a moved tag must not change what they run.
 `pnpm lint` rejects any other form in an action manifest, and Renovate keeps the pins current.
 
-A change that callers must act on ships with a guide in `docs/migrations/`, added to its index.
+A change that callers must act on adds to `docs/migrations/NEXT.md`, which the release names after
+its version and indexes.
 
 ## Scripts and tests
 

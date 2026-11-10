@@ -1,20 +1,13 @@
 name: release
 
-# A person cuts a release from the Actions tab (release ▸ pick a type ▸ Run), or the release train
-# dispatches it with the same inputs. `plan` rehearses with no credential. `cut` runs in the
-# protected `release` environment, the only holder of the release App's key, and pushes the version
-# commit, the tags and the GitHub Release as that App.
+# A person cuts a release from the Actions tab, or the release train dispatches it. Run on the
+# default branch, the commits since the last release size it. Run on a v<N> branch, it is major N.
+# `plan` rehearses with no credential. `cut` runs in the protected `release` environment, the only
+# holder of the release App's key, and pushes the version commit, the tags and the GitHub Release
+# as that App.
 on:
   workflow_dispatch:
     inputs:
-      release_type:
-        description: Version bump to cut
-        required: true
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
       dry_run:
         description: Bump and report only, with no commit, tag, push or release
         required: false
@@ -22,15 +15,12 @@ on:
         default: false
   workflow_call:
     inputs:
-      release_type:
-        required: true
-        type: string
       dry_run:
         required: false
         type: boolean
         default: false
 
-run-name: "🚀 release ${{ inputs.release_type }}${{ inputs.dry_run && ' (dry-run)' || '' }}"
+run-name: "🚀 release ${{ github.ref_name }}${{ inputs.dry_run && ' (dry-run)' || '' }}"
 
 # Two releases started at once compute the same next tag. The first push wins and the second fails
 # as non-fast-forward, so a double trigger cannot release twice.
@@ -45,7 +35,6 @@ jobs:
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.42.4"
-          release_type: ${{ inputs.release_type }}
           dry_run: "true"
 
   cut:
@@ -61,15 +50,13 @@ jobs:
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.42.4"
-          release_type: ${{ inputs.release_type }}
           client_id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
           app_private_key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 
-      # The run name carries only the bump type, so the summary names the cut version.
+      # The run name carries only the branch, so the summary names the cut version.
       - env:
           TAG: ${{ steps.core.outputs.tag }}
-          RELEASE_TYPE: ${{ inputs.release_type }}
-        run: echo "## 🚀 Released \`${TAG}\` (${RELEASE_TYPE})" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "## 🚀 Released \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
 
   # Everything on the default branch just shipped: clear this repo's awaiting-release items off the
   # board. The Agent key is a secret of the governance environment, never of the release one.

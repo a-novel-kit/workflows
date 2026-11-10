@@ -1,5 +1,6 @@
-// Stamp in-repository Go requirements and emit the root and nested module tags.
-import { readFileSync, writeFileSync } from "node:fs";
+// Stamp in-repository Go requirements, name a pending migration guide, and emit the root and nested
+// module tags.
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tracked, version } from "./common.mjs";
 
@@ -8,6 +9,33 @@ function rewrite(file, pattern, replacement) {
   const before = readFileSync(file, "utf8");
   const after = before.replace(pattern, replacement);
   if (after !== before) writeFileSync(file, after);
+}
+
+/**
+ * Only the release knows its version, so branches write the guide as NEXT.md and the release names it.
+ * The index is a list rather than a table, whose alignment an added row would break for prettier.
+ */
+function publishGuide(release) {
+  const guides = "docs/migrations";
+  const draft = `${guides}/NEXT.md`;
+  if (!existsSync(draft)) return;
+
+  // The paragraph under the title is the guide's one-line summary, however it wraps.
+  const text = readFileSync(draft, "utf8").replace(/\bNEXT\b/g, release);
+  const [, summary] = text.split("\n\n");
+  if (!summary) throw new Error(`${draft} needs a one-line summary under its title`);
+
+  writeFileSync(`${guides}/${release}.md`, text);
+  rmSync(draft);
+
+  const entry = `- [${release}](./${release}.md): ${summary.replaceAll("\n", " ")}\n`;
+  const indexFile = `${guides}/README.md`;
+  const index = existsSync(indexFile) ? readFileSync(indexFile, "utf8") : "# Migration guides\n";
+  const newest = index.search(/^- \[/m);
+  writeFileSync(
+    indexFile,
+    newest < 0 ? `${index.trimEnd()}\n\n${entry}` : index.slice(0, newest) + entry + index.slice(newest)
+  );
 }
 
 const next = version();
@@ -35,4 +63,5 @@ if (process.argv.includes("--self-pins")) {
   );
   for (const file of files.filter((file) => /\.ya?ml$/.test(file))) rewrite(file, selfPin, `$1@v${next}`);
 }
+publishGuide(`v${next}`);
 process.stdout.write([...tags].join("\n"));

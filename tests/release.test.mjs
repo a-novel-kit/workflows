@@ -12,12 +12,38 @@ function repository(t) {
 }
 const releaseScript = (name) => join(root, "publish-actions/release-core", `${name}.mjs`);
 
+/** A repository whose master holds the v1.2.3 release, or the given baseline. */
+function released(t, baseline = "1.2.3") {
+  const w = repository(t);
+  const git = (...args) => succeeds(w.run("git", args));
+  w.write("package.json", `{"version":"${baseline}"}`);
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.test");
+  git("checkout", "-qb", "master");
+  git("add", "package.json");
+  git("commit", "-qm", `chore(release): ${baseline}`);
+  git("tag", `v${baseline}`);
+  git("update-ref", "refs/remotes/origin/master", "HEAD");
+  return { w, git };
+}
+
 test("release guard treats branch names as data and refuses a cut without the release key", (t) => {
   const w = workspace(t);
   const guard = step("publish-actions/release-core/action.yaml", "guard");
-  for (const ref of ["master", "feature", "$(touch injected)"]) {
+  const refs = [
+    ["master", 0],
+    ["v2", 0],
+    ["v12", 0],
+    ["feature", 1],
+    ["v0", 1],
+    ["v02", 1],
+    ["v2.1", 1],
+    ["release/v1.2", 1],
+    ["$(touch injected)", 1],
+  ];
+  for (const [ref, status] of refs) {
     const env = { REF_NAME: ref, DEFAULT_BRANCH: "master", DRY_RUN: "false", HAS_KEY: "true" };
-    assert.equal(w.bash(guard, env).status, ref === "master" ? 0 : 1);
+    assert.equal(w.bash(guard, env).status, status, ref);
     assert.equal(existsSync(join(w.cwd, "injected")), false);
   }
   // A rehearsal needs no key; a cut whose job sits outside the release environment reads none.
@@ -41,7 +67,8 @@ test("release bump updates all package formats and quoted filenames, leaving ver
   const bumps = [
     ["patch", "1.2.4"],
     ["minor", "1.3.0"],
-    ["major", "2.0.0"],
+    // A major reads its number from its branch, never from the branch's own package.json.
+    ["major", "7.0.0"],
   ];
   for (const [type, next] of bumps) {
     const w = repository(t);
@@ -49,7 +76,10 @@ test("release bump updates all package formats and quoted filenames, leaving ver
     w.write(nested, '{"version" : "0.5.0", "config":{"version":"leave-me"}}');
     w.write("tools/package.json", '{"private":true}\n');
     succeeds(w.run("git", ["add", "package.json", "packages", "tools"]));
-    assert.equal(succeeds(w.run(process.execPath, [releaseScript("bump")], { RELEASE_TYPE: type })), next);
+    assert.equal(
+      succeeds(w.run(process.execPath, [releaseScript("bump")], { RELEASE_TYPE: type, BRANCH: "v7" })),
+      next
+    );
     assert.equal(JSON.parse(w.read("package.json")).version, next);
     assert.deepEqual(JSON.parse(w.read(nested)), { version: next, config: { version: "leave-me" } });
     assert.equal(w.read("tools/package.json"), '{"private":true}\n');
@@ -161,9 +191,9 @@ test("release pushes are atomic, hotfixes push their release line, and dry runs 
         GITHUB_REPOSITORY: "a-novel-kit/example",
         GH_TOKEN: "release-token",
         APP_SLUG: "fixture",
-        RELEASE_TYPE: "patch",
         STAMP_NEEDED: "false",
         BRANCH: pushed,
+        DEFAULT_BRANCH: "master",
         DRY_RUN: String(outcome === "dry-run"),
       };
       const result = w.bash(cut, env);
@@ -187,54 +217,203 @@ test("release pushes are atomic, hotfixes push their release line, and dry runs 
   }
 });
 
-test("release train distinguishes read failure, empty history and release types", (t) => {
-  const w = workspace(t);
-  const script = functions(
-    step("generic-actions/release-train/action.yaml", "Reconstruct the Epic, derive bumps, drive each release.yaml"),
-    ["commit_messages", "derive_bump"]
-  );
-  w.stub("sleep", "");
-  w.stub(
-    "gh",
-    `
-    require('node:fs').appendFileSync('calls', JSON.stringify(process.argv.slice(2)) + '\\n');
-    if (process.env.API_FAIL === 'true') process.exit(1);
-    for (const message of JSON.parse(process.env.MESSAGES)) console.log(JSON.stringify(message));
-  `
-  );
+test("the default branch's release takes the largest size among the commits since its last release", (t) => {
   // Conventional Commits 1.0.0 §15: a type matches in any case, and BREAKING CHANGE only in upper case.
   const cases = [
-    [[], "v1.0.0", false, "none"],
-    [[], "", false, "minor"],
-    [[], "v1.0.0", true, "__ERR__"],
-    [[], "", true, "__ERR__"],
-    [["fix: predicate"], "v1.0.0", false, "patch"],
-    [["feat: endpoint"], "v1.0.0", false, "minor"],
-    [["Feat(API): endpoint"], "v1.0.0", false, "minor"],
-    [["feat(proto)!: remove field"], "v1.0.0", false, "major"],
-    [["fix: change\n\nBREAKING CHANGE: contract"], "v1.0.0", false, "major"],
-    [["fix: change\n\nbreaking change: prose"], "v1.0.0", false, "patch"],
-    [["docs: examples\n\nfeat: quoted example"], "v1.0.0", false, "patch"],
+    [[], "patch"],
+    [["fix: predicate", "chore(deps): bump"], "patch"],
+    [["fix: predicate", "feat(api): endpoint"], "minor"],
+    [["Feat(API): endpoint"], "minor"],
+    // A breaking change sized by its commit stays a minor: a major only comes from a v<N> branch.
+    [["feat(proto)!: remove field"], "minor"],
+    [["chore!: drop action"], "minor"],
+    [["fix: change\n\nBREAKING CHANGE: contract"], "minor"],
+    [["fix: change\n\nbreaking change: prose"], "patch"],
+    [["docs: examples\n\nfeat: quoted example\nfix!: quoted example"], "patch"],
   ];
-  for (const [messages, tag, failed, expected] of cases) {
-    const env = { MESSAGES: JSON.stringify(messages), API_FAIL: String(failed) };
-    assert.equal(succeeds(w.bash(`${script}\nderive_bump "$@"`, env, ["owner/repo", tag, "master"])), expected);
+  const env = { BRANCH: "master", DEFAULT_BRANCH: "master" };
+  for (const [messages, expected] of cases) {
+    const { w, git } = released(t);
+    for (const message of messages) git("commit", "-q", "--allow-empty", "-m", message);
+    assert.equal(succeeds(w.run(process.execPath, [releaseScript("size")], env)), expected, messages.join());
   }
-  // Without a page size the compare API stops at 250 commits, so the read pages by 100.
-  const compare = ["api", "repos/owner/repo/compare/v1.0.0...master?per_page=100", "--paginate"];
-  assert(
-    w
-      .read("calls")
-      .trim()
-      .split("\n")
-      .some((line) => JSON.stringify(JSON.parse(line).slice(0, 3)) === JSON.stringify(compare))
+
+  // A commit before the last release no longer counts, and a repository without a release is a minor.
+  const { w, git } = released(t);
+  git("tag", "-d", "v1.2.3");
+  git("commit", "-q", "--allow-empty", "-m", "fix: predicate");
+  assert.equal(succeeds(w.run(process.execPath, [releaseScript("size")], env)), "minor");
+  git("tag", "v1.2.3");
+  assert.equal(succeeds(w.run(process.execPath, [releaseScript("size")], env)), "patch");
+});
+
+test("a v<N> branch releases only the major right after the default branch's", (t) => {
+  const majors = [
+    ["1.2.3", "v1", 1],
+    ["1.2.3", "v2", 0],
+    ["1.2.3", "v3", 1],
+    ["0.4.0", "v1", 0],
+  ];
+  for (const [baseline, branch, status] of majors) {
+    const { w } = released(t, baseline);
+    const result = w.run(process.execPath, [releaseScript("size")], { BRANCH: branch, DEFAULT_BRANCH: "master" });
+    assert.equal(result.status, status, result.stderr);
+    if (status === 0) assert.equal(result.stdout, "major");
+    else assert.match(result.stderr, /^::error::/);
+  }
+});
+
+test("a major from v2 needs its Go module paths to end with /v2", (t) => {
+  const modules = [
+    ["github.com/a-novel-kit/example", "v2", 1],
+    ["github.com/a-novel-kit/example/v2", "v2", 0],
+  ];
+  for (const [module, branch, status] of modules) {
+    const { w, git } = released(t);
+    w.write("go.mod", `module ${module}\n`);
+    git("add", "go.mod");
+    assert.equal(
+      w.run(process.execPath, [releaseScript("size")], { BRANCH: branch, DEFAULT_BRANCH: "master" }).status,
+      status
+    );
+  }
+
+  // Go only requires the suffix from major 2 on.
+  const { w, git } = released(t, "0.4.0");
+  w.write("go.mod", "module github.com/a-novel-kit/example\n");
+  git("add", "go.mod");
+  assert.equal(
+    succeeds(w.run(process.execPath, [releaseScript("size")], { BRANCH: "v1", DEFAULT_BRANCH: "master" })),
+    "major"
   );
+});
+
+test("a major swaps the branches and pushes its tags atomically, with or without shared history", (t) => {
+  const scenarios = [
+    { history: "shared", outcome: "success" },
+    { history: "unrelated", outcome: "success" },
+    { history: "unrelated", outcome: "dry-run" },
+    { history: "shared", outcome: "line-taken" },
+    { history: "shared", outcome: "master-moved" },
+  ];
+  for (const { history, outcome } of scenarios) {
+    const { w, git } = released(t);
+    const master = git("rev-parse", "HEAD");
+    git("init", "--bare", "-q", "remote.git");
+    git("remote", "add", "origin", "remote.git");
+    // Keep the mock remote and diagnostics out of the release commit's git add -A.
+    w.write(".git/info/exclude", "remote.git/\nbin/\noutput\nsummary\nreleased\n");
+
+    git("checkout", ...(history === "unrelated" ? ["-q", "--orphan", "v2"] : ["-qb", "v2"]));
+    w.write("package.json", '{"version":"0.0.1"}');
+    w.write("rewrite", "");
+    git("add", "package.json", "rewrite");
+    git("commit", "-qm", "feat!: rewrite");
+    const branchHead = git("rev-parse", "HEAD");
+    git("push", "-q", "origin", "master", "v2", "v1.2.3");
+
+    const remote = (...args) => git("--git-dir=remote.git", ...args);
+    if (outcome === "line-taken") git("push", "-q", "origin", "v2:refs/heads/v1");
+    if (outcome === "master-moved") {
+      const racing = git("commit-tree", `${master}^{tree}`, "-p", master, "-m", "fix: racing merge");
+      git("push", "-q", "origin", `${racing}:refs/heads/master`);
+      git("update-ref", "refs/remotes/origin/master", master);
+    }
+    const before = remote("for-each-ref", "--format=%(refname) %(objectname)");
+
+    w.stub("gh", "import * as fs from 'node:fs'; fs.writeFileSync('released', JSON.stringify(process.argv.slice(2)))");
+    const result = w.bash(step("publish-actions/release-core/action.yaml", "cut"), {
+      GITHUB_ACTION_PATH: join(root, "publish-actions/release-core"),
+      GITHUB_REPOSITORY: "a-novel-kit/example",
+      GH_TOKEN: "release-token",
+      APP_SLUG: "fixture",
+      STAMP_NEEDED: "false",
+      BRANCH: "v2",
+      DEFAULT_BRANCH: "master",
+      DRY_RUN: String(outcome === "dry-run"),
+    });
+
+    if (outcome !== "success") {
+      assert.equal(result.status === 0, outcome === "dry-run", result.stdout + result.stderr);
+      assert.equal(remote("for-each-ref", "--format=%(refname) %(objectname)"), before);
+      assert.equal(existsSync(join(w.cwd, "released")), false);
+      assert.equal(remote("rev-parse", "refs/heads/v2"), branchHead);
+      continue;
+    }
+
+    succeeds(result);
+    const head = git("rev-parse", "HEAD");
+    assert.equal(git("rev-parse", "HEAD^"), branchHead);
+    assert.equal(JSON.parse(w.read("package.json")).version, "2.0.0");
+    assert.equal(remote("rev-parse", "refs/heads/master"), head);
+    assert.equal(remote("rev-parse", "refs/heads/v1"), master);
+    assert.equal(remote("for-each-ref", "refs/heads/v2"), "");
+    assert.equal(remote("rev-parse", "refs/tags/v2.0.0"), head);
+    assert.equal(remote("rev-parse", "refs/tags/v1.2.3"), master);
+    assert.equal(existsSync(join(w.cwd, "released")), true);
+  }
+});
+
+test("a release names the pending guide after its version and indexes it, newest first", (t) => {
+  const entry = "- [v1.2.3](./v1.2.3.md): Moves the thing to the other thing.\n";
+  const indexes = [
+    [
+      "# Migration guides\n\nIntro.\n\n- [v1.0.0](./v1.0.0.md): Older.\n",
+      `# Migration guides\n\nIntro.\n\n${entry}- [v1.0.0](./v1.0.0.md): Older.\n`,
+    ],
+    ["# Migration guides\n\nIntro.\n", `# Migration guides\n\nIntro.\n\n${entry}`],
+    [null, `# Migration guides\n\n${entry}`],
+  ];
+  const guide =
+    "# Upgrading to NEXT\n\nMoves the thing to the\nother thing.\n\n## Do I need to act?\n\nNo, NEXTGEN stays.\n";
+  const plan = (w) => w.run(process.execPath, [releaseScript("plan")], { GITHUB_REPOSITORY: "a-novel-kit/example" });
+
+  for (const [index, expected] of indexes) {
+    const w = repository(t);
+    w.write("docs/migrations/NEXT.md", guide);
+    if (index) w.write("docs/migrations/README.md", index);
+    succeeds(w.run("git", ["add", "package.json", "docs"]));
+    succeeds(plan(w));
+    assert.equal(existsSync(join(w.cwd, "docs/migrations/NEXT.md")), false);
+    assert.equal(w.read("docs/migrations/v1.2.3.md"), guide.replace("NEXT\n", "v1.2.3\n"));
+    assert.equal(w.read("docs/migrations/README.md"), expected);
+  }
+
+  // No pending guide leaves the index alone, and a guide with no summary stops the release.
+  const clean = repository(t);
+  succeeds(clean.run("git", ["add", "package.json"]));
+  succeeds(plan(clean));
+  assert.equal(existsSync(join(clean.cwd, "docs")), false);
+  const untitled = repository(t);
+  untitled.write("docs/migrations/NEXT.md", "# Upgrading to NEXT\n");
+  succeeds(untitled.run("git", ["add", "package.json", "docs"]));
+  assert.notEqual(plan(untitled).status, 0);
+});
+
+test("release train skips an empty range, and fails closed on a read failure", (t) => {
+  const w = workspace(t);
+  const script = functions(
+    step("generic-actions/release-train/action.yaml", "Reconstruct the Epic, drive each release.yaml"),
+    ["pending_release"]
+  );
+  w.stub("sleep", "");
+  w.stub("gh", "if (process.env.API_FAIL === 'true') process.exit(1); console.log(process.env.AHEAD);");
+  const cases = [
+    ["0", "v1.0.0", false, "none"],
+    ["3", "v1.0.0", false, "pending"],
+    ["0", "", false, "pending"],
+    ["", "v1.0.0", true, "__ERR__"],
+  ];
+  for (const [ahead, tag, failed, expected] of cases) {
+    const env = { AHEAD: ahead, API_FAIL: String(failed) };
+    assert.equal(succeeds(w.bash(`${script}\npending_release "$@"`, env, ["owner/repo", tag, "master"])), expected);
+  }
 });
 
 test("release train waits for a cut's approval and never for a rehearsal", (t) => {
   const w = workspace(t);
   const script = functions(
-    step("generic-actions/release-train/action.yaml", "Reconstruct the Epic, derive bumps, drive each release.yaml"),
+    step("generic-actions/release-train/action.yaml", "Reconstruct the Epic, drive each release.yaml"),
     ["poll_run"]
   );
   w.stub("sleep", "");
@@ -268,7 +447,7 @@ test("release train waits for a cut's approval and never for a rehearsal", (t) =
 test("release receipt replacement preserves prose and literal backslashes", (t) => {
   const w = workspace(t);
   const script = functions(
-    step("generic-actions/release-train/action.yaml", "Reconstruct the Epic, derive bumps, drive each release.yaml"),
+    step("generic-actions/release-train/action.yaml", "Reconstruct the Epic, drive each release.yaml"),
     ["splice_body"]
   );
   const start = "<!-- release-train:receipts:start -->",

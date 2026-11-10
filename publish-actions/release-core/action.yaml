@@ -1,9 +1,13 @@
 name: release core
 description: >
-  Cut a release in CI. It bumps the version of every workspace package.json, stamps in-repository
-  version references, commits, pushes the root vX.Y.Z tag with any sub-module tags, and creates the
-  GitHub Release. The caller's cut job runs in the protected `release` environment, which holds the
-  release App's key. A dry run rehearses without a credential, outside that environment.
+  Cut a release in CI. On the default branch, the commits since the last release size it as a patch
+  or a minor. On a v<N> branch, it is major N, which must directly follow the default branch's
+  major: the push makes that branch the default branch and keeps the old one as v<N-1>. It bumps the
+  version of every workspace package.json, stamps in-repository version references, names a pending
+  docs/migrations/NEXT.md after the version, commits, pushes the root vX.Y.Z tag with any sub-module
+  tags, and creates the GitHub Release. The caller's cut job runs in the protected `release`
+  environment, which holds the release App's key. A dry run rehearses without a credential, outside
+  that environment.
 
 inputs:
   cli_version:
@@ -12,9 +16,6 @@ inputs:
       a-novel CLI release to install, with or without the leading v. The caller pins it, so Renovate
       bumps it per repository and every release runs a reviewed CLI. Annotate it:
       `# renovate: datasource=go depName=github.com/a-novel-kit/stack/cli`.
-  release_type:
-    required: true
-    description: Semver bump to apply, one of patch, minor or major.
   client_id:
     required: false
     default: ""
@@ -49,10 +50,10 @@ outputs:
 runs:
   using: composite
   steps:
-    # A tag cut from another branch names the wrong commit, so any other ref fails before a token
-    # is minted. A cut whose job is outside the `release` environment reads an empty key. Every later
-    # step reads the dry_run this guard resolves.
-    - name: Guard the default branch and credentials
+    # A tag cut from another branch names the wrong commit, so only the default branch and a v<N>
+    # major branch pass, before a token is minted. A cut whose job is outside the `release`
+    # environment reads an empty key. Every later step reads the dry_run this guard resolves.
+    - name: Guard the branch and credentials
       id: guard
       shell: bash
       env:
@@ -62,8 +63,8 @@ runs:
         HAS_KEY: ${{ inputs.app_private_key != '' && inputs.client_id != '' }}
       run: |
         set -euo pipefail
-        if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
-          echo "::error::releases run from the default branch ($DEFAULT_BRANCH) only, got '$REF_NAME'"
+        if [ "$REF_NAME" != "$DEFAULT_BRANCH" ] && ! [[ "$REF_NAME" =~ ^v[1-9][0-9]*$ ]]; then
+          echo "::error::releases run from the default branch ($DEFAULT_BRANCH) or a v<N> major branch only, got '$REF_NAME'"
           exit 1
         fi
         dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
@@ -142,20 +143,18 @@ runs:
       env:
         GH_TOKEN: ${{ steps.token.outputs.token }}
         APP_SLUG: ${{ steps.token.outputs.app-slug }}
-        RELEASE_TYPE: ${{ inputs.release_type }}
         DRY_RUN: ${{ steps.guard.outputs.dry_run }}
         BRANCH: ${{ github.ref_name }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         STAMP_NEEDED: ${{ steps.stamp.outputs.needed }}
       run: |
         set -euo pipefail
 
-        case "$RELEASE_TYPE" in
-          patch | minor | major) ;;
-          *) echo "::error::release_type must be patch, minor, or major (got '$RELEASE_TYPE')"; exit 1 ;;
-        esac
-
         git config user.name "${APP_SLUG}[bot]"
         git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+
+        RELEASE_TYPE=$(node "$GITHUB_ACTION_PATH/size.mjs")
+        export RELEASE_TYPE
 
         # Plain Node bumps every workspace package.json, which skips pnpm's cold-store dependency checks.
         version=$(node "$GITHUB_ACTION_PATH/bump.mjs")
@@ -169,6 +168,7 @@ runs:
         # plan.mjs stamps in-repository version references, self-pins included, and prints the tags.
         tags=$(node "$GITHUB_ACTION_PATH/plan.mjs" --self-pins)
         root_tag="v${version}"
+        retired="v$((${version%%.*} - 1))"
 
         {
           echo "version=$version"
@@ -180,6 +180,9 @@ runs:
         {
           echo "Release **$version** (bump: $RELEASE_TYPE), tags:"
           printf '%s\n' "$tags" | sed 's/^/- `/; s/$/`/'
+          if [ "$RELEASE_TYPE" = major ]; then
+            echo "\`$BRANCH\` replaces \`$DEFAULT_BRANCH\`, which continues as \`$retired\`."
+          fi
         } | tee -a "$GITHUB_STEP_SUMMARY"
 
         if [ "$DRY_RUN" = "true" ]; then
@@ -196,6 +199,18 @@ runs:
           git tag "$t"
           tag_refs+=("refs/tags/$t")
         done <<< "$tags"
+
+        branch_refs=("HEAD:refs/heads/$DEFAULT_BRANCH")
+        leases=()
+        # A major replaces the default branch outright, since its branch may share no history with it.
+        # The leases fail the atomic push if the default branch moved since the checkout, or if the
+        # retired line's name is already taken, so a racing merge cannot be lost.
+        if [ "$RELEASE_TYPE" = major ]; then
+          replaced=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
+          leases=("--force-with-lease=refs/heads/$DEFAULT_BRANCH:$replaced" "--force-with-lease=refs/heads/$retired:")
+          branch_refs+=("$replaced:refs/heads/$retired" ":refs/heads/$BRANCH")
+        fi
+
         # GitHub creates no push event for more than three tags in one push, so a release with more
         # sub-module tags would not start its tag-triggered publishing run.
         # The checkout kept no credential, so the release token reaches git for this push alone, as the
@@ -203,7 +218,7 @@ runs:
         auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
         GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}" \
-          git push --atomic origin "HEAD:$BRANCH" "${tag_refs[@]}"
+          git push --atomic "${leases[@]}" origin "${branch_refs[@]}" "${tag_refs[@]}"
         gh release create "$root_tag" --repo "$GITHUB_REPOSITORY" \
           --title "${GITHUB_REPOSITORY#*/} ${version}" --generate-notes
         echo "- ✓ released ${#tag_refs[@]} tag(s), root \`$root_tag\`" | tee -a "$GITHUB_STEP_SUMMARY"
