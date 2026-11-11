@@ -133,6 +133,19 @@ test("classify lets through only a release pin or a version update Renovate put 
       bot,
       "renovate",
     ],
+    [
+      "an OpenTofu update: its version file and a root's constraint",
+      [
+        file(".opentofu-version", ["1.13.8"], ["1.13.9"]),
+        file("bootstrap/versions.tf", ['  required_version = "= 1.13.8"'], ['  required_version = "= 1.13.9"'], {
+          context: ["  # renovate: datasource=github-releases depName=opentofu/opentofu"],
+        }),
+      ],
+      bot,
+      "renovate",
+    ],
+    ["a version file set to a word", [file(".opentofu-version", ["1.13.8"], ["latest"])], bot, "review"],
+    ["a version file with more than a version", [file(".opentofu-version", ["1.13.8"], ["1.13.9 x"])], bot, "review"],
     ["an update Renovate left for review", [bump], null, "review"],
     ["an update the agent queued", [bump], "anovelbot-agent", "review"],
     // A stolen dependency key can enable auto-merge itself, so the diff must hold on its own.
