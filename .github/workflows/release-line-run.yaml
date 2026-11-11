@@ -5,7 +5,8 @@ name: release line (reusable)
 # the release App behind the protected `release` environment, the human gate on who may publish. It
 # pushes the bump commit to the line together with its tags, so the line's head is always its latest
 # patch. The caller triggers on pull_request_target, so GitHub runs the default branch's copy of the
-# caller and checks the `release` environment against the default branch.
+# caller and checks the `release` environment against the default branch. Before anyone approves,
+# the run rehearses the cut and writes the patch's release notes to its summary.
 #
 # A head that is already tagged has nothing to release. The caller serializes runs per line, and
 # each run reads the line's current head, so two backports merged together cut one patch and the
@@ -67,13 +68,15 @@ on:
 
 jobs:
   # Reads the line's state outside the `release` environment, so a merge with nothing to release
-  # never asks a person to approve.
+  # never asks a person to approve. A pending cut is rehearsed here with no credential, so a cut that
+  # would fail does so before the approval, and the rehearsal names the patch's tag.
   pending:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       cut: ${{ steps.pending.outputs.cut }}
+      tag: ${{ steps.rehearse.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,8 +113,39 @@ jobs:
             echo "\`$BRANCH\` head is already released; nothing to cut." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  cut:
+      - name: Rehearse the cut
+        id: rehearse
+        if: steps.pending.outputs.cut == 'true'
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.84.1
+        with:
+          # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
+          cli_version: "1.42.4"
+          ref: ${{ inputs.branch }}
+          dry_run: "true"
+
+  # GitHub's release-notes endpoint wants contents write although it stores nothing, so this job
+  # holds that token alone and runs no repository code. `cut` waits for it, so whoever approves the
+  # cut has read the notes. The caller grants the write, since a called job cannot widen its token.
+  notes:
     needs: pending
+    if: needs.pending.outputs.cut == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Preview the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.pending.outputs.tag }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$BRANCH" \
+            --jq .body >> "$GITHUB_STEP_SUMMARY"
+
+  cut:
+    needs: [pending, notes]
     if: needs.pending.outputs.cut == 'true'
     runs-on: ubuntu-latest
     environment: release
@@ -158,7 +192,7 @@ jobs:
           dry_run: ${{ inputs.dry_run }}
 
   # The `release` environment holds only the release key, so the escalation runs in the caller's
-  # governance environment. A failed pending job escalates too.
+  # governance environment. A failed pending or notes job escalates too.
   escalate:
     needs: cut
     if: ${{ failure() }}
