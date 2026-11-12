@@ -3,7 +3,7 @@
 Shared GitHub Actions building blocks for every A-Novel repository.
 
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/agorastoryverse)](https://twitter.com/agorastoryverse)
-[![Discord](https://img.shields.io/discord/1315240114691248138?logo=discord)](https://discord.gg/rp4Qr8cA)
+[![Fluxer](https://img.shields.io/badge/Fluxer-Agora-blue?logo=fluxer)](https://fluxer.gg/zrf7UIAg)
 
 <hr />
 
@@ -102,8 +102,8 @@ move a tag.
 | `derive-status`          | Derive the board Status of the issues a PR closes from the PR's current state.                                   |
 | `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
 | `discord-dispatch`       | Hand a central feed's posts to each repository's `notify-post.yaml`, which reads that repository's webhooks.     |
-| `discord-post`           | Post one state-colored Discord embed to a channel webhook; pings only the ids given.                             |
-| `discord-users`          | Resolve GitHub user ids to Discord ids through the Bitwarden map; masked and fail-soft.                          |
+| `discord-post`           | Post one state-colored embed to a Fluxer channel's Discord-compatible webhook; pings only the ids given.         |
+| `discord-users`          | Resolve GitHub user ids to Fluxer ids through the Bitwarden map; masked and fail-soft.                           |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App, so it queues once green.                                    |
 | `epic-membership`        | Resolve an Epic's member set: its frozen activation snapshot, else the open PRs labeled `epic:<N>`.              |
 | `epic-rollback`          | Revert a landed Epic's merged PRs through a new rollback Epic that lands the reverts together.                   |
@@ -298,23 +298,23 @@ workflow never reports and the PR never merges.
 
 A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<tag>`.
 
-| Workflow                      | Purpose                                                                                                           |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `auto-approve-dependabot-run` | Approve and queue a repository's trusted dependency-bot PRs once their update has aged.                           |
-| `backport-run`                | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.           |
-| `epic-rollback-run`           | Admin-gated dispatch of `epic-rollback`, behind a typed confirmation.                                             |
-| `merge-gate-run`              | Post the required `merge-gate` check, and arm auto-merge on ready Epic members so they land together.             |
-| `notify-audit-run`            | Alert the org's Discord security channel minutes after an audit-log entry grants access or skips a rule.          |
-| `notify-ci-run`               | Post a failed default-branch `main` or `release` run to Discord, pinging the repo role, and the run that ends it. |
-| `notify-issues-run`           | Post board issues' Status and assignee changes to Discord by stage color, pinging on Triage, Ready and assignees. |
-| `notify-pr-run`               | Post people's pull request reviews, merges and merge-queue drops to Discord, and bots' failing pull requests.     |
-| `notify-release-run`          | Announce a published release in Discord with its notes, colored by its bump, gold for a hotfix.                   |
-| `notify-stuck-run`            | Post bots' green pull requests stuck outside the merge queue to Discord, and warn when `notify-audit` stops.      |
-| `notify-warnings-run`         | Post a daily digest of the org's default-branch CI warnings to Discord, one line per warning.                     |
-| `reconcile-board`             | Per-org fail-safe sweep that repairs the board and the `merge-gate` and `epic-freeze` checks.                     |
-| `release-line-run`            | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.           |
-| `release-train-run`           | Admin-gated dispatch of `release-train` for one landed Epic.                                                      |
-| `token-expiry`                | Post an organization's fine-grained personal access tokens to Discord as they near expiry.                        |
+| Workflow                      | Purpose                                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `auto-approve-dependabot-run` | Approve and queue a repository's trusted dependency-bot PRs once their update has aged.                          |
+| `backport-run`                | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.          |
+| `epic-rollback-run`           | Admin-gated dispatch of `epic-rollback`, behind a typed confirmation.                                            |
+| `merge-gate-run`              | Post the required `merge-gate` check, and arm auto-merge on ready Epic members so they land together.            |
+| `notify-audit-run`            | Alert the org's Fluxer security channel minutes after an audit-log entry grants access or skips a rule.          |
+| `notify-ci-run`               | Post a failed default-branch `main` or `release` run to Fluxer, pinging the repo role, and the run that ends it. |
+| `notify-issues-run`           | Post board issues' Status and assignee changes to Fluxer by stage color, pinging on Triage, Ready and assignees. |
+| `notify-pr-run`               | Post people's pull request reviews, merges and merge-queue drops to Fluxer, and bots' failing pull requests.     |
+| `notify-release-run`          | Announce a published release in Fluxer with its notes, colored by its bump, gold for a hotfix.                   |
+| `notify-stuck-run`            | Post bots' green pull requests stuck outside the merge queue to Fluxer, and warn when `notify-audit` stops.      |
+| `notify-warnings-run`         | Post a daily digest of the org's default-branch CI warnings to Fluxer, one line per warning.                     |
+| `reconcile-board`             | Per-org fail-safe sweep that repairs the board and the `merge-gate` and `epic-freeze` checks.                    |
+| `release-line-run`            | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.          |
+| `release-train-run`           | Admin-gated dispatch of `release-train` for one landed Epic.                                                     |
+| `token-expiry`                | Post an organization's fine-grained personal access tokens to Fluxer as they near expiry.                        |
 
 ## Contributing
 
