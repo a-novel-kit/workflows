@@ -21,6 +21,8 @@ const indirectRequirement = /^\s*(require\s+)?[^\s()]+\s+v\S+\s*\/\/\s*indirect\
 const renovateAnnotation = /#\s*renovate:\s*datasource=/;
 const workflow = /(^|\/)(\.github\/(workflows|actions)\/.+|action)\.ya?ml$/;
 const opentofu = /\.tf$/;
+// A version file, such as .opentofu-version, holds the version alone.
+const versionFile = /(^|\/)\.[\w-]+-version$/;
 const actionPin = /uses:\s*([\w.-]+\/[\w.-]+)(?:\/[^@\s]*)?@([0-9a-f]{40})\s*#\s*(v?\d[\w.+-]*)\s*$/;
 
 const semver = String.raw`v?\d+(?:\.\d+)+(?:[-+][\w.-]+)?`;
@@ -44,6 +46,7 @@ const inputVersion = new RegExp(
 );
 // The version argument of a provider requirement, a Helm release or a module, exactly as Renovate pins it.
 const argumentVersion = new RegExp(String.raw`(?<=^\s*version\s*=\s*")${semver}(?="\s*$)`, "g");
+const wholeLineVersion = new RegExp(String.raw`^${semver}$`, "g");
 
 /**
  * The removed and added lines of each change, a run of them between context lines, each with the
@@ -91,6 +94,7 @@ function patternsFor(filename, { context }) {
   if (workflow.test(filename)) return [...versions, inputVersion];
   // Its terraform and helm managers rewrite a block's version argument.
   if (opentofu.test(filename)) return [...versions, argumentVersion];
+  if (versionFile.test(filename)) return [wholeLineVersion];
   return versions;
 }
 
