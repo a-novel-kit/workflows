@@ -36,18 +36,17 @@ jobs:
       matrix:
         post: ${{ fromJSON(inputs.posts) }}
     steps:
-      # TODO: call chat-users and chat-post, reading chat_ids, once the pins name a release that has them.
       - name: Resolve the pings
         id: users
         if: matrix.post.ping && matrix.post.user_ids != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.86.0
+        uses: a-novel-kit/workflows/generic-actions/chat-users@v1.86.0
         with:
           github_user_ids: ${{ matrix.post.user_ids }}
           bws_access_token: ${{ secrets.BWS_READ_TOKEN }}
           bws_server_url: ${{ vars.BWS_SERVER_URL }}
 
       - name: Post
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.86.0
+        uses: a-novel-kit/workflows/generic-actions/chat-post@v1.86.0
         with:
           # A post never falls back to the other channel.
           webhook: >-
@@ -57,7 +56,7 @@ jobs:
           title: ${{ matrix.post.title }}
           url: ${{ matrix.post.url }}
           description: ${{ matrix.post.description }}
-          mention_users: ${{ steps.users.outputs.discord_ids }}
+          mention_users: ${{ steps.users.outputs.chat_ids }}
           mention_roles: >-
             ${{ matrix.post.ping && matrix.post.user_ids == '' &&
-            fromJSON(vars.DISCORD_REPO_ROLES || '{}')[github.repository] || '' }}
+            fromJSON(vars.CHAT_REPO_ROLES || '{}')[github.repository] || '' }}
