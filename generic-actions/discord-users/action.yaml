@@ -29,7 +29,7 @@ runs:
       run: |
         echo "::warning::generic-actions/discord-users is deprecated, and the next major removes it. Call generic-actions/chat-users, which takes the same inputs, and read its chat_ids output."
     - id: resolve
-      uses: a-novel-kit/workflows/generic-actions/chat-users@v1.85.0
+      uses: a-novel-kit/workflows/generic-actions/chat-users@v1.86.0
       with:
         github_user_ids: ${{ inputs.github_user_ids }}
         bws_access_token: ${{ inputs.bws_access_token }}

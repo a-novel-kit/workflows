@@ -28,7 +28,7 @@ runs:
       shell: bash
       run: |
         echo "::warning::generic-actions/discord-dispatch is deprecated, and the next major removes it. Call generic-actions/chat-dispatch, which takes the same inputs."
-    - uses: a-novel-kit/workflows/generic-actions/chat-dispatch@v1.85.0
+    - uses: a-novel-kit/workflows/generic-actions/chat-dispatch@v1.86.0
       with:
         posts: ${{ inputs.posts }}
         channel: ${{ inputs.channel }}
