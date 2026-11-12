@@ -1,147 +1,65 @@
 name: discord-post
 description: >
-  Post one embed to a Discord channel webhook: a colored side bar naming the event's state, a title
-  linking to GitHub, and a Markdown body. Only the role and user ids passed in can be pinged, so text
-  copied from a pull request title or release notes pings nobody. Delivery errors end as a warning
-  and an empty webhook skips the post, so a notification fails its job only on a caller error, such
-  as an unknown color.
+  Deprecated, use generic-actions/chat-post, which this action runs with the same inputs and output.
+  The next major removes it.
 
 inputs:
   webhook:
     required: false
     default: ""
-    description: Discord channel webhook URL, which is a secret. Empty skips the post.
+    description: Forwarded to chat-post.
   title:
     required: true
-    description: Embed title, cut to Discord's 256 characters.
+    description: Forwarded to chat-post.
   url:
     required: false
     default: ""
-    description: Link opened by the title, and by the "read more" link when the description is cut.
+    description: Forwarded to chat-post.
   description:
     required: false
     default: ""
-    description: >
-      Markdown body, cut to Discord's 4096 characters, or shorter when the title and footer leave
-      less of the embed's 6000.
+    description: Forwarded to chat-post.
   color:
     required: true
-    description: >
-      State shown by the side bar: failed (red), succeeded (green), started (blue), upcoming
-      (gold), in-progress (orange), cancelled (grey) or released (purple).
+    description: Forwarded to chat-post.
   footer:
     required: false
     default: ""
-    description: Small text under the body, such as the repository or the actor.
+    description: Forwarded to chat-post.
   mention_roles:
     required: false
     default: ""
-    description: Discord role ids to ping, separated by spaces or commas.
+    description: Forwarded to chat-post.
   mention_users:
     required: false
     default: ""
-    description: Discord user ids to ping, separated by spaces or commas.
+    description: Forwarded to chat-post.
   dry_run:
     required: false
     default: "false"
-    description: >
-      Only "false", ignoring case and whitespace, posts. Any other value writes the payload to the
-      step summary instead of posting it.
+    description: Forwarded to chat-post.
 
 outputs:
   delivered:
-    description: '"true" when Discord accepted the message.'
+    description: chat-post's delivered output.
     value: ${{ steps.post.outputs.delivered }}
 
 runs:
   using: composite
   steps:
-    - name: Post to Discord
-      id: post
+    - name: Warn that discord-post is deprecated
       shell: bash
-      env:
-        WEBHOOK: ${{ inputs.webhook }}
-        TITLE: ${{ inputs.title }}
-        URL: ${{ inputs.url }}
-        DESCRIPTION: ${{ inputs.description }}
-        COLOR: ${{ inputs.color }}
-        FOOTER: ${{ inputs.footer }}
-        MENTION_ROLES: ${{ inputs.mention_roles }}
-        MENTION_USERS: ${{ inputs.mention_users }}
-        DRY_RUN: ${{ inputs.dry_run }}
       run: |
-        set -euo pipefail
-        echo "delivered=false" >> "$GITHUB_OUTPUT"
-        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        [ "$dry" = false ] || dry=true
-
-        case "$COLOR" in
-          failed) bar=15158332 ;;
-          succeeded) bar=3066993 ;;
-          started) bar=3447003 ;;
-          upcoming) bar=15844367 ;;
-          in-progress) bar=15105570 ;;
-          cancelled) bar=9807270 ;;
-          released) bar=10181046 ;;
-          *) echo "::error::unknown color \"$COLOR\""; exit 1 ;;
-        esac
-
-        # Discord ids are digits only. Any other value is a caller bug and fails the step.
-        for list in MENTION_ROLES MENTION_USERS; do
-          if printf '%s' "${!list}" | tr ', ' '\n' | grep -qv '^[0-9]*$'; then
-            echo "::error::${list,,} must hold Discord ids (digits only)"
-            exit 1
-          fi
-        done
-        roles=$(printf '%s' "$MENTION_ROLES" | tr ', ' '\n' | jq -Rn '[inputs | select(length > 0)]')
-        users=$(printf '%s' "$MENTION_USERS" | tr ', ' '\n' | jq -Rn '[inputs | select(length > 0)]')
-
-        # Mobile push notifications show `content` and skip the embed, so a pinged message repeats its
-        # title there. jq slices strings by codepoint, so a cut never splits a multibyte character.
-        # Discord also caps the title, description and footer of an embed at 6000 characters together,
-        # so the description takes what the other two leave, up to its own 4096.
-        payload=$(jq -cn \
-          --arg title "$TITLE" --arg url "$URL" --arg description "$DESCRIPTION" \
-          --arg footer "$FOOTER" --argjson bar "$bar" \
-          --argjson roles "$roles" --argjson users "$users" '
-          def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
-          (($roles | map("<@&\(.)>")) + ($users | map("<@\(.)>"))) as $pings
-          | (if $url == "" then "" else "\n\n[Read more](\($url))" end) as $more
-          | ($title | cut(256)) as $heading
-          | ($footer | cut(2048)) as $note
-          | ([4096, 6000 - ($heading | length) - ($note | length)] | min) as $room
-          | {
-              embeds: [
-                {title: $heading, color: $bar}
-                + (if $url == "" then {} else {url: $url} end)
-                + (if $description == "" then {}
-                   elif ($description | length) > $room then {description: (($description | cut($room - ($more | length))) + $more)}
-                   else {description: $description} end)
-                + (if $footer == "" then {} else {footer: {text: $note}} end)
-              ],
-              allowed_mentions: {parse: [], roles: $roles, users: $users}
-            }
-          + (if $pings == [] then {} else {content: ($pings + [$title] | join(" ") | cut(2000))} end)')
-
-        if [ "$dry" = true ]; then
-          printf '[dry-run] would post to Discord:\n```json\n%s\n```\n' "$payload" >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-        fi
-        if [ -z "$WEBHOOK" ]; then
-          echo "::notice::No Discord webhook configured; skipped the post."
-          exit 0
-        fi
-
-        # Discord answers 204 on success, 429 when rate limited and 5xx transiently. curl runs
-        # without --fail, so the loop reads every status and retries any non-2xx answer.
-        code=000
-        for attempt in 1 2 3; do
-          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' \
-            -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
-          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
-            echo "delivered=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          [ "$attempt" -lt 3 ] && sleep "$((attempt * attempt * 2))"
-        done
-        echo "::warning::Discord did not accept the post (last HTTP $code)."
+        echo "::warning::generic-actions/discord-post is deprecated, and the next major removes it. Call generic-actions/chat-post, which takes the same inputs."
+    - id: post
+      uses: a-novel-kit/workflows/generic-actions/chat-post@v1.85.0
+      with:
+        webhook: ${{ inputs.webhook }}
+        title: ${{ inputs.title }}
+        url: ${{ inputs.url }}
+        description: ${{ inputs.description }}
+        color: ${{ inputs.color }}
+        footer: ${{ inputs.footer }}
+        mention_roles: ${{ inputs.mention_roles }}
+        mention_users: ${{ inputs.mention_users }}
+        dry_run: ${{ inputs.dry_run }}

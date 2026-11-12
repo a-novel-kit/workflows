@@ -215,7 +215,7 @@ export function groups(alerts) {
   return [...byKey.values()].map((entries) => ({ entries }));
 }
 
-/** The Discord post: a title, then two lines per group of fresh alerts. */
+/** The chat post: a title, then two lines per group of fresh alerts. */
 export function post(org, fresh, rules) {
   const hidden = rules.reduce((sum, rule) => sum + rule.hidden, 0);
   return {
@@ -231,7 +231,7 @@ const cell = (value) => value.replaceAll("|", "\\|").replaceAll("\n", " ");
 
 /**
  * The step summary: the window, the counts, and what each rule hid. A public repository's run
- * summary is public, so the alerts themselves reach only Discord.
+ * summary is public, so the alerts themselves reach only the chat.
  */
 export function summary({ since, read, alerts, fresh, rules }) {
   const lines = [`Audit-log entries since ${since}: ${read} read, ${alerts} alerting, ${fresh} not posted before.`, ""];

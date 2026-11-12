@@ -167,7 +167,7 @@ jobs:
           # The org-wide halt. Engaged, the action writes no Status.
           kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
-  # Posts reviews to Discord. notify-pr-run reads the pull request and its
+  # Posts reviews to the chat. notify-pr-run reads the pull request and its
   # latest review back through the API instead of trusting the relay's run.
   notify-review:
     if: github.event.workflow_run.event == 'pull_request_review'

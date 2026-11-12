@@ -1,6 +1,6 @@
 name: notify-stuck (reusable)
 
-# Tells Discord when a bot's pull request is stuck: green, yet not in the merge queue long after its
+# Tells the chat when a bot's pull request is stuck: green, yet not in the merge queue long after its
 # last commit. A rule can hold a green pull request with no event at all, such as an unsigned commit
 # or a check that never reports. Each org's `.github` repository calls this engine from a workflow a
 # clock dispatches every hour. The engine posts each pull request that turned stuck since the
@@ -32,7 +32,7 @@ on:
         required: false
         type: string
         default: "{}"
-        description: JSON map from "<org>/<repo>" to the Discord role id that a stuck pull request pings.
+        description: JSON map from "<org>/<repo>" to the chat role id that a stuck pull request pings.
       dry_run:
         required: false
         type: string
@@ -44,15 +44,15 @@ on:
         description: Private key (PEM) of the App that client_id names.
       dependencies_webhook:
         required: false
-        description: Discord webhook of the dependencies channel. Empty skips those posts.
+        description: Webhook of the dependencies channel. Empty skips those posts.
       security_webhook:
         required: false
         description: >-
-          Discord webhook of the org's security channel, told when the caller repository's
+          Webhook of the org's security channel, told when the caller repository's
           notify-audit.yaml stops succeeding. Empty skips that check.
       security_mention:
         required: false
-        description: Discord user id of the admin the security post pings. Empty posts without a ping.
+        description: Chat user id of the admin the security post pings. Empty posts without a ping.
 
 jobs:
   # A broken dispatch, a revoked App key or a disabled workflow stops notify-audit without a post.
@@ -100,7 +100,7 @@ jobs:
 
       - name: Post to the security channel
         if: steps.audit.outputs.silent == 'true'
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-post@v1.85.0
         with:
           webhook: ${{ secrets.security_webhook }}
           color: failed
@@ -205,7 +205,7 @@ jobs:
 
       - name: Dispatch the review posts
         if: steps.scan.outputs.reviews != '[]'
-        uses: a-novel-kit/workflows/generic-actions/discord-dispatch@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-dispatch@v1.85.0
         with:
           posts: ${{ steps.scan.outputs.reviews }}
           channel: reviews
@@ -219,13 +219,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     strategy:
-      # One post at a time keeps the channel under Discord's rate limit.
+      # One post at a time keeps the channel under the chat's rate limit.
       max-parallel: 1
       matrix:
         event: ${{ fromJSON(needs.scan.outputs.events) }}
     steps:
       - name: Post to the dependencies channel
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-post@v1.85.0
         with:
           webhook: ${{ secrets.dependencies_webhook }}
           color: in-progress

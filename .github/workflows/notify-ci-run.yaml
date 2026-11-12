@@ -1,14 +1,14 @@
 name: notify-ci (reusable)
 
-# Tells a repository's owners in Discord when its default branch breaks, and when it turns green
+# Tells a repository's owners in the chat when its default branch breaks, and when it turns green
 # again. Each governed repository calls this engine from its own `notify.yaml`, on
 # the `workflow_run` completion of `main` and `release`, so a release that fails after tagging
-# reports too. A failure pings the repository's Discord role, and the recovery posts without a ping.
+# reports too. A failure pings the repository's chat role, and the recovery posts without a ping.
 on:
   workflow_call:
     inputs:
       roles:
-        description: JSON map from "<org>/<repo>" to the Discord role id that a failure pings.
+        description: JSON map from "<org>/<repo>" to the chat role id that a failure pings.
         required: false
         type: string
         default: "{}"
@@ -19,7 +19,7 @@ on:
         default: "false"
     secrets:
       webhook:
-        description: Discord webhook of the CI channel. Empty skips the post.
+        description: Webhook of the CI channel. Empty skips the post.
         required: false
 
 jobs:
@@ -76,9 +76,9 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Post to Discord
+      - name: Post to the chat
         if: steps.state.outputs.post != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-post@v1.85.0
         with:
           webhook: ${{ secrets.webhook }}
           color: ${{ steps.state.outputs.post }}

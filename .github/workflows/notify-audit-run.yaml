@@ -1,13 +1,13 @@
 name: notify-audit (reusable)
 
-# Alerts an org's Discord security channel within half an hour of its audit log recording an entry
+# Alerts an org's security channel in the chat within half an hour of its audit log recording an entry
 # that can hand someone access, weaken a protection or push past a rule: a ref pushed past a ruleset,
 # a change to a ruleset, an environment or a member's access, a new key, hook, App, token or runner,
 # or a push-protection bypass. Each org's `.github` repository calls this engine from a workflow a
 # clock dispatches every 30 minutes, and the caller's ignore rules hide its routine shapes.
 #
 # Each run reads from an hour before the caller's previous successful run, since GitHub indexes some
-# entries late, and skips the alerts that run recorded as seen. A run whose post Discord refuses
+# entries late, and skips the alerts that run recorded as seen. A run whose post the chat refuses
 # fails, so the next one posts its alerts again.
 on:
   workflow_call:
@@ -29,10 +29,10 @@ on:
         description: Private key (PEM) of the App that client_id names.
       webhook:
         required: false
-        description: Discord webhook of the org's security channel. Empty fails every run holding an alert.
+        description: Webhook of the org's security channel. Empty fails every run holding an alert.
       mention:
         required: false
-        description: Discord user id of the admin every post pings. Empty posts without a ping.
+        description: Chat user id of the admin every post pings. Empty posts without a ping.
 
 jobs:
   alert:
@@ -65,7 +65,7 @@ jobs:
       - name: Post to the security channel
         id: post
         if: steps.collect.outputs.count != '0'
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-post@v1.85.0
         with:
           webhook: ${{ secrets.webhook }}
           color: failed
@@ -79,7 +79,7 @@ jobs:
       - name: Fail an undelivered post
         if: steps.collect.outputs.count != '0' && steps.post.outputs.delivered != 'true'
         run: |
-          echo "::error::Discord did not accept the alerts; the next run posts them again."
+          echo "::error::The chat did not accept the alerts; the next run posts them again."
           exit 1
 
       - name: Record the seen alerts

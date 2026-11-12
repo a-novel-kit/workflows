@@ -1,6 +1,6 @@
 name: notify-issues (reusable)
 
-# Tells people in Discord how board issues move through their lifecycle. Each org's `.github`
+# Tells people in the chat how board issues move through their lifecycle. Each org's `.github`
 # repository calls this engine from a workflow a clock dispatches, since GitHub raises no event when a
 # board Status changes. The engine posts each board issue whose Status changed, and each open one whose
 # assignees changed, since the caller's previous successful run. The next run therefore catches up a
@@ -11,7 +11,7 @@ name: notify-issues (reusable)
 # repository without its own channel posts to the org's. A post's color names the stage: grey for
 # Triage, blue for Ready, gold for In review, purple for Awaiting release, red for Done and green for
 # the rest. A move into Triage or Ready, and an assignee change, ping the assignees through the
-# GitHub-to-Discord map, or the repository's role when nobody is assigned.
+# GitHub-to-chat map, or the repository's role when nobody is assigned.
 on:
   workflow_call:
     inputs:
@@ -95,7 +95,7 @@ jobs:
           # merge, so archived items count too. Their filter takes whole days in an unstated time zone,
           # hence a day of margin. An item archived between the two scans appears in both.
           day="$(date -u -d "${since%T*} -1 day" +%F)"
-          # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings. discord-post
+          # GitHub timestamps share one ISO 8601 UTC format, so they compare as strings. chat-post
           # names its colors after CI states: cancelled is grey, started blue, upcoming gold, released
           # purple, failed red and succeeded green.
           posts="$({ scan NOT_ARCHIVED ""; scan ARCHIVED "updated:>=$day"; } |
@@ -125,7 +125,7 @@ jobs:
 
       - name: Dispatch the posts
         if: steps.scan.outputs.posts != '[]'
-        uses: a-novel-kit/workflows/generic-actions/discord-dispatch@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-dispatch@v1.85.0
         with:
           posts: ${{ steps.scan.outputs.posts }}
           channel: issues

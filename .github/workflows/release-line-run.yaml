@@ -49,7 +49,7 @@ on:
         type: string
         default: ""
       push_mention:
-        description: Discord mention, such as "<@&ROLE_ID>", that a SEV1 escalation's push pings.
+        description: Chat mention, such as "<@&ROLE_ID>", that a SEV1 escalation's push pings.
         required: false
         type: string
         default: ""

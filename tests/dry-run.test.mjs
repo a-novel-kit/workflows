@@ -16,7 +16,11 @@ const values = [
   ["0", "true"],
 ];
 
-const actions = globSync("*-actions/*/action.yaml", { cwd: root }).filter((path) => manifest(path).inputs?.dry_run);
+// A deprecated alias passes dry_run to the action it runs, which this suite checks instead.
+const forwards = (path) => manifest(path).runs.steps.some((entry) => entry.with?.dry_run === "${{ inputs.dry_run }}");
+const actions = globSync("*-actions/*/action.yaml", { cwd: root }).filter(
+  (path) => manifest(path).inputs?.dry_run && !forwards(path)
+);
 assert.notEqual(actions.length, 0);
 
 for (const path of [...actions, ".github/workflows/token-expiry.yaml"])

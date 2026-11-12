@@ -145,7 +145,7 @@ function postLines({ message, hits, jobs, repos }) {
   return [`**${headline(message)}**`, `-# ${jobList} · ${plural(hits, "hit")} · ${repoLinks}`];
 }
 
-/** The Discord post: a title, one bold line per warning with its jobs, hits and repositories. */
+/** The chat post: a title, one bold line per warning with its jobs, hits and repositories. */
 export function post({ warnings, rules }) {
   const hidden = rules.reduce((sum, rule) => sum + rule.hidden, 0);
   return {

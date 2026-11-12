@@ -137,13 +137,13 @@ test("notify-issues posts each issue once, in event order, with archived items f
     events.map((event) => event.title),
     ["a-novel/infra#9 · Wire the feed", "a-novel/infra#10 · Wire the feed", "a-novel/infra#8 · Wire the feed"]
   );
-  // Each post carries exactly what discord-dispatch hands over.
+  // Each post carries exactly what chat-dispatch hands over.
   assert.deepEqual(Object.keys(events[0]).sort(), ["color", "description", "ping", "repo", "title", "url", "user_ids"]);
   assert.equal(filter, "filter=updated:>=2026-10-11");
 });
 
-test("discord-users resolves mapped ids, masks them, and resolves nobody when Bitwarden fails", (t) => {
-  const resolve = step("generic-actions/discord-users/action.yaml", "resolve");
+test("chat-users resolves mapped ids, masks them, and resolves nobody when Bitwarden fails", (t) => {
+  const resolve = step("generic-actions/chat-users/action.yaml", "resolve");
   const map = [
     { key: "1", value: "111111111111111111", note: "kushuh" },
     { key: "2", value: "222222222222222222", note: "EmperorDada" },
@@ -166,9 +166,9 @@ test("discord-users resolves mapped ids, masks them, and resolves nobody when Bi
     assert.equal(
       w
         .read("output")
-        .match(/^discord_ids=(.*)$/gm)
+        .match(/^chat_ids=(.*)$/gm)
         .at(-1),
-      `discord_ids=${expected}`,
+      `chat_ids=${expected}`,
       name
     );
     for (const id of expected.split(" ").filter(Boolean))

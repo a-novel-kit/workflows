@@ -580,7 +580,7 @@ function outputs(w) {
   );
 }
 
-test("escalate pages Discord with push_mention and keeps the GitHub mention on the ticket", (t) => {
+test("escalate pages the chat with push_mention and keeps the GitHub mention on the ticket", (t) => {
   const w = workspace(t);
   const path = "generic-actions/escalate/action.yaml";
   const steps = manifest(path).runs.steps;
@@ -591,7 +591,7 @@ test("escalate pages Discord with push_mention and keeps the GitHub mention on t
     planning_repo: "a-novel/.github",
     mention: "@octocat",
     push_mention: "<@&42>",
-    push_webhook: "https://discord.invalid/webhook",
+    push_webhook: "https://chat.invalid/webhook",
     dry_run: "true",
   };
   succeeds(w.bash(step(path, "resolve"), bind(steps, "resolve", inputs)));
@@ -611,7 +611,7 @@ test("escalate keeps a newline in an input from forging another output", (t) => 
     summary: "cleanup pending",
     dedup_key: "cleanup:a-novel-kit/x",
     planning_repo: "a-novel-kit/.github",
-    push_webhook: "https://discord.invalid/webhook",
+    push_webhook: "https://chat.invalid/webhook",
     dry_run: "true",
     run_url: `https://run${forged}`,
   };

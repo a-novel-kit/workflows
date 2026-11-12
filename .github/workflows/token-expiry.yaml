@@ -1,5 +1,5 @@
 # Reusable daily watcher of an organization's fine-grained personal access tokens. It reads their
-# metadata through the org PAT endpoint, never a token value. It posts to the token-expiry Discord
+# metadata through the org PAT endpoint, never a token value. It posts to the token-expiry chat
 # channel only when a token crosses a milestone of the ping policy below, so quiet days stay silent.
 #
 # Each post @mentions the one configured admin, who triages, and names the token's owner in the
@@ -34,11 +34,11 @@ on:
         description: Private key (PEM) of the App that client_id names.
       webhook:
         required: false
-        description: Discord webhook of the token-expiry channel. Empty skips every post with a warning.
+        description: Webhook of the token-expiry channel. Empty skips every post with a warning.
       default_mention:
         required: false
         description: >
-          Discord user id of the admin every post @mentions, who triages. Empty posts without a mention.
+          Chat user id of the admin every post @mentions, who triages. Empty posts without a mention.
 
 jobs:
   sweep:
@@ -193,7 +193,7 @@ jobs:
             printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc"
           }
 
-          # Prints the webhook payload for description $1 and color $2. Discord notifies only on a
+          # Prints the webhook payload for description $1 and color $2. The chat notifies only on a
           # mention in `content`, never on one inside an embed, so the admin's mention goes there.
           # users:[id] allows that one admin alone, and parse:[] blocks @everyone, @here and roles.
           # With no admin configured, the embed posts unpinged.
@@ -214,8 +214,8 @@ jobs:
           # A test run posts for every token, for real, overriding dry_run.
           [ "$TEST_RUN" = "true" ] && dry=false
 
-          # Post one Discord payload with a small retry and explicit timeouts. $1 = JSON payload.
-          post_discord() {
+          # Post one chat payload with a small retry and explicit timeouts. $1 = JSON payload.
+          post_chat() {
             local payload="$1" max=3 code=000 attempt
             for attempt in $(seq 1 "$max"); do
               code=$(curl -sS --connect-timeout 5 --max-time 15 -o "$RUNNER_TEMP/tok_resp" -w '%{http_code}' \
@@ -224,7 +224,7 @@ jobs:
               echo "::warning::ping post attempt $attempt/$max failed (HTTP $code)."
               [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
             done
-            echo "::error::Discord ping failed after $max attempts (last HTTP $code)."
+            echo "::error::The chat ping failed after $max attempts (last HTTP $code)."
             return 1
           }
 
@@ -242,7 +242,7 @@ jobs:
               return 0
             fi
 
-            if ! post_discord "$2"; then
+            if ! post_chat "$2"; then
               failures=$((failures + 1))
               return 0
             fi

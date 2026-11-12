@@ -1,0 +1,55 @@
+# Upgrading to NEXT
+
+`discord-post`, `discord-users` and `discord-dispatch` are renamed `chat-post`, `chat-users` and
+`chat-dispatch`, and `chat-users` returns `chat_ids`. The old paths keep working until the next major.
+
+## Do I need to act?
+
+**Recommended, before the next major.** The team chat moved to Fluxer, which takes the same webhooks,
+so nothing changes in what a step posts. The reusable notify workflows call the new actions from this
+release on. A step that calls an old path keeps working and logs a deprecation warning that names it,
+and the daily CI digest collects the warnings of the default branches. Every repository's
+`notify-post.yaml` calls two of them. To list the steps to move in a repository:
+
+```bash
+grep -rn -E 'generic-actions/discord-(post|users|dispatch)@|outputs\.discord_ids' .github/workflows
+```
+
+## Call the chat actions
+
+| Before                             | After                           |
+| ---------------------------------- | ------------------------------- |
+| `generic-actions/discord-post`     | `generic-actions/chat-post`     |
+| `generic-actions/discord-users`    | `generic-actions/chat-users`    |
+| `generic-actions/discord-dispatch` | `generic-actions/chat-dispatch` |
+
+Every input keeps its name. The `discord_ids` output of `discord-users` is `chat_ids` on `chat-users`:
+
+```yaml
+# Before
+- id: users
+  uses: a-novel-kit/workflows/generic-actions/discord-users@<tag>
+  with:
+    github_user_ids: ${{ matrix.post.user_ids }}
+- uses: a-novel-kit/workflows/generic-actions/discord-post@<tag>
+  with:
+    mention_users: ${{ steps.users.outputs.discord_ids }}
+
+# After
+- id: users
+  uses: a-novel-kit/workflows/generic-actions/chat-users@<tag>
+  with:
+    github_user_ids: ${{ matrix.post.user_ids }}
+- uses: a-novel-kit/workflows/generic-actions/chat-post@<tag>
+  with:
+    mention_users: ${{ steps.users.outputs.chat_ids }}
+```
+
+The new paths exist from this release on. Change a path only once the repository's pins name this
+release or a later one, after Renovate's bump has merged. The migration has landed when the job's run
+shows no deprecation warning.
+
+## Notes
+
+The `DISCORD_REPO_ROLES` variable that `notify-post.yaml` reads keeps its name: this release renames
+the actions alone.
