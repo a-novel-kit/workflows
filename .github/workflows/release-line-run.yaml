@@ -116,7 +116,7 @@ jobs:
       - name: Rehearse the cut
         id: rehearse
         if: steps.pending.outputs.cut == 'true'
-        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.84.1
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.85.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.42.4"
@@ -182,7 +182,7 @@ jobs:
           done
 
       - name: Cut the patch
-        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.84.1
+        uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.85.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
           cli_version: "1.42.4"
@@ -203,7 +203,7 @@ jobs:
     permissions: {}
     steps:
       - name: Escalate the failed cut
-        uses: a-novel-kit/workflows/generic-actions/escalate@v1.84.1
+        uses: a-novel-kit/workflows/generic-actions/escalate@v1.85.0
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}

@@ -2,6 +2,7 @@
 
 One immutable guide per release that asks consumers to change something. Newest first.
 
+- [v1.85.0](./v1.85.0.md): A hotfix cut now rehearses itself and writes the patch's release notes to the run summary before anyone approves it.
 - [v1.84.1](./v1.84.1.md): Corrects the v1.84.0 guide, where the release replaced every mention of the pending guide's name with its version.
 - [v1.84.0](./v1.84.0.md): `release-core` sizes each release from its commits and drops `release_type`, a major ships from a `v<N>` branch, and guides are written as `v1.84.0.md`.
 - [v1.83.0](./v1.83.0.md): Each repository keeps its own Discord webhooks; the `.github` feeds dispatch its `notify-post.yaml`; the maps are removed.
