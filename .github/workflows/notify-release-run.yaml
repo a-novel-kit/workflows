@@ -1,6 +1,6 @@
 name: notify-release (reusable)
 
-# Announces each published release in Discord with its notes, as GitHub shows them. Each governed
+# Announces each published release in the chat with its notes, as GitHub shows them. Each governed
 # repository calls this engine on `release: published`, from its own `notify.yaml`.
 # release-core and release-core-hotfix create releases with an App token, so the event fires for
 # every release.
@@ -14,7 +14,7 @@ on:
         default: "false"
     secrets:
       webhook:
-        description: Discord webhook of the releases channel. Empty skips the post.
+        description: Webhook of the releases channel. Empty skips the post.
         required: false
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
     if: github.event_name == 'release' && github.event.action == 'published'
     permissions: {}
     steps:
-      # GitHub renders a bare pull request or compare URL as "#N" or "v1...v2", and Discord shows it
+      # GitHub renders a bare pull request or compare URL as "#N" or "v1...v2", and the chat shows it
       # whole. The step rewrites only bare URLs, so a link the author already wrote stays intact.
       - name: Format the notes
         id: notes
@@ -60,8 +60,8 @@ jobs:
           fi
           echo "color=$color" >> "$GITHUB_OUTPUT"
 
-      - name: Post to Discord
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.85.0
+      - name: Post to the chat
+        uses: a-novel-kit/workflows/generic-actions/chat-post@v1.85.0
         with:
           webhook: ${{ secrets.webhook }}
           color: ${{ steps.color.outputs.color }}

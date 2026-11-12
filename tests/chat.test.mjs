@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { step, succeeds, workspace } from "./helpers.mjs";
+import { manifest, step, succeeds, workspace } from "./helpers.mjs";
 
-const post = step("generic-actions/discord-post/action.yaml", "post");
+const post = step("generic-actions/chat-post/action.yaml", "post");
 
-const webhook = "https://discord.invalid/api/webhooks/1/token";
+const webhook = "https://chat.invalid/api/webhooks/1/token";
 const defaults = {
   WEBHOOK: webhook,
   TITLE: "master CI failed in a-novel/infra",
@@ -21,7 +21,7 @@ const defaults = {
 };
 
 /** A workspace whose curl answers each call with the next status in CODES and logs the payload and URL. */
-function discord(t) {
+function chat(t) {
   const w = workspace(t);
   w.stub(
     "curl",
@@ -46,8 +46,8 @@ function discord(t) {
   return { w, run, posts, urls, delivered };
 }
 
-test("discord-post pings exactly the ids it is given and repeats the title for push notifications", (t) => {
-  const { run, posts, delivered } = discord(t);
+test("chat-post pings exactly the ids it is given and repeats the title for push notifications", (t) => {
+  const { run, posts, delivered } = chat(t);
   const mentions = {
     MENTION_ROLES: "11, 22",
     MENTION_USERS: "33",
@@ -72,8 +72,8 @@ test("discord-post pings exactly the ids it is given and repeats the title for p
   assert.equal(delivered(), "delivered=true");
 });
 
-test("discord-post keeps an embed's title, description and footer within 6000 characters", (t) => {
-  const { run, posts } = discord(t);
+test("chat-post keeps an embed's title, description and footer within 6000 characters", (t) => {
+  const { run, posts } = chat(t);
   succeeds(run({ TITLE: "t".repeat(300), DESCRIPTION: "d".repeat(5000), FOOTER: "f".repeat(3000) }));
   const [{ embeds }] = posts();
   const { title, description, footer } = embeds[0];
@@ -82,8 +82,8 @@ test("discord-post keeps an embed's title, description and footer within 6000 ch
   assert.match(description, /^d+…\n\n\[Read more\]\(https:\/\/github\.com\/a-novel\/infra\/actions\/runs\/1\)$/);
 });
 
-test("discord-post cuts a long description by character and links to the full text", (t) => {
-  const { run, posts } = discord(t);
+test("chat-post cuts a long description by character and links to the full text", (t) => {
+  const { run, posts } = chat(t);
   succeeds(run({ DESCRIPTION: "é".repeat(5000), COLOR: "released" }));
   const [{ embeds, content }] = posts();
   const description = embeds[0].description;
@@ -93,13 +93,13 @@ test("discord-post cuts a long description by character and links to the full te
   assert.equal(content, undefined);
 });
 
-test("discord-post retries, then warns without failing the job", (t) => {
+test("chat-post retries, then warns without failing the job", (t) => {
   const outcomes = [
     ["500,429,204", 3, "delivered=true"],
     ["500,500,500", 3, "delivered=false"],
   ];
   for (const [codes, calls, outcome] of outcomes) {
-    const { run, posts, delivered } = discord(t);
+    const { run, posts, delivered } = chat(t);
     const result = run({ CODES: codes });
     succeeds(result);
     assert.equal(posts().length, calls, codes);
@@ -108,11 +108,11 @@ test("discord-post retries, then warns without failing the job", (t) => {
   }
 });
 
-test("discord-post skips without a webhook or on a dry run, and rejects caller mistakes", (t) => {
-  const { w, run, posts } = discord(t);
-  assert.match(succeeds(run({ WEBHOOK: "" })), /::notice::No Discord webhook configured/);
+test("chat-post skips without a webhook or on a dry run, and rejects caller mistakes", (t) => {
+  const { w, run, posts } = chat(t);
+  assert.match(succeeds(run({ WEBHOOK: "" })), /::notice::No chat webhook configured/);
   succeeds(run({ DRY_RUN: "true", MENTION_ROLES: "11" }));
-  assert.match(w.read("summary"), /would post to Discord:[^]*"roles":\["11"\]/);
+  assert.match(w.read("summary"), /would post to the chat:[^]*"roles":\["11"\]/);
   assert.deepEqual(posts(), []);
   for (const env of [{ COLOR: "red" }, { MENTION_ROLES: "<@&11>" }, { MENTION_USERS: "kushuh" }]) {
     assert.equal(run(env).status, 1, JSON.stringify(env));
@@ -120,8 +120,8 @@ test("discord-post skips without a webhook or on a dry run, and rejects caller m
   assert.deepEqual(posts(), []);
 });
 
-const targets = step("generic-actions/discord-dispatch/action.yaml", "targets");
-const dispatch = step("generic-actions/discord-dispatch/action.yaml", "dispatch");
+const targets = step("generic-actions/chat-dispatch/action.yaml", "targets");
+const dispatch = step("generic-actions/chat-dispatch/action.yaml", "dispatch");
 
 /** Runs the shipped dispatch over `posts`, with a gh that logs each call and fails for `failing`. */
 function dispatchPosts(t, posts, { channel = "issues", dry = "false", failing = "" } = {}) {
@@ -149,7 +149,7 @@ const posted = (number, repo = "a-novel/infra") => ({
 });
 const bare = ({ repo, ...post }) => post;
 
-test("discord-dispatch hands each repository its posts in one dispatch, in order", (t) => {
+test("chat-dispatch hands each repository its posts in one dispatch, in order", (t) => {
   const posts = [posted(1), posted(2, "a-novel/service-genai"), posted(3)];
   const { result, calls } = dispatchPosts(t, posts);
   succeeds(result);
@@ -167,7 +167,7 @@ test("discord-dispatch hands each repository its posts in one dispatch, in order
   });
 });
 
-test("discord-dispatch warns for a failed dispatch, writes a dry run to the summary, and rejects caller mistakes", (t) => {
+test("chat-dispatch warns for a failed dispatch, writes a dry run to the summary, and rejects caller mistakes", (t) => {
   const posts = [posted(1), posted(2, "a-novel/service-genai")];
   const failed = dispatchPosts(t, posts, { channel: "reviews", failing: "a-novel/service-genai" });
   assert.match(
@@ -187,7 +187,7 @@ test("discord-dispatch warns for a failed dispatch, writes a dry run to the summ
   assert.deepEqual(unknown.calls, []);
 });
 
-test("discord-dispatch scopes its token to its org's target repositories and posts only on a false dry run", (t) => {
+test("chat-dispatch scopes its token to its org's target repositories and posts only on a false dry run", (t) => {
   const other = posted(4, "a-novel-kit/.github");
   const cases = [
     [[posted(1), posted(2, "a-novel/service-genai"), posted(3)], "false", "infra,service-genai", "false"],
@@ -206,5 +206,27 @@ test("discord-dispatch scopes its token to its org's target repositories and pos
     assert.equal(output("repositories"), repositories);
     const routed = posts.map((post) => (post === other ? { ...post, repo: "a-novel/.github" } : post));
     assert.deepEqual(JSON.parse(output("posts")), routed);
+  }
+});
+
+test("each deprecated discord action runs its chat successor with the same inputs and outputs", () => {
+  // Each deprecated output, with the successor output it reads.
+  const aliases = [
+    ["discord-post", "chat-post", { delivered: "delivered" }],
+    ["discord-users", "chat-users", { discord_ids: "chat_ids" }],
+    ["discord-dispatch", "chat-dispatch", {}],
+  ];
+  const contract = (inputs) => Object.entries(inputs).map(([name, input]) => [name, input.required, input.default]);
+  for (const [alias, successor, outputs] of aliases) {
+    const wrapper = manifest(`generic-actions/${alias}/action.yaml`);
+    const target = manifest(`generic-actions/${successor}/action.yaml`);
+    const call = wrapper.runs.steps.find((entry) => entry.uses);
+    assert.match(call.uses, new RegExp(`^a-novel-kit/workflows/generic-actions/${successor}@v\\d+\\.\\d+\\.\\d+$`));
+    assert.deepEqual(contract(wrapper.inputs), contract(target.inputs), alias);
+    const forwarded = Object.keys(target.inputs).map((name) => [name, `\${{ inputs.${name} }}`]);
+    assert.deepEqual(call.with, Object.fromEntries(forwarded), alias);
+    const read = Object.entries(outputs).map(([name, from]) => [name, `\${{ steps.${call.id}.outputs.${from} }}`]);
+    const declared = Object.entries(wrapper.outputs ?? {}).map(([name, output]) => [name, output.value]);
+    assert.deepEqual(declared, read, alias);
   }
 });

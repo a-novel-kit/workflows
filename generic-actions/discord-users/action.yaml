@@ -1,77 +1,36 @@
 name: discord-users
 description: >
-  Resolve GitHub user ids to Discord user ids through a map in Bitwarden Secrets Manager. The map
-  holds one secret per person, keyed by the immutable GitHub user id and valued with the Discord id.
-  The map links two identities, so it never reaches a log. The bws output stays in a variable and
-  every resolved id is masked. The action fails soft. An unmapped user is skipped, and a missing
-  token, a failed install or a Bitwarden outage resolves nobody, so the caller posts without those
-  pings.
+  Deprecated, use generic-actions/chat-users, which this action runs with the same inputs. Its
+  chat_ids output replaces discord_ids. The next major removes this action.
 
 inputs:
   github_user_ids:
     required: true
-    description: GitHub numeric user ids, separated by spaces or commas.
+    description: Forwarded to chat-users.
   bws_access_token:
     required: false
     default: ""
-    description: >
-      Access token of a Bitwarden machine account with read access to the map's project alone. Every
-      secret the account reads counts as a map entry. Empty resolves nobody.
+    description: Forwarded to chat-users.
   bws_server_url:
     required: false
     default: ""
-    description: Bitwarden server, such as https://vault.bitwarden.eu. Empty means the US cloud.
+    description: Forwarded to chat-users.
 
 outputs:
   discord_ids:
-    description: Discord ids of the mapped users, space-separated, in input order.
-    value: ${{ steps.resolve.outputs.discord_ids }}
+    description: chat-users' chat_ids output.
+    value: ${{ steps.resolve.outputs.chat_ids }}
 
 runs:
   using: composite
   steps:
-    # The checksum is the one Bitwarden publishes for this release. A version bump changes both.
-    - name: Install bws
-      id: install
-      if: inputs.bws_access_token != ''
+    - name: Warn that discord-users is deprecated
       shell: bash
       run: |
-        set -euo pipefail
-        version=2.1.0
-        sha256=ba8233c3a4aee5d43e3c73bbd04d99e9bc5aba13bbbfd06d89b073abe732b860
-        zip="$RUNNER_TEMP/bws.zip"
-        if curl -fsSL --retry 3 --max-time 60 -o "$zip" \
-          "https://github.com/bitwarden/sdk-sm/releases/download/bws-v$version/bws-x86_64-unknown-linux-gnu-$version.zip" &&
-          echo "$sha256  $zip" | sha256sum --check --quiet && unzip -q -o "$zip" -d "$RUNNER_TEMP/bws"; then
-          echo "bws=$RUNNER_TEMP/bws/bws" >>"$GITHUB_OUTPUT"
-        else
-          echo "::warning::Could not install bws $version; posting without user pings."
-        fi
-
-    - name: Resolve the Discord ids
-      id: resolve
-      shell: bash
-      env:
-        IDS: ${{ inputs.github_user_ids }}
-        BWS: ${{ steps.install.outputs.bws }}
-        BWS_ACCESS_TOKEN: ${{ inputs.bws_access_token }}
-        SERVER_URL: ${{ inputs.bws_server_url }}
-      run: |
-        set -euo pipefail
-        echo "discord_ids=" >>"$GITHUB_OUTPUT"
-        if [ -z "$BWS_ACCESS_TOKEN" ] || [ -z "$BWS" ]; then exit 0; fi
-        [ -z "$SERVER_URL" ] || export BWS_SERVER_URL="$SERVER_URL"
-
-        # The whole map stays in this variable and is never printed.
-        if ! map="$("$BWS" secret list --output json 2>/dev/null)"; then
-          echo "::warning::Bitwarden did not answer; posting without user pings."
-          exit 0
-        fi
-        resolved=""
-        while read -r id; do
-          discord="$(jq -r --arg id "$id" 'first(.[] | select(.key == $id) | .value) // ""' <<<"$map")"
-          [[ $id =~ ^[0-9]+$ && $discord =~ ^[0-9]+$ ]] || continue
-          echo "::add-mask::$discord"
-          resolved+="${resolved:+ }$discord"
-        done < <(tr ', ' '\n' <<<"$IDS")
-        echo "discord_ids=$resolved" >>"$GITHUB_OUTPUT"
+        echo "::warning::generic-actions/discord-users is deprecated, and the next major removes it. Call generic-actions/chat-users, which takes the same inputs, and read its chat_ids output."
+    - id: resolve
+      uses: a-novel-kit/workflows/generic-actions/chat-users@v1.85.0
+      with:
+        github_user_ids: ${{ inputs.github_user_ids }}
+        bws_access_token: ${{ inputs.bws_access_token }}
+        bws_server_url: ${{ inputs.bws_server_url }}

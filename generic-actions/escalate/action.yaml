@@ -2,7 +2,7 @@ name: escalate
 description: >
   Bring a person in when governance automation reaches a state it cannot resolve on its own. The
   action files a deduplicated ticket, an issue in `planning_repo`, and sets its Status on a Projects
-  v2 board. A SEV1 also posts a page to a Discord webhook. The severity picks
+  v2 board. A SEV1 also posts a page to the chat's webhook. The severity picks
   the channels:
 
     SEV1  org inconsistent    → ticket + @mention + page
@@ -91,7 +91,7 @@ inputs:
     required: false
     default: ""
     description: >
-      Discord mention for the SEV1 page: "<@&ROLE_ID>" for a role, "<@USER_ID>" for a user. Empty
+      Chat mention for the SEV1 page: "<@&ROLE_ID>" for a role, "<@USER_ID>" for a user. Empty
       posts the page without a ping. The page allows user and role mentions only, so @everyone and
       @here never ping.
   planning_repo:
@@ -122,7 +122,7 @@ inputs:
     required: false
     default: ""
     description: >
-      Discord channel webhook URL for the SEV1 page. Empty turns the page off, and the ticket is
+      The chat's channel webhook URL for the SEV1 page. Empty turns the page off, and the ticket is
       still filed. Only a SEV1 with `state: open` posts.
   dry_run:
     required: false
@@ -457,9 +457,9 @@ runs:
         [ -n "${RUNBOOK:-}" ] && content="${content}"$'\n'"runbook: ${RUNBOOK}"
         [ -n "${ISSUE_URL:-}" ] && content="${content}"$'\n'"ticket: ${ISSUE_URL}"
         [ -n "${PUSH_MENTION:-}" ] && content="${content}"$'\n'"cc ${PUSH_MENTION}"
-        # Discord's `content` caps at 2000 characters, and head -c cuts the whole message to 1900
+        # The webhook's `content` caps at 2000 characters, and head -c cuts the whole message to 1900
         # bytes, well under that limit. `iconv -c` then drops a
-        # multibyte character the cut split, since Discord answers 400 to invalid UTF-8.
+        # multibyte character the cut split, since the webhook answers 400 to invalid UTF-8.
         content=$(printf '%s' "$content" | head -c 1900)
         content=$(printf '%s' "$content" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null) || true
 
@@ -477,7 +477,7 @@ runs:
         fi
 
         # A composite step cannot set timeout-minutes, so curl carries its own timeouts against a
-        # webhook that never answers. Discord answers 204 on success, 429 when rate limited and 5xx
+        # webhook that never answers. The webhook answers 204 on success, 429 when rate limited and 5xx
         # transiently. curl runs without --fail, so the loop reads each code and retries.
         max=3
         for ((attempt = 1; attempt <= max; attempt++)); do

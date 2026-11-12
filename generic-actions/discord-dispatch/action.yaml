@@ -1,94 +1,37 @@
 name: discord-dispatch
 description: >
-  Hand Discord posts to the repositories they concern, for a feed that runs elsewhere, such as the
-  issues feed of an org's `.github` repository. Each repository keeps its channel webhooks as its own
-  secrets, which no other repository can read, so the action dispatches that repository's
-  notify-post.yaml once with all of its posts, in the order they came, and the repository posts
-  them. The App's token reaches its own org alone, so a post about another org's repository, such
-  as a board item from that org, goes to the calling repository, whose channels are its org's. A
-  failed dispatch ends as a warning, like a failed post: a repository without notify-post.yaml, or
-  posts beyond the 65,535 characters GitHub allows a dispatch's inputs, lose that repository's
-  posts.
+  Deprecated, use generic-actions/chat-dispatch, which this action runs with the same inputs. The
+  next major removes it.
 
 inputs:
   posts:
     required: true
-    description: >
-      JSON array of posts. Each names its "repo" ("<org>/<repo>") and
-      carries what notify-post.yaml posts: "title", "url", "description", "color", "ping" (true pings
-      the GitHub users in "user_ids", else the repository's role) and "user_ids" (GitHub numeric ids,
-      space-separated).
+    description: Forwarded to chat-dispatch.
   channel:
     required: true
-    description: Channel of each repository the posts go to, "issues" or "reviews".
+    description: Forwarded to chat-dispatch.
   client_id:
     required: true
-    description: Client ID of a GitHub App installed on every target repository, with actions write.
+    description: Forwarded to chat-dispatch.
   app_private_key:
     required: true
-    description: Private key (PEM) of that App.
+    description: Forwarded to chat-dispatch.
   dry_run:
     required: false
     default: "false"
-    description: >
-      Only "false", ignoring case and whitespace, dispatches. Any other value writes each dispatch
-      to the step summary instead.
+    description: Forwarded to chat-dispatch.
 
 runs:
   using: composite
   steps:
-    - name: List the target repositories
-      id: targets
+    - name: Warn that discord-dispatch is deprecated
       shell: bash
-      env:
-        POSTS: ${{ inputs.posts }}
-        DRY_RUN: ${{ inputs.dry_run }}
       run: |
-        set -euo pipefail
-        dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        [ "$dry" = false ] || dry=true
-        echo "dry=$dry" >>"$GITHUB_OUTPUT"
-        posts=$(jq -c --arg owner "$GITHUB_REPOSITORY_OWNER" --arg self "$GITHUB_REPOSITORY" \
-          'map(if .repo | startswith("\($owner)/") then . else .repo = $self end)' <<<"$POSTS")
-        echo "posts=$posts" >>"$GITHUB_OUTPUT"
-        echo "repositories=$(jq -r '[.[].repo | split("/")[1]] | unique | join(",")' <<<"$posts")" >>"$GITHUB_OUTPUT"
-
-    - name: Mint dispatch token
-      id: token
-      if: steps.targets.outputs.dry == 'false' && steps.targets.outputs.repositories != ''
-      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        echo "::warning::generic-actions/discord-dispatch is deprecated, and the next major removes it. Call generic-actions/chat-dispatch, which takes the same inputs."
+    - uses: a-novel-kit/workflows/generic-actions/chat-dispatch@v1.85.0
       with:
-        client-id: ${{ inputs.client_id }}
-        private-key: ${{ inputs.app_private_key }}
-        owner: ${{ github.repository_owner }}
-        repositories: ${{ steps.targets.outputs.repositories }}
-        permission-actions: write
-
-    - name: Dispatch the posts
-      id: dispatch
-      shell: bash
-      env:
-        GH_TOKEN: ${{ steps.token.outputs.token }}
-        POSTS: ${{ steps.targets.outputs.posts }}
-        CHANNEL: ${{ inputs.channel }}
-        DRY: ${{ steps.targets.outputs.dry }}
-      run: |
-        set -euo pipefail
-        case "$CHANNEL" in
-          issues | reviews) ;;
-          *) echo "::error::unknown channel \"$CHANNEL\""; exit 1 ;;
-        esac
-
-        # group_by sorts stably, so each repository's posts keep the order they came in. Compact JSON
-        # holds no raw newline, so each group reads as two lines: the repository, then its posts.
-        while read -r repo && read -r posts; do
-          count=$(jq length <<<"$posts")
-          if [ "$DRY" = true ]; then
-            printf '[dry-run] would dispatch %s %s post(s) to %s:\n```json\n%s\n```\n' \
-              "$count" "$CHANNEL" "$repo" "$posts" >>"$GITHUB_STEP_SUMMARY"
-          elif gh workflow run notify-post.yaml --repo "$repo" -f channel="$CHANNEL" -f posts="$posts" >/dev/null; then
-            echo "Dispatched $count $CHANNEL post(s) to $repo." >>"$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::Could not dispatch notify-post.yaml in $repo; its $count $CHANNEL post(s) are lost."
-          fi
-        done < <(jq -rc 'group_by(.repo)[] | .[0].repo, map(del(.repo))' <<<"$POSTS")
+        posts: ${{ inputs.posts }}
+        channel: ${{ inputs.channel }}
+        client_id: ${{ inputs.client_id }}
+        app_private_key: ${{ inputs.app_private_key }}
+        dry_run: ${{ inputs.dry_run }}

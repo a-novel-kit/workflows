@@ -92,6 +92,9 @@ move a tag.
 | `archive-board-items`    | Archive the board items in a terminal Status, or whose issue is closed, and close their issues.                  |
 | `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                          |
 | `board-write`            | Set one single-select or date board field on issues or PRs, writing only on a change.                            |
+| `chat-dispatch`          | Hand a central feed's posts to each repository's `notify-post.yaml`, which reads that repository's webhooks.     |
+| `chat-post`              | Post one state-colored embed to a Fluxer channel's Discord-compatible webhook; pings only the ids given.         |
+| `chat-users`             | Resolve GitHub user ids to Fluxer ids through the Bitwarden map; masked and fail-soft.                           |
 | `check-append-only`      | Allow additions under a path while freezing every file that already landed.                                      |
 | `check-changes`          | Detect uncommitted changes in a pathspec, and optionally fail.                                                   |
 | `check-dependencies`     | Hold a person's dependency manifest change until a reviewer adds `allow-dependency-change`; bots pass.           |
@@ -101,9 +104,9 @@ move a tag.
 | `collect-warnings`       | Merge the warnings an org's default-branch runs raised in a window into one entry each, minus ignore rules.      |
 | `derive-status`          | Derive the board Status of the issues a PR closes from the PR's current state.                                   |
 | `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
-| `discord-dispatch`       | Hand a central feed's posts to each repository's `notify-post.yaml`, which reads that repository's webhooks.     |
-| `discord-post`           | Post one state-colored embed to a Fluxer channel's Discord-compatible webhook; pings only the ids given.         |
-| `discord-users`          | Resolve GitHub user ids to Fluxer ids through the Bitwarden map; masked and fail-soft.                           |
+| `discord-dispatch`       | Deprecated, use `chat-dispatch`, which it runs.                                                                  |
+| `discord-post`           | Deprecated, use `chat-post`, which it runs.                                                                      |
+| `discord-users`          | Deprecated, use `chat-users`, which it runs; its `chat_ids` output replaces `discord_ids`.                       |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App, so it queues once green.                                    |
 | `epic-membership`        | Resolve an Epic's member set: its frozen activation snapshot, else the open PRs labeled `epic:<N>`.              |
 | `epic-rollback`          | Revert a landed Epic's merged PRs through a new rollback Epic that lands the reverts together.                   |

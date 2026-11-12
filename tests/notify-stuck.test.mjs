@@ -123,7 +123,7 @@ test("notify-stuck sends a stuck pull request waiting on a review to its request
 });
 
 /** Runs the shipped notify-audit check, the caller's last success at `since` and notify-audit's at `last`. */
-function watch(t, { since = hoursBefore(1), last, webhook = "https://discord.test/hook" }) {
+function watch(t, { since = hoursBefore(1), last, webhook = "https://chat.test/hook" }) {
   const w = workspace(t);
   w.write("output", "");
   w.stub(

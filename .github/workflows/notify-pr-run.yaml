@@ -1,6 +1,6 @@
 name: notify-pr (reusable)
 
-# Tells people in Discord where each pull request stands, without the dependency bots' noise. Each
+# Tells people in the chat where each pull request stands, without the dependency bots' noise. Each
 # governed repository calls this engine on pull request, review and failed CI events, from its own
 # `notify.yaml` and `gates.yaml`. Drafts post nothing, and a post never pings the person who caused
 # it.
@@ -27,13 +27,13 @@ on:
         type: string
         default: "{}"
         description: >-
-          JSON map from "<org>/<repo>" to the Discord role id pinged when a pull request has no owner
+          JSON map from "<org>/<repo>" to the chat role id pinged when a pull request has no owner
           or reviewer, and on a bot's first CI failure.
       bws_server_url:
         required: false
         type: string
         default: ""
-        description: Bitwarden server holding the GitHub-to-Discord map. Empty means the US cloud.
+        description: Bitwarden server holding the GitHub-to-chat map. Empty means the US cloud.
       dry_run:
         required: false
         type: string
@@ -45,13 +45,13 @@ on:
         description: Private key (PEM) of the App that client_id names.
       reviews_webhook:
         required: false
-        description: Discord webhook of the repository's reviews channel. Empty skips those posts.
+        description: Webhook of the repository's reviews channel. Empty skips those posts.
       dependencies_webhook:
         required: false
-        description: Discord webhook of the dependencies channel, where bots' pull requests post. Empty skips those posts.
+        description: Webhook of the dependencies channel, where bots' pull requests post. Empty skips those posts.
       bws_access_token:
         required: false
-        description: Bitwarden token that reads the GitHub-to-Discord map. Empty posts without user pings.
+        description: Bitwarden token that reads the GitHub-to-chat map. Empty posts without user pings.
 
 jobs:
   notify:
@@ -327,7 +327,7 @@ jobs:
       - name: Resolve the pings
         id: users
         if: steps.state.outputs.users != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-users@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-users@v1.85.0
         with:
           github_user_ids: ${{ steps.state.outputs.users }}
           bws_access_token: ${{ secrets.bws_access_token }}
@@ -335,7 +335,7 @@ jobs:
 
       - name: Post
         if: steps.state.outputs.color != ''
-        uses: a-novel-kit/workflows/generic-actions/discord-post@v1.85.0
+        uses: a-novel-kit/workflows/generic-actions/chat-post@v1.85.0
         with:
           # A post never falls back to the other channel.
           webhook: >-
@@ -345,6 +345,6 @@ jobs:
           title: ${{ steps.state.outputs.title }}
           url: ${{ steps.state.outputs.url }}
           description: ${{ steps.state.outputs.description }}
-          mention_users: ${{ steps.users.outputs.discord_ids }}
+          mention_users: ${{ steps.users.outputs.chat_ids }}
           mention_roles: ${{ steps.state.outputs.role == 'true' && fromJSON(inputs.roles || '{}')[github.repository] || '' }}
           dry_run: ${{ inputs.dry_run }}
