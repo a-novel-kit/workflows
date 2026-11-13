@@ -119,7 +119,7 @@ jobs:
         uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.86.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
-          cli_version: "1.42.4"
+          cli_version: "1.42.5"
           ref: ${{ inputs.branch }}
           dry_run: "true"
 
@@ -185,7 +185,7 @@ jobs:
         uses: a-novel-kit/workflows/publish-actions/release-core-hotfix@v1.86.0
         with:
           # renovate: datasource=go depName=github.com/a-novel-kit/stack/cli
-          cli_version: "1.42.4"
+          cli_version: "1.42.5"
           ref: ${{ inputs.branch }}
           client_id: ${{ inputs.release_client_id }}
           app_private_key: ${{ secrets.release_private_key }}
