@@ -198,9 +198,15 @@ jobs:
 
             if [ -n "$existing" ]; then
               echo "already posted (idempotent): $existing" | tee -a "$GITHUB_STEP_SUMMARY"
-            else
-              url=$(gh api --method POST "$post_url" -f body="$full_body" --jq .html_url)
+            elif url=$(gh api --method POST "$post_url" -f body="$full_body" --jq .html_url); then
               echo "posted: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              # GitHub refuses a reply on a locked conversation with a bare 422, and
+              # lock-closed locks each pull request and issue once it closes.
+              if [ "$(gh api "repos/${slug}/issues/${number}" --jq .locked)" = true ]; then
+                echo "::error::${slug}#${number} is locked, so it takes no comment or reply."
+              fi
+              exit 1
             fi
             idx=$((idx + 1))
           done < <(printf '%s' "$items" | jq -j '.[] | "\(.number)\u0000\(.reply_to // "")\u0000\(.body)\u0000"')
