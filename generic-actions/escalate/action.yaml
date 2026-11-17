@@ -184,9 +184,9 @@ runs:
 
         sev=$(normalize "${SEVERITY:-}")
         case "$sev" in
-          sev1 | 1) sev=sev1; sevlabel="SEV1 — org inconsistent" ;;
-          sev2 | 2) sev=sev2; sevlabel="SEV2 — one repo blocked" ;;
-          sev3 | 3) sev=sev3; sevlabel="SEV3 — cleanup / advisory" ;;
+          sev1 | 1) sev=sev1; sevlabel="SEV1 (org inconsistent)" ;;
+          sev2 | 2) sev=sev2; sevlabel="SEV2 (one repo blocked)" ;;
+          sev3 | 3) sev=sev3; sevlabel="SEV3 (cleanup / advisory)" ;;
           *) echo "::error::severity must be sev1|sev2|sev3 (got \"$sev\")"; exit 1 ;;
         esac
 
@@ -321,7 +321,7 @@ runs:
             printf '\n---\n\n'
             [ -n "${RUN_URL:-}" ] && printf '**Run:** %s\n\n' "$RUN_URL"
             [ -n "${RUNBOOK:-}" ] && printf '**Runbook:** %s\n\n' "$RUNBOOK"
-            printf '_Filed by the `escalate` action. This body is bot-owned and regenerated on each occurrence — add context in a comment, not inline._\n'
+            printf '_Filed by the `escalate` action. This body is bot-owned and regenerated on each occurrence; add context in a comment, not inline._\n'
             if [ "$DO_MENTION" = "true" ] && [ -n "${MENTION:-}" ]; then printf '\ncc %s\n' "$MENTION"; fi
           } > "$RUNNER_TEMP/esc_body.md"
         }
@@ -337,7 +337,7 @@ runs:
         [ "$STATE" = "resolve" ] && list_state=all
         if ! existing_json=$(gh issue list --repo "$PLANNING_REPO" --label "$ESC_LABEL" \
           --state "$list_state" --json id,number,url,body,state --limit 200 2>"$RUNNER_TEMP/list.err"); then
-          echo "::error::could not list escalations in $PLANNING_REPO ($(tr '\n' ' ' < "$RUNNER_TEMP/list.err")) — failing rather than risk a duplicate ticket or a false resolve."
+          echo "::error::could not list escalations in $PLANNING_REPO ($(tr '\n' ' ' < "$RUNNER_TEMP/list.err")); failing rather than risk a duplicate ticket or a false resolve."
           exit 1
         fi
 
@@ -353,21 +353,21 @@ runs:
         if [ "$STATE" = "resolve" ]; then
           matches=$(printf '%s' "$existing_json" | jq -r --arg m "$marker" "$pred | [.number, .url, .state, .id] | @tsv")
           if [ -z "$matches" ]; then
-            echo "Nothing to resolve — no escalation for key \"$DEDUP_KEY\"." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Nothing to resolve: no escalation for key \"$DEDUP_KEY\"." | tee -a "$GITHUB_STEP_SUMMARY"
             emit noop false "" "" ""; exit 0
           fi
           n=$(printf '%s\n' "$matches" | grep -c '' || true)
-          [ "$n" -gt 1 ] && echo "::warning::$n tickets share dedup_key \"$DEDUP_KEY\" (a create race) — resolving all; set a caller concurrency group to prevent it."
+          [ "$n" -gt 1 ] && echo "::warning::$n tickets share dedup_key \"$DEDUP_KEY\" (a create race). Resolving all; set a caller concurrency group to prevent it."
           first_num=""; first_url=""; first_node=""
           while IFS=$'\t' read -r num url istate node; do
             if [ "$DRY_RUN" = "true" ]; then
               echo "[dry-run] would close #$num (state=$istate) and drive board Status → \"$TARGET_STATUS\"." | tee -a "$GITHUB_STEP_SUMMARY"
             elif [ "$istate" = "OPEN" ]; then
               gh issue close "$num" --repo "$PLANNING_REPO" --reason completed \
-                --comment "Resolved — the escalated condition cleared. See ${RUN_URL}." >/dev/null
+                --comment "Resolved: the escalated condition cleared. See ${RUN_URL}." >/dev/null
               echo "Resolved (closed) #$num." | tee -a "$GITHUB_STEP_SUMMARY"
             else
-              echo "#$num already closed — re-driving its board Status." | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "#$num already closed; re-driving its board Status." | tee -a "$GITHUB_STEP_SUMMARY"
             fi
             if [ -z "$first_num" ]; then first_num="$num"; first_url="$url"; first_node="$node"; fi
           done <<< "$matches"
@@ -425,7 +425,7 @@ runs:
         # body edit.
         if [ "$DO_MENTION" = "true" ]; then
           gh issue comment "$num" --repo "$PLANNING_REPO" \
-            --body "🔁 Recurred (occurrence ${count}) — ${RUN_URL}.${MENTION:+ cc ${MENTION}}" >/dev/null
+            --body "🔁 Recurred (occurrence ${count}): ${RUN_URL}.${MENTION:+ cc ${MENTION}}" >/dev/null
         fi
         echo "Updated escalation #$num (occurrence $count)." | tee -a "$GITHUB_STEP_SUMMARY"
         emit updated true "$num" "$node" "$url"
@@ -495,7 +495,7 @@ runs:
           [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
         done
 
-        echo "::error::SEV1 push FAILED after $max attempts (last HTTP $code). The loud page did not deliver — treat this as an escalation-channel outage and check the webhook."
+        echo "::error::SEV1 push FAILED after $max attempts (last HTTP $code). The loud page did not deliver. Treat this as an escalation-channel outage and check the webhook."
         echo "pushed=false" >> "$GITHUB_OUTPUT"
         exit 1
 

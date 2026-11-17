@@ -192,7 +192,7 @@ runs:
               | {repo: .repository.nameWithOwner, number, headRefOid, isDraft, reviewDecision, reviewGate: '"$GATE_JQ"', state} ]
             | sort_by((.repo | ascii_downcase), .number)' 2>/dev/null || printf '[]')
           if [ "$(printf '%s' "$members" | jq 'length')" -ne "$want" ]; then
-            echo "::warning::Epic #${EPIC}: could not re-read all ${want} frozen member(s) — reporting an empty set, which holds the Epic rather than gating on a partial one."
+            echo "::warning::Epic #${EPIC}: could not re-read all ${want} frozen member(s); reporting an empty set, which holds the Epic rather than gating on a partial one."
             members='[]'
           fi
         }
@@ -244,7 +244,7 @@ runs:
           local agg='[]' cursor="" resp page
           while :; do
             if ! resp=$(fetch "$cursor"); then
-              echo "::error::could not resolve epic:${EPIC} members — GraphQL search failed after retries (caller decides hold vs fail-open)"
+              echo "::error::could not resolve epic:${EPIC} members: GraphQL search failed after retries (caller decides hold vs fail-open)"
               exit 1
             fi
             page=$(printf '%s' "$resp" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')

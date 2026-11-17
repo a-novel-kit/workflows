@@ -81,7 +81,7 @@ runs:
         case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
-            echo "AGENT_KILL_SWITCH engaged — not enabling auto-merge on ${target} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "AGENT_KILL_SWITCH engaged; not enabling auto-merge on ${target} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
             ;;
         esac
@@ -98,7 +98,7 @@ runs:
         [ "$dry" = false ] || dry=true
         if [ "$dry" != "false" ]; then
           if [ "$already" = "true" ]; then
-            echo "auto-merge already enabled on ${target} — would no-op (DRY RUN)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "auto-merge already enabled on ${target}; would no-op (DRY RUN)." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "would enable auto-merge on ${target} (DRY RUN)." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
@@ -106,7 +106,7 @@ runs:
         fi
 
         if [ "$already" = "true" ]; then
-          echo "auto-merge already enabled on ${target} — no-op." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "auto-merge already enabled on ${target}; no-op." | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
 

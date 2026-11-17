@@ -439,7 +439,7 @@ test("release train waits for a cut's approval and never for a rehearsal", (t) =
     const env = { STATUSES: statuses, GITHUB_SERVER_URL: "https://github.com" };
     const result = w.bash(`${script}\npoll_run "$@"`, env, ["owner/repo", "42", approval]);
     assert.equal(succeeds(result), expected);
-    const link = "- ⏳ **owner/repo** — cut awaiting approval: https://github.com/owner/repo/actions/runs/42";
+    const link = "- ⏳ **owner/repo**: cut awaiting approval: https://github.com/owner/repo/actions/runs/42";
     assert.equal(w.read("summary").trim(), announced ? link : "");
   }
 });

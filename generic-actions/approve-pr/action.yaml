@@ -40,7 +40,7 @@ runs:
         case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
-            echo "::error::AGENT_KILL_SWITCH engaged — [Agent] automation is halted org-wide; approvals are refused. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to proceed."
+            echo "::error::AGENT_KILL_SWITCH engaged: [Agent] automation is halted org-wide; approvals are refused. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to proceed."
             exit 1
             ;;
         esac

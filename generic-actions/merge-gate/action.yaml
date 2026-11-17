@@ -153,7 +153,7 @@ runs:
             '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: $concl,
               output: {title: "merge-gate", summary: $summary}}' \
             | GH_TOKEN="$CHECKS_TOKEN" gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
-          echo "merge-gate=$1 @ ${HEAD_SHA:0:12} — $2" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "merge-gate=$1 @ ${HEAD_SHA:0:12}: $2" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
         # An empty epic_number means this step posted the verdict. A number hands the Epic to the
@@ -167,7 +167,7 @@ runs:
         case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
-            post_check failure "Automation halted org-wide by AGENT_KILL_SWITCH — holding this PR. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to resume; the next event or reconcile sweep re-evaluates."
+            post_check failure "Automation halted org-wide by AGENT_KILL_SWITCH; holding this PR. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to resume; the next event or reconcile sweep re-evaluates."
             emit ""
             exit 0
             ;;
@@ -214,7 +214,7 @@ runs:
         # A head SHA with neither a pull request nor a merge group means a misconfigured caller. The
         # gate holds, since any success on that commit satisfies the ruleset.
         if [ -z "${IN_QUEUE:-}" ] && [ -z "${PR_NUMBER:-}" ]; then
-          post_check failure "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event — refusing to pass a required check without evaluating a PR."
+          post_check failure "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event; refusing to pass a required check without evaluating a PR."
           emit ""
           exit 0
         fi
@@ -228,7 +228,7 @@ runs:
           if [ -z "$classify_pr" ]; then
             # The group ref names no pull request, so the gate holds. A failing required check
             # dequeues the group, and the pull request returns to the pool to re-enqueue.
-            post_check failure "merge_group head_ref \"${IN_QUEUE}\" — couldn't identify the queued PR to re-check its Epic; holding (dequeues) rather than passing blind."
+            post_check failure "merge_group head_ref \"${IN_QUEUE}\": couldn't identify the queued PR to re-check its Epic; holding (dequeues) rather than passing blind."
             emit ""
             exit 0
           fi
@@ -248,7 +248,7 @@ runs:
           labels=$(printf '%s' "$data" | jq -c '[.data.repository.pullRequest.labels.nodes[].name]')
           labels_truncated=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.labels.pageInfo.hasNextPage')
         else
-          post_check failure "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — holding rather than passing a required check blind; the reconcile sweep re-checks."
+          post_check failure "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries). Holding rather than passing a required check blind; the reconcile sweep re-checks."
           emit ""
           exit 0
         fi
@@ -260,7 +260,7 @@ runs:
         # The API read stops at 100 labels. A truncated page without `epic:<N>` does not prove the pull
         # request standalone, so the gate holds. The payload path reads the full label set.
         if [ -z "$epic" ] && [ "$labels_truncated" = "true" ]; then
-          post_check failure "PR #${classify_pr} has >100 labels; couldn't confirm it carries no \`epic:<N>\` label — holding rather than passing as standalone."
+          post_check failure "PR #${classify_pr} has >100 labels; couldn't confirm it carries no \`epic:<N>\` label. Holding rather than passing as standalone."
           emit ""
           exit 0
         fi
@@ -270,12 +270,12 @@ runs:
           # pause is read first, so a paused Epic never resolves its set.
           ps=0; epic_paused "$epic" || ps=$?
           if [ "$ps" -eq 0 ]; then
-            post_check failure "Epic #${epic} is automation:paused — holding its members. Remove the \`automation:paused\` label from Epic #${epic} to resume atomic landing."
+            post_check failure "Epic #${epic} is automation:paused; holding its members. Remove the \`automation:paused\` label from Epic #${epic} to resume atomic landing."
             emit ""
             exit 0
           fi
-          [ "$ps" -eq 2 ] && echo "::warning::couldn't read Epic #${epic} pause state (planning-repo read failed) — proceeding with normal readiness evaluation."
-          echo "PR #${classify_pr} carries \`epic:${epic}\` — resolving the authorized member set." | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$ps" -eq 2 ] && echo "::warning::couldn't read Epic #${epic} pause state (planning-repo read failed); proceeding with normal readiness evaluation."
+          echo "PR #${classify_pr} carries \`epic:${epic}\`; resolving the authorized member set." | tee -a "$GITHUB_STEP_SUMMARY"
           emit "$epic"
           exit 0
         fi
@@ -287,9 +287,9 @@ runs:
         parent=$(printf '%s' "$data" | jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[0].parent.number // empty')
 
         if [ -n "$parent" ]; then
-          post_check success "PR #${classify_pr} closes an issue under epic #${parent} but has no \`epic:${parent}\` label — treated as standalone. Add the \`epic:${parent}\` label to gate it for atomic cross-repo landing."
+          post_check success "PR #${classify_pr} closes an issue under epic #${parent} but has no \`epic:${parent}\` label: treated as standalone. Add the \`epic:${parent}\` label to gate it for atomic cross-repo landing."
         else
-          post_check success "PR #${classify_pr} has no \`epic:<N>\` label — standalone, nothing to coordinate."
+          post_check success "PR #${classify_pr} has no \`epic:<N>\` label: standalone, nothing to coordinate."
         fi
         emit ""
         exit 0
@@ -332,7 +332,7 @@ runs:
             '{name: "merge-gate", head_sha: $sha, status: "completed", conclusion: $concl,
               output: {title: "merge-gate", summary: $summary}}' \
             | GH_TOKEN="$CHECKS_TOKEN" gh api "repos/${REPO_FULL}/check-runs" --method POST --input - >/dev/null
-          echo "merge-gate=$1 @ ${HEAD_SHA:0:12} — $2" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "merge-gate=$1 @ ${HEAD_SHA:0:12}: $2" | tee -a "$GITHUB_STEP_SUMMARY"
         }
 
         where="on the PR head"
@@ -342,7 +342,7 @@ runs:
         # belongs to its own live set, so "[]" means the label index lags or a frozen member could
         # not be re-read. Neither confirms readiness, so the gate holds until a later run.
         if [ -z "${MEMBERS:-}" ] || [ "${MEMBERS}" = "[]" ]; then
-          post_check failure "Epic #${EPIC} — couldn't confirm the member set ${where} (resolve errored, or the label index is lagging); holding rather than passing on uncertainty. The reconcile sweep re-checks."
+          post_check failure "Epic #${EPIC}: couldn't confirm the member set ${where} (resolve errored, or the label index is lagging); holding rather than passing on uncertainty. The reconcile sweep re-checks."
           exit 0
         fi
 
@@ -355,7 +355,7 @@ runs:
         if [ -z "${IN_QUEUE:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
           if [ "$(printf '%s' "$MEMBERS" | jq --arg r "$REPO_FULL" --argjson n "${PR_NUMBER}" \
                 'any(.[]; .repo == $r and .number == $n)')" != "true" ]; then
-            post_check failure "Epic #${EPIC} — this PR carries the label but is not in the member set ${where}; holding (it belongs to a later wave, not this landing)."
+            post_check failure "Epic #${EPIC}: this PR carries the label but is not in the member set ${where}; holding (it belongs to a later wave, not this landing)."
             echo "retire_only=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -377,12 +377,12 @@ runs:
 
         total=$(printf '%s' "$MEMBERS" | jq '[.[] | select(.state != "MERGED")] | length')
         if [ -z "$unready" ]; then
-          post_check success "Epic #${EPIC} — all ${total} open member(s) merge-ready ${where}. Atomic landing OK."
+          post_check success "Epic #${EPIC}: all ${total} open member(s) merge-ready ${where}. Atomic landing OK."
           # Every open member is ready, so the capture step may write or retire the snapshot.
           echo "capture=true" >> "$GITHUB_OUTPUT"
         else
           count=$(printf '%s\n' "$unready" | grep -c '')
-          post_check failure "$(printf 'Epic #%s — holding for atomic landing %s: %s of %s member(s) not ready:\n%s' \
+          post_check failure "$(printf 'Epic #%s: holding for atomic landing %s. %s of %s member(s) not ready:\n%s' \
             "$EPIC" "$where" "$count" "$total" "$unready")"
         fi
 
@@ -504,7 +504,7 @@ runs:
               length > 0 and length <= 50
               and all(.[]; (.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z"))
                 and (.number | type == "number" and . == floor and . > 0 and . < 2147483648))' >/dev/null 2>&1; then
-          echo "::warning::Epic #${EPIC}: resolved member set is not snapshot-writable (empty, over 50 members, or malformed) — not capturing an activation snapshot this pass." \
+          echo "::warning::Epic #${EPIC}: resolved member set is not snapshot-writable (empty, over 50 members, or malformed); not capturing an activation snapshot this pass." \
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
@@ -559,15 +559,15 @@ runs:
             abandoned=$(printf '%s' "$MEMBERS" | jq -r '[.[] | select(.state == "CLOSED")
               | "\(.repo)#\(.number)"] | join(", ")' 2>/dev/null || true)
             if [ -n "$late" ]; then
-              echo "::warning::Epic #${EPIC}: the frozen wave has been open more than ${STUCK_WAVE_HOURS}h, still waiting on ${late}. Nothing labeled after it can land until it finishes — land those, close them, or label the Epic \`automation:paused\`." \
+              echo "::warning::Epic #${EPIC}: the frozen wave has been open more than ${STUCK_WAVE_HOURS}h, still waiting on ${late}. Nothing labeled after it can land until it finishes: land those, close them, or label the Epic \`automation:paused\`." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
             if [ -n "$abandoned" ]; then
-              echo "::warning::Epic #${EPIC}: the frozen wave cannot retire — ${abandoned} closed without merging, so it did not land. It stays frozen because the snapshot is the only record that those were members; resolve it with epic-rollback, which lets the wave retire once none of its members is open." \
+              echo "::warning::Epic #${EPIC}: the frozen wave cannot retire. ${abandoned} closed without merging, so it did not land. It stays frozen because the snapshot is the only record that those were members; resolve it with epic-rollback, which lets the wave retire once none of its members is open." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
           fi
-          echo "Epic #${EPIC}: snapshot already frozen, or stable but not yet aged — leaving it." \
+          echo "Epic #${EPIC}: snapshot already frozen, or stable but not yet aged; leaving it." \
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
@@ -575,7 +575,7 @@ runs:
         # A retire-only pass read a set it is not part of, so it may end the previous wave and capture
         # nothing.
         if [ "${RETIRE_ONLY:-}" = "true" ] && [ "$do" != "retire" ]; then
-          echo "Epic #${EPIC}: held for a later wave, and the current snapshot is not retirable this pass (${do}) — leaving it." \
+          echo "Epic #${EPIC}: held for a later wave, and the current snapshot is not retirable this pass (${do}); leaving it." \
             | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
@@ -589,16 +589,16 @@ runs:
           # merges between the wave's last merge and this pass. The tombstone names no members, and
           # both membership readers select on `status == "frozen"`, so they read it as no marker.
           payload=$(jq -cn --arg since "$now" '{status: "retired", since: $since}')
-          note="_Epic membership, RETIRED — the wave frozen here has $([ "$all_landed" = true ] && echo "fully landed" || echo "been rolled back"). The instant below separates its history from the next wave's; the next ready set captures its own. Do not edit._"
+          note="_Epic membership, RETIRED: the wave frozen here has $([ "$all_landed" = true ] && echo "fully landed" || echo "been rolled back"). The instant below separates its history from the next wave's; the next ready set captures its own. Do not edit._"
         else
           # `at` starts a pending marker's stabilization clock and records a frozen marker's freeze,
           # which STUCK_WAVE_HOURS measures from.
           payload=$(printf '%s' "$cur" | jq -c --arg status "$do" --arg at "$now" --arg since "$inherited_since" \
             '{status: $status, at: $at, members: .} + (if $since == "" then {} else {since: $since} end)')
           if [ "$do" = "frozen" ]; then
-            note="_Epic membership, FROZEN at activation by the merge-gate. The authoritative set for this landing — a later de-label, close, or relabel does not change it. Do not edit._"
+            note="_Epic membership, FROZEN at activation by the merge-gate. The authoritative set for this landing: a later de-label, close, or relabel does not change it. Do not edit._"
           else
-            note="_Epic membership, PENDING — stabilizing before it freezes (the label index is eventually consistent). Do not edit._"
+            note="_Epic membership, PENDING: stabilizing before it freezes (the label index is eventually consistent). Do not edit._"
           fi
         fi
 
@@ -696,7 +696,7 @@ runs:
               # name and never matches the live set.
               if ! jq -e -n --argjson m "${marker:-null}" --argjson decided "${decided:-null}" \
                    '($m | type == "object") and $m.status == "frozen" and $m == $decided' >/dev/null 2>&1; then
-                echo "Epic #${EPIC}: the snapshot moved on before this pass could retire it — leaving it." \
+                echo "Epic #${EPIC}: the snapshot moved on before this pass could retire it; leaving it." \
                   | tee -a "$GITHUB_STEP_SUMMARY"
                 rc=2
                 break
@@ -705,7 +705,7 @@ runs:
             # A freeze that lands between this check and the write below is still overwritten,
             # because the API has no conditional update.
             elif [ -n "$marker" ] && [ "$(printf '%s' "$marker" | jq -r '.status // ""')" = "frozen" ]; then
-              echo "Epic #${EPIC}: the snapshot is already frozen (a peer got there first) — leaving it." \
+              echo "Epic #${EPIC}: the snapshot is already frozen (a peer got there first); leaving it." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
               rc=2
               break
@@ -717,7 +717,7 @@ runs:
             # through since_of, so a corrupt boundary compares equal to the empty one replacing it, and
             # the repairing write goes through.
             if [ "$do" != "retire" ] && [ "$(since_of "$marker")" != "${inherited_since:-}" ]; then
-              echo "Epic #${EPIC}: the wave boundary moved while this pass was deciding — not overwriting it; the next pass inherits what is actually there." \
+              echo "Epic #${EPIC}: the wave boundary moved while this pass was deciding. Not overwriting it; the next pass inherits what is actually there." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
               rc=2
               break
@@ -734,7 +734,7 @@ runs:
                     and (($m.members // []) | sort_by((.repo | ascii_downcase), .number)) == $cur
                     and ($m.at | try (fromdateiso8601 | true) catch false)
                     and (($now | fromdateiso8601) - ($m.at | fromdateiso8601)) >= $thr' >/dev/null 2>&1; then
-              echo "::warning::Epic #${EPIC}: the member set moved while this pass was deciding — not freezing a stale set; the next pass re-derives." \
+              echo "::warning::Epic #${EPIC}: the member set moved while this pass was deciding. Not freezing a stale set; the next pass re-derives." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
               rc=2
               break
@@ -754,7 +754,7 @@ runs:
             [ "$attempt" -lt 3 ] && sleep 2
           done
           if [ "$rc" = 1 ] && [ -n "${err:-}" ]; then
-            echo "::warning::Epic #${EPIC}: last write error — ${err}"
+            echo "::warning::Epic #${EPIC}: last write error: ${err}"
           fi
           rm -f "$bodyf" "$outf"
           return "$rc"
@@ -765,7 +765,7 @@ runs:
         snapshot_dry_run=$(printf '%s' "${SNAPSHOT_DRY_RUN:-false}" | tr '[:upper:]' '[:lower:]')
         if [ "$snapshot_dry_run" = true ]; then
           {
-            echo "Epic #${EPIC}: dry run — would write a \"${do}\" activation snapshot. The Epic body is untouched, so a repeated pass reports this same transition."
+            echo "Epic #${EPIC}: dry run; would write a \"${do}\" activation snapshot. The Epic body is untouched, so a repeated pass reports this same transition."
             echo "  set judged ($(printf '%s' "$cur" | jq 'length') member(s)):"
             printf '%s' "$cur" | jq -r '.[] | "    \(.repo)#\(.number)"'
             echo "  payload: ${payload}"
@@ -779,7 +779,7 @@ runs:
         if [ "$do" = "frozen" ]; then
           if ! stale=$(rolled_back_label) \
             || { [ "$stale" = true ] && ! gh api -X DELETE "repos/${ORG}/${PLANNING_REPO}/issues/${EPIC}/labels/rolled-back" >/dev/null 2>&1; }; then
-            echo "::warning::Epic #${EPIC}: could not confirm that no earlier wave's rolled-back label remains — freezing on a later pass." \
+            echo "::warning::Epic #${EPIC}: could not confirm that no earlier wave's rolled-back label remains; freezing on a later pass." \
               | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -787,11 +787,11 @@ runs:
 
         write_marker "$regionf" "$marker" && wm=0 || wm=$?
         if [ "$wm" = 0 ] && [ "$do" = "retire" ]; then
-          echo "Epic #${EPIC}: the wave $([ "$all_landed" = true ] && echo landed || echo "was rolled back") — activation snapshot retired at ${now}; the next ready set captures its own." \
+          echo "Epic #${EPIC}: the wave $([ "$all_landed" = true ] && echo landed || echo "was rolled back"). Activation snapshot retired at ${now}; the next ready set captures its own." \
             | tee -a "$GITHUB_STEP_SUMMARY"
         elif [ "$wm" = 0 ]; then
           n=$(printf '%s' "$cur" | jq 'length')
-          echo "Epic #${EPIC}: ${do} activation snapshot in place — ${n} member(s)." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Epic #${EPIC}: ${do} activation snapshot in place, ${n} member(s)." | tee -a "$GITHUB_STEP_SUMMARY"
         elif [ "$wm" = 2 ]; then
           : # yielded, and write_marker logged why
         else

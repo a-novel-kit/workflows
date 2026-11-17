@@ -116,13 +116,13 @@ jobs:
             fi
 
             if [ -z "$exp" ]; then
-              echo "  - ${name} (${login}): no expiry metadata — skipped" >> "$GITHUB_STEP_SUMMARY"
+              echo "  - ${name} (${login}): no expiry metadata, skipped" >> "$GITHUB_STEP_SUMMARY"
               return 1
             fi
 
             exp_ts=$(date -u -d "$exp" +%s 2>/dev/null || echo 0)
             if [ "$exp_ts" -eq 0 ]; then
-              echo "::warning::couldn't parse expiry \"$exp\" for \"$name\" — skipping."
+              echo "::warning::couldn't parse expiry \"$exp\" for \"$name\"; skipping."
               return 1
             fi
 
@@ -183,7 +183,7 @@ jobs:
               "[New fine-grained PAT](https://github.com/settings/personal-access-tokens/new)" \
               " -> **owner**: ${ORG}" \
               " -> **Scope**: ${scope}" \
-              " -> **Permissions**: ${perms:-—}" \
+              " -> **Permissions**: ${perms:-none}" \
               "" '```' \
               "gh secret set <SECRET_NAME> --org ${ORG} --app actions --visibility all --body <pat>" \
               '```')
@@ -232,13 +232,13 @@ jobs:
           # or failures. $1 = description, $2 = payload, $3 = who the ping reaches.
           send() {
             if [ "$dry" = true ]; then
-              { echo "[dry-run] would post for ${name} — ${reason} (ping: $3):"; printf '%s\n' "$1"; } | tee -a "$GITHUB_STEP_SUMMARY"
+              { echo "[dry-run] would post for ${name}, ${reason} (ping: $3):"; printf '%s\n' "$1"; } | tee -a "$GITHUB_STEP_SUMMARY"
               posted=$((posted + 1))
               return 0
             fi
 
             if [ -z "${WEBHOOK:-}" ]; then
-              echo "::warning::no webhook — can't post for ${name} (${reason})."
+              echo "::warning::no webhook; can't post for ${name} (${reason})."
               return 0
             fi
 
@@ -247,7 +247,7 @@ jobs:
               return 0
             fi
             posted=$((posted + 1))
-            echo "Posted for ${name} — ${reason} (ping: $3)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Posted for ${name}, ${reason} (ping: $3)." | tee -a "$GITHUB_STEP_SUMMARY"
             sleep 1   # be polite to the webhook rate limit between per-token posts
           }
 
@@ -282,7 +282,7 @@ jobs:
           total=0
           posted=0
           failures=0
-          hdr=$([ "$TEST_RUN" = "true" ] && echo "### ${ORG} — 🧪 TEST RUN (all PATs, admin only)" || echo "### ${ORG} — fine-grained PAT inventory")
+          hdr=$([ "$TEST_RUN" = "true" ] && echo "### ${ORG}: 🧪 TEST RUN (all PATs, admin only)" || echo "### ${ORG}: fine-grained PAT inventory")
           echo "$hdr" >> "$GITHUB_STEP_SUMMARY"
 
           while IFS=$'\x1f' read -r name login exp expired granted repo_sel perms; do
@@ -297,15 +297,15 @@ jobs:
             # message matches a genuine post; the 🧪 markers stay in the run summary.
             if [ "$TEST_RUN" = "true" ] && [ -z "$reason" ]; then reason="$status"; fi
             if [ -z "$reason" ]; then
-              echo "  - ${name} (${login}): ${status} — no ping today" >> "$GITHUB_STEP_SUMMARY"
+              echo "  - ${name} (${login}): ${status}, no ping today" >> "$GITHUB_STEP_SUMMARY"
               continue
             fi
-            echo "  - ${name} (${login}): ${status} — PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
+            echo "  - ${name} (${login}): ${status}, PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
 
             target="admin"
             if [ -z "${DEFAULT_MENTION:-}" ]; then
               target="no-one"
-              echo "::warning::no admin (default_mention) configured — posting ${name} without a ping."
+              echo "::warning::no admin (default_mention) configured; posting ${name} without a ping."
             fi
 
             desc=$(message)
