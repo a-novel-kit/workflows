@@ -23,6 +23,9 @@ function guardOutput(
     commits = [commit()],
     statuses = [status("success")],
     choice = "renovate/x anovelbot-dependencies true",
+    strict = false,
+    labels = "",
+    labelsFail = false,
   } = {}
 ) {
   const w = workspace(t);
@@ -30,7 +33,10 @@ function guardOutput(
   w.stub(
     "gh",
     `const args = process.argv.slice(2);
-    if (args[0] === "pr") console.log(process.env.AUTHORS);
+    if (args[0] === "pr" && args.includes("labels")) {
+      if (process.env.LABELS_FAIL) process.exit(1);
+      console.log(process.env.LABELS);
+    } else if (args[0] === "pr") console.log(process.env.AUTHORS);
     else if (args[1] === "graphql") console.log(process.env.CHOICE);
     else if (args.some((arg) => arg.includes("/statuses"))) console.log(JSON.stringify([JSON.parse(process.env.STATUSES)]));
     else if (args.includes("--slurp")) console.log(JSON.stringify([JSON.parse(process.env.COMMITS)]));`
@@ -47,8 +53,13 @@ function guardOutput(
     COMMITS: JSON.stringify(commits),
     STATUSES: JSON.stringify(statuses),
     CHOICE: choice,
+    STRICT: String(strict),
+    LABELS: labels,
+    LABELS_FAIL: labelsFail ? "1" : "",
   };
-  succeeds(w.bash(guard, env));
+  const result = w.bash(guard, env);
+  if (labelsFail) return { status: result.status, output: w.read("output") };
+  succeeds(result);
   return w.read("output");
 }
 
@@ -96,4 +107,17 @@ test("auto-approve reviews a head once", (t) => {
     // A repeated run still arms auto-merge, so only the review is skipped.
     assert.equal(output.includes("skip=true"), false, name);
   }
+});
+
+test("strict auto-approve holds a breaking release on its live labels, and a failed read approves nothing", (t) => {
+  const cases = [
+    ["a strict breaking release", { strict: true, labels: "dependencies\nbreaking-release" }, true],
+    ["a strict release pin", { strict: true, labels: "dependencies" }, false],
+    // Only strict repositories hold on the label.
+    ["a breaking release elsewhere", { labels: "breaking-release" }, false],
+  ];
+  for (const [name, options, skipped] of cases) assert.equal(skips(t, options), skipped, name);
+  const failed = guardOutput(t, { strict: true, labelsFail: true });
+  assert.notEqual(failed.status, 0);
+  assert.doesNotMatch(failed.output, /approved=true/);
 });

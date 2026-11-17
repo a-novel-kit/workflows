@@ -12,9 +12,6 @@ name: auto-approve-dependabot (reusable)
 #
 # It also approves a first-party package or image only with its release proof. Any workflow run of a
 # repository can publish its packages, so an update to a version no release built waits for a person.
-#
-# Dependabot's own pull request events read no secret, so the `dependabot` jobs gate and approve its
-# pull requests from the trusted completion of their CI run instead, through gates-run.yaml.
 on:
   workflow_call:
     inputs:
@@ -39,18 +36,12 @@ on:
         description: >-
           Set for a repository whose merges reach production. The engine then approves only a release
           pin, a version update Renovate itself put on auto-merge, or a refresh of Google's service
-          ranges to exactly what Google publishes. A pull request labeled `breaking-release` waits for
-          a maintainer, whom pin-release requests. Every other bot pull request waits for a person.
+          ranges to exactly what Google publishes. A pull request labeled `breaking-release`, read live,
+          waits for a maintainer, whom pin-release requests. Every other bot pull request waits for a
+          person.
         required: false
         type: boolean
         default: false
-      kill_switch:
-        description: >-
-          Org-wide halt value, threaded from the caller's AGENT_KILL_SWITCH variable. The gates of a
-          Dependabot pull request post failing checks while it is engaged.
-        required: false
-        type: string
-        default: ""
     secrets:
       bot_private_key:
         description: Private key (PEM) of the App that client_id names.
@@ -64,10 +55,9 @@ jobs:
       name: governance
       deployment: false
     if: >-
-      (github.event_name == 'status' ||
+      github.event_name == 'status' ||
       github.event.pull_request.user.login == inputs.dependency_bot_login ||
-      github.event.pull_request.user.login == inputs.dependabot_security_login) &&
-      !(inputs.strict && contains(github.event.pull_request.labels.*.name, 'breaking-release'))
+      github.event.pull_request.user.login == inputs.dependabot_security_login
     # A pull request's opening, its auto-merge and its stability status reach one head within seconds.
     # Their runs take turns, so the guard sees the approval an earlier one made: each approval wakes
     # every gate again.
@@ -137,8 +127,21 @@ jobs:
           BOT: ${{ steps.pr.outputs.author }}
           SHA: ${{ steps.pr.outputs.sha }}
           AGENT: ${{ steps.token.outputs.app-slug }}
+          STRICT: ${{ inputs.strict }}
         run: |
           set -euo pipefail
+          # A strict repository's breaking release waits for a maintainer. pin-release adds the label in
+          # a second request after the pull request opens, and a `status` event carries no pull request,
+          # so the hold reads the live labels; a failed read fails the step, which approves nothing.
+          if [ "$STRICT" = true ]; then
+            labels=$(gh pr view "$PR" --json labels --jq '.labels[].name')
+            if grep -qx breaking-release <<<"$labels"; then
+              echo "::notice::Not auto-approving: labeled breaking-release; a maintainer approves it."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
           authors=$(gh pr view "$PR" --json commits \
             -q '[.commits[].authors[].login // "unknown"] | unique | sort | join(",")')
           if [ "$authors" != "$BOT" ]; then
@@ -233,117 +236,3 @@ jobs:
         run: |
           set -euo pipefail
           gh pr merge "$PR" --auto --squash --match-head-commit "$SHA"
-
-  # Dependabot's own pull request events read no Actions secret, so the trusted completion of its CI
-  # run, which runs the caller's default-branch copy, gates and approves its pull request instead. The
-  # job reads only metadata: it never checks out the pull request or reads its artifacts.
-  dependabot:
-    if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.actor.login == inputs.dependabot_security_login &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'pull_request')
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    outputs:
-      number: ${{ steps.pr.outputs.number }}
-      node: ${{ steps.pr.outputs.node }}
-      sha: ${{ steps.pr.outputs.sha }}
-    steps:
-      - name: Resolve the current Dependabot pull request
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          BOT: ${{ inputs.dependabot_security_login }}
-        run: |
-          set -euo pipefail
-          [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
-          candidates=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls")
-          pr=$(jq -ce --arg repo "$GITHUB_REPOSITORY" --arg sha "$HEAD_SHA" --arg bot "$BOT" '
-            [ .[][] | select(.state == "open" and .draft == false and
-              .head.repo.full_name == $repo and .base.repo.full_name == $repo and
-              .base.ref == .base.repo.default_branch and
-              .head.sha == $sha and .user.login == $bot) ] |
-            if length == 0 then {} elif length == 1 then .[0]
-            else error("Ambiguous Dependabot pull request") end' <<< "$candidates")
-          if [ "$pr" = '{}' ]; then
-            printf 'The CI commit no longer identifies an open Dependabot pull request.\n'
-            exit 0
-          fi
-          number=$(jq -r '.number' <<< "$pr")
-          commits=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$number/commits")
-          # An author is only a claimed email; GitHub signs (as web-flow) only the bot's own commits.
-          if ! jq -e --arg bot "$BOT" 'add | length > 0 and all(.[]; .author.login == $bot and
-            .committer.login == "web-flow" and .commit.verification.verified)' <<< "$commits" >/dev/null; then
-            printf 'Dependabot pull request contains commits GitHub did not sign for the bot; human review is required.\n'
-            exit 0
-          fi
-          printf 'number=%s\nnode=%s\nsha=%s\n' "$number" "$(jq -r '.node_id' <<< "$pr")" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-
-  dependabot-gates:
-    needs: [dependabot]
-    if: needs.dependabot.outputs.number != ''
-    permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-    uses: a-novel-kit/workflows/.github/workflows/gates-run.yaml@v1.86.0
-    with:
-      client_id: ${{ inputs.client_id }}
-      kill_switch: ${{ inputs.kill_switch }}
-      dependabot_security_login: ${{ inputs.dependabot_security_login }}
-      pull_request_number: ${{ needs.dependabot.outputs.number }}
-      head_sha: ${{ needs.dependabot.outputs.sha }}
-    secrets:
-      app_private_key: ${{ secrets.bot_private_key }}
-
-  # Approves the verified head and queues it: the merge queue re-validates the required checks the
-  # gates just posted.
-  dependabot-approve:
-    needs: [dependabot, dependabot-gates]
-    runs-on: ubuntu-latest
-    # The App key is a secret of the caller's governance environment, which no feature branch opens.
-    environment:
-      name: governance
-      deployment: false
-    concurrency:
-      group: dependabot-${{ needs.dependabot.outputs.sha }}
-      cancel-in-progress: false
-    # Every write uses the App token.
-    permissions: {}
-    steps:
-      - name: Mint approval token
-        id: token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ inputs.client_id }}
-          private-key: ${{ secrets.bot_private_key }}
-          permission-contents: write
-          permission-pull-requests: write
-
-      - name: Approve and queue the verified commit
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          PR_NUMBER: ${{ needs.dependabot.outputs.number }}
-          PR_NODE: ${{ needs.dependabot.outputs.node }}
-          HEAD_SHA: ${{ needs.dependabot.outputs.sha }}
-        run: |
-          set -euo pipefail
-          current=$(gh api graphql -f query='query($pr: ID!) {
-            node(id: $pr) { ... on PullRequest { state headRefOid mergeQueueEntry { id } } }
-          }' -f pr="$PR_NODE")
-          if ! jq -e --arg sha "$HEAD_SHA" '.data.node |
-            .state == "OPEN" and .headRefOid == $sha and .mergeQueueEntry == null' <<< "$current" >/dev/null; then
-            printf 'The pull request changed, closed, or already entered the queue.\n'
-            exit 0
-          fi
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --method POST \
-            -f event=APPROVE -f commit_id="$HEAD_SHA" >/dev/null
-          gh api graphql -f query='mutation($pr: ID!, $sha: GitObjectID!) {
-            enqueuePullRequest(input: {pullRequestId: $pr, expectedHeadOid: $sha}) {
-              mergeQueueEntry { id }
-            }
-          }' -f pr="$PR_NODE" -f sha="$HEAD_SHA"

@@ -1,7 +1,7 @@
 # Upgrading to NEXT
 
-The governance gates run from one reusable `gates-run.yaml`, the Dependabot path moves into
-`auto-approve-dependabot-run.yaml`, board ids and privileged labels default inside the actions, and the
+The governance gates run from one reusable `gates-run.yaml`, the Dependabot path from
+`dependabot-run.yaml`, board ids and privileged labels default inside the actions, and the
 `go-tools` preset matches tool modfiles in any directory. Every caller keeps working unchanged.
 
 ## Do I need to act?
@@ -27,51 +27,37 @@ jobs:
     uses: a-novel-kit/workflows/.github/workflows/gates-run.yaml@<tag>
     with:
       client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
-      kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
       dependabot_security_login: ${{ vars.DEPENDABOT_SECURITY_LOGIN }}
     secrets:
       app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
 ```
 
-The `notify-review` job stays as it is. The checks keep their names, since the [Agent] App posts them,
+The engine reads the org's `AGENT_KILL_SWITCH` itself. The `notify-review` job stays as it is. The checks keep their names, since the [Agent] App posts them,
 so no required check changes.
 
-## Drop the `dependabot` job from `auto-approve-dependabot.yaml`
+## Call `dependabot-run.yaml` from the `dependabot` job
 
-The engine now resolves, gates and approves a Dependabot pull request from the completion of its CI
-run. The caller's job admits that event, grants the reads the gates make, and threads the halt:
+The `dependabot` job of `auto-approve-dependabot.yaml` runs its resolve, gate and approve steps through
+`dependabot-run.yaml`, which takes the job's conditions and reads the halt itself. The `auto-approve` job
+stays as it is:
 
 ```yaml
-jobs:
-  auto-approve:
-    if: >-
-      github.event_name == 'workflow_run' ||
-      github.actor != vars.DEPENDABOT_SECURITY_LOGIN &&
-      (github.event.action != 'auto_merge_enabled' || github.event.sender.login == vars.DEPENDENCY_BOT_LOGIN) &&
-      (github.event.pull_request.user.login == vars.DEPENDENCY_BOT_LOGIN ||
-       github.event.pull_request.user.login == vars.DEPENDABOT_SECURITY_LOGIN ||
-       (github.event_name == 'status' && github.event.context == 'renovate/stability-days' &&
-        github.event.state == 'success'))
-    permissions:
-      statuses: read
-      contents: read
-      attestations: read
-      packages: read
-      pull-requests: read
-      issues: read
-    uses: a-novel-kit/workflows/.github/workflows/auto-approve-dependabot-run.yaml@<tag>
-    with:
-      client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
-      dependency_bot_login: ${{ vars.DEPENDENCY_BOT_LOGIN }}
-      dependabot_security_login: ${{ vars.DEPENDABOT_SECURITY_LOGIN }}
-      strict: ${{ github.repository == 'a-novel/infra' }}
-      kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
-    secrets:
-      bot_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
+dependabot:
+  if: github.event_name == 'workflow_run'
+  permissions:
+    contents: read
+    pull-requests: read
+    issues: read
+  uses: a-novel-kit/workflows/.github/workflows/dependabot-run.yaml@<tag>
+  with:
+    client_id: ${{ vars.AGENT_BOT_CLIENT_ID }}
+    dependabot_security_login: ${{ vars.DEPENDABOT_SECURITY_LOGIN }}
+  secrets:
+    app_private_key: ${{ secrets.AGENT_BOT_PRIVATE_KEY }}
 ```
 
-In strict mode the engine holds a pull request labeled `breaking-release` itself, so a-novel/infra
-drops that condition from its caller.
+In strict mode `auto-approve-dependabot-run.yaml` reads the pull request's live labels and holds one
+labeled `breaking-release`, so a-novel/infra may drop its own hold.
 
 ## Drop the board id and the privileged labels
 

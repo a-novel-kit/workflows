@@ -153,7 +153,7 @@ function network(token) {
         subject,
         "--repo",
         producer,
-        "--signer-regex",
+        "--cert-identity-regex",
         signer,
         "--source-ref",
         ref,

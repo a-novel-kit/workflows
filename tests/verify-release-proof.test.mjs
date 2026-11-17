@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { addedVersions, lockfilePackages, missingProof } from "../generic-actions/verify-release-proof/verify.mjs";
@@ -249,12 +250,18 @@ test("verify-release-proof withholds an image no release attested and passes a d
       assert.deepEqual(verify.slice(3), [
         "--repo",
         "a-novel/service-json-keys",
-        "--signer-regex",
+        "--cert-identity-regex",
         "^https://github\\.com/a-novel/service-json-keys/\\.github/workflows/(main|release)\\.yaml@refs/tags/v2\\.11\\.0$",
         "--source-ref",
         "refs/tags/v2.11.0",
         "--deny-self-hosted-runners",
       ]);
+      // The stub takes any flag, so the installed gh checks the list: each flag must be one it documents.
+      const help = spawnSync("gh", ["attestation", "verify", "--help"], { encoding: "utf8" });
+      if (help.error) t.diagnostic("gh is not installed; the flag check is skipped");
+      else
+        for (const flag of verify.filter((arg) => arg.startsWith("--")))
+          assert.match(help.stdout, new RegExp(`${flag}\\b`), flag);
     } else assert.match(out, /adds no first-party version/);
     // The checked diff is the given commit's, so the approval names the commit that was read.
     assert.match(w.read("gh.log"), new RegExp(`compare/master\\.\\.\\.${"e".repeat(40)}`));

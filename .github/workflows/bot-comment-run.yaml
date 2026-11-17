@@ -106,6 +106,12 @@ jobs:
             echo "::error::comments must be a non-empty JSON array"
             exit 1
           fi
+          # The post loop streams each item's fields NUL-separated, so a NUL inside a body would shift
+          # the fields after it, and the next number would come from unvalidated body text.
+          if [ -n "$COMMENTS" ] && ! printf '%s' "$COMMENTS" | jq -e 'all(.[]; (.body // "") | tostring | index("\u0000") == null)' >/dev/null 2>&1; then
+            echo "::error::a comment body must not hold a NUL character"
+            exit 1
+          fi
           # Each number and reply_to becomes a segment of the API path, so each
           # must be a bare positive integer. The single form is checked as the
           # one-item batch the post step builds from it. \A and \z anchor the

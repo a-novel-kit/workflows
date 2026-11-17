@@ -12,7 +12,7 @@ const tfvars = /(^|\/)terraform\.tfvars$|^environments\/production\/cluster\/rel
 const serviceRangesFile = /(^|\/)google-service-ranges\.json$/;
 const releasePin = /"ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}"/;
 const releaseRef = /ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}/g;
-// A Dockerfile that builds on a release image takes the very digest its terraform.tfvars pins.
+// A Dockerfile that builds on a release image takes the very digest its pin file pins.
 const dockerfile = /(^|\/)[^/]*Dockerfile$/;
 const releaseBase = /^FROM (ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64})(\s+AS\s+\S+)?\s*$/i;
 // Checksums the toolchain verifies on its own, so their churn cannot change what runs.
@@ -117,7 +117,7 @@ const pairsUp = (filename, { removed, added }) =>
 /** The commit pins of a line, joined, so two lines compare by the commits they name. */
 const commitPins = (text) => text.match(/@[0-9a-f]{40}\b/g)?.join();
 
-/** The release references added to terraform.tfvars, which deploy verifies against each tag's attestation. */
+/** The release references added to pin files, which deploy verifies against each tag's attestation. */
 function tfvarsPins(files) {
   const references = files
     .filter((file) => tfvars.test(file.filename) && file.patch !== undefined)
@@ -128,8 +128,8 @@ function tfvarsPins(files) {
 }
 
 /**
- * A file changes nothing but release pins: terraform.tfvars pins, or a Dockerfile's release base whose
- * digest the same pull request pins in terraform.tfvars.
+ * A file changes nothing but release pins: pin file lines, or a Dockerfile's release base whose digest
+ * the same pull request pins in a pin file.
  */
 function pinsOnly(file, pinned) {
   const isTfvars = tfvars.test(file.filename);

@@ -141,8 +141,9 @@ runs:
         applied="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/events?per_page=100" --paginate \
           --jq '.[] | select(.event == "labeled") | [.label.name, .actor.login, .actor.type] | @tsv')" ||
           hold "the label history"
-        privileged="$(tr ',' '\n' <<<"${PRIVILEGED:-$(cat "$GITHUB_ACTION_PATH/../privileged-labels.txt")}" |
-          sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^#/d; /^$/d')"
+        # An assignment fails the step when the list is missing, so no passing check is posted.
+        list=${PRIVILEGED:-$(cat "$GITHUB_ACTION_PATH/../privileged-labels.txt")}
+        privileged="$(tr ',' '\n' <<<"$list" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^#/d; /^$/d')"
 
         problems=""
         if [ "$bot_written" = false ] && [ -z "$approver" ]; then

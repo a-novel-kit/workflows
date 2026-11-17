@@ -105,6 +105,9 @@ move a tag.
 | `collect-warnings`       | Merge the warnings an org's default-branch runs raised in a window into one entry each, minus ignore rules.      |
 | `derive-status`          | Derive the board Status of the issues a PR closes from the PR's current state.                                   |
 | `detect-partial-landing` | Freeze an Epic's remaining siblings when one drops out mid-landing; the writer behind the `epic-freeze` check.   |
+| `discord-dispatch`       | Deprecated, use `chat-dispatch`, which it runs.                                                                  |
+| `discord-post`           | Deprecated, use `chat-post`, which it runs.                                                                      |
+| `discord-users`          | Deprecated, use `chat-users`, which it runs; its `chat_ids` output replaces `discord_ids`.                       |
 | `enable-auto-merge`      | Enable native auto-merge on a PR as the [Agent] App, so it queues once green.                                    |
 | `epic-membership`        | Resolve an Epic's member set: its frozen activation snapshot, else the open PRs labeled `epic:<N>`.              |
 | `epic-rollback`          | Revert a landed Epic's merged PRs through a new rollback Epic that lands the reverts together.                   |
@@ -305,6 +308,7 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | `auto-approve-dependabot-run` | Approve and queue a repository's trusted dependency-bot PRs once their update has aged.                          |
 | `backport-run`                | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.          |
 | `bot-comment-run`             | Post comments as the org's [Agent] App for `a-novel core bot-comment`, scoped to one repository.                 |
+| `dependabot-run`              | Gate, approve and queue a Dependabot security PR from the completion of its CI run.                              |
 | `epic-rollback-run`           | Admin-gated dispatch of `epic-rollback`, behind a typed confirmation.                                            |
 | `gates-run`                   | Run a PR's governance gates in one job: `merge-gate`, `epic-freeze`, `review-gate` and the board Status.         |
 | `notify-audit-run`            | Alert the org's Fluxer security channel minutes after an audit-log entry grants access or skips a rule.          |

@@ -1,8 +1,9 @@
 name: revoke-labels
 description: >
-  Remove a pull request's head-bound labels after a push. Each privileged label approves the head it
-  was added on, so a push makes it stale and a reviewer adds it again for the new head. A label the
-  pull request does not carry, or that an earlier run already removed, is skipped.
+  Remove the triggering pull request's head-bound labels after a push. Each privileged label approves
+  the head it was added on, so a push makes it stale and a reviewer adds it again for the new head. A
+  label the pull request does not carry, or that an earlier run already removed, is skipped. It runs
+  on a pull_request event, whose payload lists the labels the push found.
 
 inputs:
   github_token:
@@ -15,10 +16,6 @@ inputs:
     description: >
       Labels to remove, separated by newlines or commas. Empty removes every label of the fleet's
       privileged list, `generic-actions/privileged-labels.txt`, which review-gate also reads.
-  pull_request_number:
-    required: false
-    default: ${{ github.event.pull_request.number }}
-    description: Pull request to clean. Defaults to the triggering one.
 
 runs:
   using: composite
@@ -28,10 +25,14 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         LABELS: ${{ inputs.labels }}
-        PR: ${{ inputs.pull_request_number }}
+        PR: ${{ github.event.pull_request.number }}
         CARRIED: ${{ toJSON(github.event.pull_request.labels.*.name) }}
       run: |
         set -euo pipefail
+        if [ -z "$PR" ]; then
+          echo "::error::revoke-labels runs on a pull_request event."
+          exit 1
+        fi
         wanted=${LABELS:-$(cat "$GITHUB_ACTION_PATH/../privileged-labels.txt")}
         # The event lists the labels the pull request carried when the push landed, so only those cost
         # a call.

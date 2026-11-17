@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { join } from "node:path";
 import { step, succeeds, workspace } from "./helpers.mjs";
 
 const gate = step("generic-actions/review-gate/action.yaml", "Evaluate and post review-gate");
@@ -22,6 +23,7 @@ function evaluate(
     fail = "",
     postFails = false,
     privileged = "allow-dependency-change, with-feature-env",
+    actionPath,
   } = {}
 ) {
   const w = workspace(t);
@@ -56,6 +58,7 @@ function evaluate(
     GITHUB_REPOSITORY: "a-novel/service-authentication",
     AGENT: "anovelbot-agent",
     PRIVILEGED: privileged,
+    ...(actionPath && { GITHUB_ACTION_PATH: actionPath }),
     EVENT: event,
     PR: "7",
     AUTHOR_TYPE: author,
@@ -184,4 +187,15 @@ test("an empty privileged_labels input reads the fleet's list", (t) => {
   const byDev = (label) => ({ reviews, privileged: "", labels: [label], applied: [[label, "dev", "User"]] });
   assert.equal(evaluate(t, byDev("allow-screenshot-change")).conclusion, "failure");
   assert.equal(evaluate(t, byDev("documentation")).conclusion, "success");
+});
+
+test("a missing privileged list fails the step, so no passing check is posted", (t) => {
+  const w = workspace(t);
+  const result = evaluate(t, {
+    reviews: [approve("lead")],
+    privileged: "",
+    postFails: true,
+    actionPath: join(w.cwd, "x"),
+  });
+  assert.notEqual(result.status, 0);
 });

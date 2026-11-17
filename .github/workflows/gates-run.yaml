@@ -8,6 +8,10 @@ name: gates (reusable)
 # The [Agent] App posts each check under the integration id the ruleset requires, so the job only
 # runs them, under an id kept clear of the check names. Each step runs whatever the others
 # concluded, so one broken gate leaves the rest posting.
+#
+# The kill switch is the caller org's `AGENT_KILL_SWITCH` variable, which this workflow reads itself, so
+# no caller can leave the halt out. Engaged, merge-gate and epic-freeze post failing checks, no
+# auto-merge is armed and no board Status is written.
 on:
   workflow_call:
     inputs:
@@ -17,14 +21,6 @@ on:
           writes the board. Its identity fixes the integration id the rulesets require.
         required: true
         type: string
-      kill_switch:
-        description: >-
-          Org-wide halt value, threaded from the caller's AGENT_KILL_SWITCH variable. Any value but an
-          explicit off value (empty, 0, off, false, no, disabled) makes merge-gate and epic-freeze
-          post failing checks, arms no auto-merge and writes no board Status.
-        required: false
-        type: string
-        default: ""
       dependabot_security_login:
         description: >-
           Login of the Dependabot security-updates bot. Its own pull request events read no secret,
@@ -86,7 +82,7 @@ jobs:
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
-          kill_switch: ${{ inputs.kill_switch }}
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
           # An empty `with:` value overrides the action's default, so the event fallback lives here.
           pull_request_number: ${{ inputs.pull_request_number || steps.relay.outputs.pull_request_number || github.event.pull_request.number }}
           head_sha: ${{ inputs.head_sha || steps.relay.outputs.head_sha || github.event.pull_request.head.sha }}
@@ -105,7 +101,7 @@ jobs:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
           dry_run: "false"
-          kill_switch: ${{ inputs.kill_switch }}
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
       # The required check that fails a member of an Epic that landed partially. The reconcile-board
       # sweep runs the other half. The check also posts on each merge-queue group's head, or a queued
@@ -125,7 +121,7 @@ jobs:
           merge_group_head_ref: ${{ steps.relay.outputs.merge_group_head_ref }}
           # Posts the epic-freeze check-run on this head: a success, or a failure on a partial landing.
           dry_run: "false"
-          kill_switch: ${{ inputs.kill_switch }}
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
 
       # The required check that a maintainer, an admin or the [Agent] App approved a person's head,
       # and that one of them applied every privileged label last. Anyone with write access can approve
@@ -162,4 +158,4 @@ jobs:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
           pull_request_number: ${{ steps.relay.outputs.pull_request_number || github.event.pull_request.number }}
-          kill_switch: ${{ inputs.kill_switch }}
+          kill_switch: ${{ vars.AGENT_KILL_SWITCH }}
