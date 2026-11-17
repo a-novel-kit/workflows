@@ -1,7 +1,7 @@
 name: release-train (reusable)
 
-# Releases every repository a landed Epic touched, from one admin dispatch. Each governed repository
-# calls this engine from its own `release-train.yaml` dispatch.
+# Releases every repository a landed Epic touched, from one admin dispatch. Each org's `.github`
+# repository calls this engine from its `release-train.yaml` dispatch, the org's only copy.
 on:
   workflow_call:
     inputs:
