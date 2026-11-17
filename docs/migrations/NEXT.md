@@ -13,8 +13,11 @@ below deletes lines from a repository's governance copies. Make them once the re
 this release or a later one, after Renovate's bump has merged. A deprecated path logs a warning that
 names its successor, and the daily CI digest collects them.
 
-Two changes act on their own:
+Three changes act on their own:
 
+- The five lint actions check the repository out again inside a job that already did, and that
+  checkout removes untracked files earlier steps left in the workspace. No caller depends on such files
+  today; see [Drop the checkout before the lint actions](#drop-the-checkout-before-the-lint-actions).
 - A Node lane on a pull request now tests GitHub's merge commit, as the Go lanes do, instead of the
   branch tip. A job that must test the head passes it, as `test-playwright` and `lint-translations` do.
 - `build-actions/docker` no longer accepts `version`, `secret_envs` or `secret_files`. No repository in
@@ -259,9 +262,15 @@ warning and loses the input's effect: pass build secrets through `secrets`.
 `build-actions/docker` takes `run_args_file`, a file holding the smoke run's flags in the syntax of
 `run_args`: quoted values and `$NAME` references, no command substitution. Keep one file per image
 under `builds/`, such as `builds/migrations.run-args` below, and pass it from every workflow that
-builds the image, so `main.yaml` and `release.yaml` start it alike. Setting both inputs fails.
+builds the image, so `main.yaml` and `release.yaml` start it alike. Setting both inputs fails. A line
+starting with `#` holds the reason for a flag.
+
+Pass the file even where a job skips the smoke run, as `main.yaml` does for a standalone image: every
+build checks the file before it builds, so the pull request run of `main.yaml` catches a broken file
+before a release needs it.
 
 ```text
+# The migrations job reads the discrete connection settings.
 -e POSTGRES_HOST="${POSTGRES_HOST}"
 -e POSTGRES_PORT="${POSTGRES_PORT}"
 ```

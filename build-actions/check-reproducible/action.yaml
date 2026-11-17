@@ -33,12 +33,13 @@ runs:
             --output "type=oci,dest=$RUNNER_TEMP/$1.tar,rewrite-timestamp=true" \
             --metadata-file "$RUNNER_TEMP/$1.json" "$CONTEXT" 2>&1 | sed -u "s/^/[$1] /"
         }
-        build first &
+        # The shell's pid keeps each call's builders and outputs apart, so a job can check several files.
+        build "first-$$" &
         pid=$!
-        build second
+        build "second-$$"
         wait "$pid"
-        first="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/first.json")"
-        second="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/second.json")"
+        first="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/first-$$.json")"
+        second="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/second-$$.json")"
         if [ "$first" != "$second" ]; then
           echo "::error::$FILE rebuilt to $second instead of $first."
           exit 1

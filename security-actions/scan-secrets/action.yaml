@@ -52,11 +52,11 @@ runs:
         # replacing the release's files, checksums.txt included, or moving its tag cannot change.
         # The build tag and version stamp match gitleaks' release archives. The binary runs
         # directly, because gitleaks-action's free tier covers one repo per organization.
-        v="${GITLEAKS_VERSION:-$version}"
-        v="${v#v}"
+        version="${GITLEAKS_VERSION:-$version}"
+        version="${version#v}"
         GOBIN=/usr/local/bin go install -tags gore2regex \
-          -ldflags "-X=github.com/zricethezav/gitleaks/v8/version.Version=${v}" \
-          "github.com/zricethezav/gitleaks/v8@v${v}"
+          -ldflags "-X=github.com/zricethezav/gitleaks/v8/version.Version=${version}" \
+          "github.com/zricethezav/gitleaks/v8@v${version}"
         gitleaks version
 
     - name: scan working tree

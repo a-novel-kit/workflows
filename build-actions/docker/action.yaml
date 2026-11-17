@@ -25,8 +25,9 @@ inputs:
     required: false
     description: >
       Path of a file holding the test run's Docker flags in the syntax of `run_args`, relative to the
-      repository root, so every workflow building the image reads the same settings. Setting both
-      fails.
+      repository root, so every workflow building the image reads the same settings. A line starting
+      with `#` holds a reason, not a flag. Every build checks the file, a skipped smoke run included.
+      Setting both fails.
   timeout:
     required: false
     description: Timeout (in deciseconds) for the test container to report healthy, or in job mode to exit.
@@ -77,6 +78,14 @@ runs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
+    # The smoke settings are checked on every build, a skipped smoke run included, so a pull request
+    # catches a broken settings file before a release needs it.
+    - name: check the smoke settings
+      shell: bash
+      env:
+        RUN_ARGS: ${{ inputs.run_args }}
+        RUN_ARGS_FILE: ${{ inputs.run_args_file }}
+      run: node "$GITHUB_ACTION_PATH/../wait-container.mjs" check
     # A fixed epoch keeps the digest a function of the image's content alone, whatever the commit date.
     - if: ${{ inputs.reproducible == 'true' }}
       shell: bash

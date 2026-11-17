@@ -83,10 +83,28 @@ test("run_args_file holds the smoke run's flags in the syntax of run_args", (t) 
     "docker",
     "require('fs').writeFileSync('started.json', JSON.stringify(process.argv.slice(2))); process.exit(1);"
   );
-  w.write("builds/image.run-args", runArgs.replaceAll(" --env", "\n--env") + "\n");
+  const reasons = "# The smoke run has no token issuer.\n  # An indented reason too.\n";
+  w.write("builds/image.run-args", reasons + runArgs.replaceAll(" --env", "\n--env") + "\n");
   w.run(process.execPath, [waiter, "service", "2"], { ...runEnv, RUN_ARGS_FILE: "builds/image.run-args" });
   assert.deepEqual(JSON.parse(w.read("started.json")), started);
   assert.equal(existsSync(join(w.cwd, "injected")), false);
+});
+
+test("check validates the smoke settings without starting Docker", (t) => {
+  const w = workspace(t);
+  w.stub("docker", "import * as fs from 'node:fs'; fs.writeFileSync('started', '')");
+  w.write("flags", "# reason\n--env A=1\n");
+  succeeds(w.run(process.execPath, [waiter, "check"], { RUN_ARGS_FILE: "flags" }));
+  succeeds(w.run(process.execPath, [waiter, "check"], {}));
+  const invalid = [
+    { RUN_ARGS: "--env 'unclosed" },
+    { RUN_ARGS: "--env A=1", RUN_ARGS_FILE: "flags" },
+    { RUN_ARGS_FILE: "missing" },
+  ];
+  for (const env of invalid) {
+    assert.notEqual(w.run(process.execPath, [waiter, "check"], env).status, 0, JSON.stringify(env));
+  }
+  assert.equal(existsSync(join(w.cwd, "started")), false);
 });
 
 test("container startup failures do not print arguments containing credentials", (t) => {
@@ -127,9 +145,10 @@ test("check-reproducible fails unless two isolated builds of the file give one d
     `
     import * as fs from 'node:fs'; const args = process.argv.slice(2);
     const builder = args[args.indexOf(args[1] === 'create' ? '--name' : '--builder') + 1];
-    fs.appendFileSync('calls-' + builder, JSON.stringify(args) + '\\n');
+    const role = builder.replace(/-\\d+$/, '');
+    fs.appendFileSync('calls-' + role, JSON.stringify(args) + '\\n');
     if (args[1] !== 'build') process.exit(0);
-    const digest = JSON.parse(process.env.DIGESTS)[builder];
+    const digest = JSON.parse(process.env.DIGESTS)[role];
     if (!digest) process.exit(1);
     fs.writeFileSync(args[args.indexOf('--metadata-file') + 1], JSON.stringify({'containerimage.digest': digest}));
   `
@@ -168,7 +187,10 @@ test("check-reproducible fails unless two isolated builds of the file give one d
       .map(JSON.parse)
       .find((args) => args[1] === "build");
     assert.deepEqual([build[build.indexOf("--file") + 1], build.at(-1)], ["builds/image.Dockerfile", "builds"]);
-    assert(build.includes(`type=oci,dest=${w.cwd}/${builder}.tar,rewrite-timestamp=true`), builder);
+    // Each call names its builders and outputs after its own shell, so two calls in a job never meet.
+    const name = build[build.indexOf("--builder") + 1];
+    assert.match(name, new RegExp(`^${builder}-\\d+$`));
+    assert(build.includes(`type=oci,dest=${w.cwd}/${name}.tar,rewrite-timestamp=true`), builder);
   }
 });
 

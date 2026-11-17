@@ -93,10 +93,12 @@ out assertions that restate configuration or repeat another test's outcome.
 
 ## Checkouts and tool pins
 
-An action that reads the repository checks it out first, with `persist-credentials: false`, as
-`lint-go` does, so a calling job can be the action alone. A job without a checkout would otherwise
-scan an empty workspace and pass, so `tests/action-behavior.test.mjs` lists these actions: add a new
-one there.
+An action a job runs alone (the lint and check actions, `docker`, `publish-api-docs`) checks the
+repository out first, with `persist-credentials: false`, as `lint-go` does. A job without a checkout
+would otherwise scan an empty workspace and pass, so `tests/action-behavior.test.mjs` lists these
+actions: add a new one there. An action that runs between a job's own steps, such as `compose-up` or
+`test-go` with `skip_setup`, leaves the checkout to the job, since a second checkout would clean what
+the earlier steps left.
 
 A scanner's default release sits in its step's `env` as an annotated `version:` key, followed by
 `sha256:` for a downloaded binary. Those are the keys the base Renovate preset's workflow regex reads,

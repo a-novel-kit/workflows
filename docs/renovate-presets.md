@@ -32,6 +32,11 @@ release. An update that keeps the version and changes the commit means the upstr
 so it waits for a reviewer instead of merging on its own. The `a-novel-kit/workflows` references
 stay on release tags. The images and runners a workflow names do not wait.
 
+The fleet's scanner versions live in kit/workflows: each lint action keeps its default as an annotated
+`version:` key, with `sha256:` for a downloaded binary, in its install step's `env`, and the base
+preset's workflow regex reads those keys in the action manifests as well as in workflows. A
+repository that pins its own version in a `with:` block follows the same rules.
+
 A scanner image pinned in a workflow's `with:` block carries its digest after the tag, so a moved tag
 changes nothing the job runs. Renovate moves the digest with the tag. An update that keeps the tag and
 changes the digest merges on its own, since publishers rebuild image tags as routine:

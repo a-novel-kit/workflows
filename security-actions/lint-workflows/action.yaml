@@ -44,7 +44,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        ZIZMOR_VERSION="${ZIZMOR_VERSION:-$version}"
+        version="${ZIZMOR_VERSION:-$version}"
 
         if [ ! -d .github/workflows ]; then
           echo "no .github/workflows, so nothing to audit."
@@ -61,12 +61,12 @@ runs:
           mount_cfg="$ACTION_PATH/zizmor.yml"
         fi
 
-        if [[ "$ZIZMOR_VERSION" != *@sha256:* ]]; then
-          echo "::error::zizmor ${ZIZMOR_VERSION} has no digest: pin it as <tag>@sha256:<digest>."
+        if [[ "$version" != *@sha256:* ]]; then
+          echo "::error::zizmor ${version} has no digest: pin it as <tag>@sha256:<digest>."
           exit 1
         fi
 
         node "$ACTION_PATH/../run-scan.mjs" zizmor docker run --rm \
           -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
-          "ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION" \
+          "ghcr.io/zizmorcore/zizmor:$version" \
           --offline --config /zizmor.yml --collect=workflows,actions /src

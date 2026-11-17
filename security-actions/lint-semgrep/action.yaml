@@ -43,7 +43,7 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        SEMGREP_VERSION="${SEMGREP_VERSION:-$version}"
+        version="${SEMGREP_VERSION:-$version}"
 
         rules="$ACTION_PATH/rules/$RULESET.yaml"
         if [ ! -f "$rules" ]; then
@@ -51,12 +51,12 @@ runs:
           exit 1
         fi
 
-        if [[ "$SEMGREP_VERSION" != *@sha256:* ]]; then
-          echo "::error::semgrep ${SEMGREP_VERSION} has no digest: pin it as <tag>@sha256:<digest>."
+        if [[ "$version" != *@sha256:* ]]; then
+          echo "::error::semgrep ${version} has no digest: pin it as <tag>@sha256:<digest>."
           exit 1
         fi
 
         node "$ACTION_PATH/../run-scan.mjs" semgrep docker run --rm \
           -v "$PWD:/src:ro" -v "$ACTION_PATH/rules:/rules:ro" \
-          "semgrep/semgrep:$SEMGREP_VERSION" \
+          "semgrep/semgrep:$version" \
           semgrep --config="/rules/$RULESET.yaml" --metrics=off --error /src

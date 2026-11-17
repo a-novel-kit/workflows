@@ -136,8 +136,9 @@ test("Renovate reads every annotated pin in this repository's workflows", () => 
 // A scanner's default sits in its step's env under the keys a workflow pin uses, so one manager reads both.
 test("Renovate's workflow regex reads exactly the scanner defaults the actions hold", () => {
   const workflow = base.customManagers.find((m) => m.description.includes("workflow with: blocks"));
-  assert(matches(workflow.managerFilePatterns, "security-actions/scan-secrets/action.yaml"));
   const manifests = globSync("*-actions/*/action.yaml", { cwd: root }).sort();
+  // Renovate reads every manifest the extraction below reads, in each action group.
+  for (const path of manifests) assert(matches(workflow.managerFilePatterns, path), path);
   const found = manifests.flatMap((path) =>
     extract(workflow, read(path)).map(({ datasource, depName, currentValue, currentDigest }) => ({
       path,
