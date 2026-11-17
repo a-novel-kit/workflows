@@ -18,14 +18,17 @@ inputs:
   image_name:
     required: true
     description: The name of the image to build.
-  version:
-    required: false
-    description: >
-      Version of a dispatched release, such as 1.2.3, which runs on the default branch. The image is
-      then tagged vX.Y.Z, vX.Y, vX and latest from it. Empty derives the tags from the git ref.
   run_args:
     required: false
     description: Docker flags for the test run. Supports quoted values and $NAME/${NAME} environment references; command substitution is not evaluated.
+  run_args_file:
+    required: false
+    description: >
+      Path of a file holding the test run's Docker flags in the syntax of `run_args`, relative to the
+      repository root, so every workflow building the image reads the same settings. A line starting
+      with `#` holds a reason, not a flag; a reason after a flag fails. Every build checks the file, a
+      skipped smoke run included.
+      Setting both fails.
   timeout:
     required: false
     description: Timeout (in deciseconds) for the test container to report healthy, or in job mode to exit.
@@ -44,12 +47,6 @@ inputs:
     default: .
   secrets:
     description: "List of secrets to expose to the build (e.g., key=string, GIT_AUTH_TOKEN=mytoken)."
-    required: false
-  secret_envs:
-    description: "List of secret env vars to expose to the build (e.g., key=envname, MY_SECRET=MY_ENV_VAR)."
-    required: false
-  secret_files:
-    description: "List of secret files to expose to the build (e.g., key=filename, MY_SECRET=./secret.txt)."
     required: false
   cache:
     required: false
@@ -82,41 +79,33 @@ runs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
+    # The smoke settings are checked on every build, a skipped smoke run included, so a pull request
+    # catches a broken settings file before a release needs it.
+    - name: check the smoke settings
+      shell: bash
+      env:
+        RUN_ARGS: ${{ inputs.run_args }}
+        RUN_ARGS_FILE: ${{ inputs.run_args_file }}
+      run: node "$GITHUB_ACTION_PATH/../wait-container.mjs" check
     # A fixed epoch keeps the digest a function of the image's content alone, whatever the commit date.
     - if: ${{ inputs.reproducible == 'true' }}
       shell: bash
       run: echo "SOURCE_DATE_EPOCH=0" >>"$GITHUB_ENV"
-    # A dispatched release runs on the default branch, whose ref is no tag, so it passes its version.
-    - id: ver
-      if: ${{ inputs.version != '' }}
-      shell: bash
-      env:
-        VERSION: ${{ inputs.version }}
-      run: |
-        set -euo pipefail
-        echo "minor=${VERSION%.*}" >> "$GITHUB_OUTPUT"
-        echo "major=${VERSION%%.*}" >> "$GITHUB_OUTPUT"
     - id: meta
       uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
       with:
         images: ghcr.io/${{ inputs.image_name }}
         tags: |
-          # Ref-derived tags apply when no version is passed. A pull request is tagged only while
-          # labeled with-feature-env. The label approves the head it was added on, so a push, whose
-          # payload still carries it, is not tagged.
+          # A pull request is tagged only while labeled with-feature-env. The label approves the head
+          # it was added on, so a push, whose payload still carries it, is not tagged.
           type=ref,event=pr,enable=${{ github.event.action != 'synchronize' && contains(github.event.pull_request.labels.*.name, 'with-feature-env') }}
-          type=schedule,pattern=nightly,enable=${{ inputs.version == '' && inputs.mode == 'job' }}
+          type=schedule,pattern=nightly,enable=${{ inputs.mode == 'job' }}
           # Only the default branch is tagged; other branches and merge-queue groups push untagged.
           type=ref,event=branch,enable=${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
-          type=ref,event=tag,enable=${{ inputs.version == '' }}
-          type=semver,pattern=v{{version}},enable=${{ inputs.version == '' }}
-          type=semver,pattern=v{{major}}.{{minor}},enable=${{ inputs.version == '' }}
-          type=semver,pattern=v{{major}},enable=${{ inputs.version == '' }}
-          # Explicit-version tags (dispatched release flow).
-          type=raw,value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
-          type=raw,value=v${{ steps.ver.outputs.minor }},enable=${{ inputs.version != '' }}
-          type=raw,value=v${{ steps.ver.outputs.major }},enable=${{ inputs.version != '' }}
-          type=raw,value=latest,enable=${{ inputs.version != '' }}
+          type=ref,event=tag
+          type=semver,pattern=v{{version}}
+          type=semver,pattern=v{{major}}.{{minor}}
+          type=semver,pattern=v{{major}}
         flavor: latest=auto
     # These labels change on every release, so a reproducible image leaves them out.
     - id: labels
@@ -160,8 +149,6 @@ runs:
         load: true
         tags: ghcr.io/${{ inputs.image_name }}:test
         file: ${{ inputs.file }}
-        secret-envs: ${{ inputs.secret_envs }}
-        secret-files: ${{ inputs.secret_files }}
         secrets: ${{ inputs.secrets }}
     - name: wait for the test container
       if: ${{ inputs.skip_healthcheck != 'true' }}
@@ -171,6 +158,7 @@ runs:
         MODE: ${{ inputs.mode }}
         TIMEOUT: ${{ inputs.timeout }}
         RUN_ARGS: ${{ inputs.run_args }}
+        RUN_ARGS_FILE: ${{ inputs.run_args_file }}
       run: |
         node "$GITHUB_ACTION_PATH/../wait-container.mjs" "$MODE" "$TIMEOUT"
     - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -191,8 +179,6 @@ runs:
         tags: ${{ steps.meta.outputs.tags || format('ghcr.io/{0}', inputs.image_name) }}
         labels: ${{ steps.labels.outputs.labels }}
         file: ${{ inputs.file }}
-        secret-envs: ${{ inputs.secret_envs }}
-        secret-files: ${{ inputs.secret_files }}
         secrets: ${{ inputs.secrets }}
     # Rekor can stay slow for minutes, past the minute actions/attest spends on its own retries, so
     # a failed attempt runs again after a pause. All three attempts take the same inputs, and only

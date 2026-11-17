@@ -20,25 +20,31 @@ inputs:
       When "true", findings go to the run summary and the log, and the check passes. When "false",
       any finding fails the check. An audit that fails to run fails either way.
   version:
-    required: true
+    required: false
     description: >
-      zizmor image tag and digest, as `<tag>@sha256:<digest>`. The caller pins both so Renovate bumps
-      them together per repo, with the annotation
-      `# renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor`. A tag alone fails the step: it would run
-      whatever image the tag names.
+      zizmor image tag and digest, as `<tag>@sha256:<digest>`, for a repo that must hold its own
+      release. Empty runs the image this action pins, which Renovate moves here. A tag alone fails
+      the step: it would run whatever image the tag names.
 
 runs:
   using: composite
   steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: zizmor
       shell: bash
       env:
         CONFIG: ${{ inputs.config }}
         ADVISORY: ${{ inputs.advisory }}
         ZIZMOR_VERSION: ${{ inputs.version }}
+        # The pinned default, under the key the base Renovate preset's workflow regex reads.
+        # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
+        version: "1.32.0@sha256:3014cc8f68f663935f69b3c3e0e41f5ce102b268d97db13db0f62208747f860d"
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+        version="${ZIZMOR_VERSION:-$version}"
 
         if [ ! -d .github/workflows ]; then
           echo "no .github/workflows, so nothing to audit."
@@ -55,12 +61,12 @@ runs:
           mount_cfg="$ACTION_PATH/zizmor.yml"
         fi
 
-        if [[ "$ZIZMOR_VERSION" != *@sha256:* ]]; then
-          echo "::error::zizmor ${ZIZMOR_VERSION} has no digest: pin it as <tag>@sha256:<digest>."
+        if [[ "$version" != *@sha256:* ]]; then
+          echo "::error::zizmor ${version} has no digest: pin it as <tag>@sha256:<digest>."
           exit 1
         fi
 
         node "$ACTION_PATH/../run-scan.mjs" zizmor docker run --rm \
           -v "$PWD:/src:ro" -v "$mount_cfg:/zizmor.yml:ro" \
-          "ghcr.io/zizmorcore/zizmor:$ZIZMOR_VERSION" \
+          "ghcr.io/zizmorcore/zizmor:$version" \
           --offline --config /zizmor.yml --collect=workflows,actions /src

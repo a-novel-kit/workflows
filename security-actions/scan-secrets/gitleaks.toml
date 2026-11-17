@@ -1,9 +1,9 @@
 # Baseline gitleaks config, shipped with the scan-secrets action.
 #
 # It carries only the allowlists that are true for every repo in the fleet, so
-# most repos need no config of their own. A repo with local values copies this
-# file and adds to it. gitleaks cannot layer two configs, so a repo config
-# replaces this one wholesale rather than extending it.
+# most repos need no config of their own. gitleaks cannot layer two configs, so
+# the action appends a repo's `extra_config`, which holds only its own
+# `[[allowlists]]` tables, to this file.
 #
 # Every allowlist targets `generic-api-key` alone, the entropy heuristic. The
 # provider-specific rules (AWS, GitHub, Stripe, ...) stay active everywhere,

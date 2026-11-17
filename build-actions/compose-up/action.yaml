@@ -1,0 +1,49 @@
+name: compose up
+description: >
+  Start Compose services for a job and wait until they are healthy; on a failure, print their state
+  and logs. The images and other values the Compose file interpolates reach it through the calling
+  step's env, so a repo-local action keeps only its image defaults.
+
+inputs:
+  file:
+    required: false
+    default: builds/compose.ci.yaml
+    description: The Compose file, relative to the repository root. The caller checks the repo out first.
+  services:
+    required: true
+    description: Space-separated Compose services to start.
+  registry_login:
+    required: false
+    default: "false"
+    description: When "true", authenticate to ghcr.io with the job token first, to pull private images.
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to the container registry
+      if: inputs.registry_login == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
+
+    - name: Start the services
+      shell: bash
+      env:
+        FILE: ${{ inputs.file }}
+        SERVICES: ${{ inputs.services }}
+        COMPOSE_PROJECT_NAME: ci-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        read -r -a services <<<"$SERVICES"
+
+        status=0
+        docker compose --file "$FILE" up --detach --no-build --wait --wait-timeout 120 "${services[@]}" || status=$?
+        if [ "$status" -ne 0 ]; then
+          docker compose --file "$FILE" ps --all || true
+          docker compose --file "$FILE" logs --no-color || true
+        fi
+        exit "$status"

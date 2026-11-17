@@ -10,8 +10,7 @@ inputs:
     required: false
     description: >
       Space- or newline-separated globs of shell files to lint. Empty lints every tracked `*.sh`
-      file. Discovery reads tracked files only, so it skips gitignored trees. The caller checks the
-      repo out first.
+      file. Discovery reads tracked files only, so it skips gitignored trees.
   run_steps:
     required: false
     default: ""
@@ -28,31 +27,44 @@ inputs:
       When "true", the log lists the findings, the run summary counts them, and the check passes.
       When "false", any finding fails the check.
   version:
-    required: true
+    required: false
     description: >
-      shellcheck release tag, with or without the leading v. The caller pins it so Renovate bumps
-      it per repo, with the annotation
-      `# renovate: datasource=custom.shellcheck depName=koalaman/shellcheck`. The pin keeps what the
-      gate accepts independent of the runner image.
+      shellcheck release tag, with or without the leading v, for a repo that must hold its own
+      release. Empty runs the release this action pins, which Renovate moves here. Pass `sha256` with
+      it.
   sha256:
-    required: true
+    required: false
     description: >
-      SHA-256 of that release's `shellcheck-v<version>.linux.x86_64.tar.xz`, on the line right after
-      `version`, so Renovate moves both together. A missing pin or a download that does not match
-      fails the step.
+      SHA-256 of that release's `shellcheck-v<version>.linux.x86_64.tar.xz`, required with
+      `version`, on the line right after it so Renovate moves both together. A download that does
+      not match fails the step.
 
 runs:
   using: composite
   steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: install shellcheck
       shell: bash
       env:
         SHELLCHECK_VERSION: ${{ inputs.version }}
         SHELLCHECK_SHA256: ${{ inputs.sha256 }}
+        # The pinned default, under the keys the base Renovate preset's workflow regex reads.
+        # renovate: datasource=custom.shellcheck depName=koalaman/shellcheck
+        version: "0.11.0"
+        sha256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
       run: |
         set -euo pipefail
+        # A caller's version comes with its own sha256, so the default's hash never vouches for it.
+        if [ "${SHELLCHECK_VERSION:+set}" != "${SHELLCHECK_SHA256:+set}" ]; then
+          echo "::error::pass shellcheck's version and sha256 together, or neither for the pinned default."
+          exit 1
+        fi
+        version="${SHELLCHECK_VERSION:-$version}"
+        sha256="${SHELLCHECK_SHA256:-$sha256}"
         # The release tag and the archive name both carry the v, so the input works with or without it.
-        v="v${SHELLCHECK_VERSION#v}"
+        v="v${version#v}"
         tmp=$(mktemp -d)
 
         # curl restarts a retried transfer from its first byte, so the archive lands in a file before
@@ -65,12 +77,9 @@ runs:
           exit 1
         fi
 
-        # The pin comes from the caller, never from the release, whose files and checksums an
-        # attacker holding the release can replace together.
-        if [ -z "$SHELLCHECK_SHA256" ]; then
-          echo "::error::shellcheck ${v} has no pinned sha256: pin it beside version."
-          exit 1
-        elif ! echo "$SHELLCHECK_SHA256  $tmp/shellcheck.tar.xz" | sha256sum --check --quiet; then
+        # The pin never comes from the release, whose files and checksums an attacker holding the
+        # release can replace together.
+        if ! echo "$sha256  $tmp/shellcheck.tar.xz" | sha256sum --check --quiet; then
           echo "::error::shellcheck ${v} does not match the pinned sha256"
           exit 1
         fi

@@ -19,25 +19,31 @@ inputs:
       When "true", findings go to the run summary and the log, and the check passes. When "false",
       any finding fails the check. A scan that fails to run fails either way.
   version:
-    required: true
+    required: false
     description: >
-      semgrep image tag and digest, as `<tag>@sha256:<digest>`. The caller pins both so Renovate bumps
-      them together per repo, with the annotation
-      `# renovate: datasource=docker depName=semgrep/semgrep`. A tag alone fails the step: it would run
-      whatever image the tag names.
+      semgrep image tag and digest, as `<tag>@sha256:<digest>`, for a repo that must hold its own
+      release. Empty runs the image this action pins, which Renovate moves here. A tag alone fails
+      the step: it would run whatever image the tag names.
 
 runs:
   using: composite
   steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: semgrep
       shell: bash
       env:
         RULESET: ${{ inputs.ruleset }}
         ADVISORY: ${{ inputs.advisory }}
         SEMGREP_VERSION: ${{ inputs.version }}
+        # The pinned default, under the key the base Renovate preset's workflow regex reads.
+        # renovate: datasource=docker depName=semgrep/semgrep
+        version: "1.185.0@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d"
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+        version="${SEMGREP_VERSION:-$version}"
 
         rules="$ACTION_PATH/rules/$RULESET.yaml"
         if [ ! -f "$rules" ]; then
@@ -45,12 +51,12 @@ runs:
           exit 1
         fi
 
-        if [[ "$SEMGREP_VERSION" != *@sha256:* ]]; then
-          echo "::error::semgrep ${SEMGREP_VERSION} has no digest: pin it as <tag>@sha256:<digest>."
+        if [[ "$version" != *@sha256:* ]]; then
+          echo "::error::semgrep ${version} has no digest: pin it as <tag>@sha256:<digest>."
           exit 1
         fi
 
         node "$ACTION_PATH/../run-scan.mjs" semgrep docker run --rm \
           -v "$PWD:/src:ro" -v "$ACTION_PATH/rules:/rules:ro" \
-          "semgrep/semgrep:$SEMGREP_VERSION" \
+          "semgrep/semgrep:$version" \
           semgrep --config="/rules/$RULESET.yaml" --metrics=off --error /src

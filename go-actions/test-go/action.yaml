@@ -20,7 +20,10 @@ inputs:
     default: coverage.txt
   skip_setup:
     required: false
-    description: Skip the setup steps.
+    description: >
+      When "true", skip the checkout, setup-go and the go-test cache, for a job whose earlier steps
+      already checked out and ran Go. Extracting the cache over the module cache those steps filled
+      fails on its read-only files.
   include:
     required: false
     default: ""

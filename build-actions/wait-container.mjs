@@ -1,17 +1,29 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
 
 const [mode, limit] = process.argv.slice(2);
-if (!["service", "job"].includes(mode) || !/^[1-9]\d*$/.test(limit) || !Number.isSafeInteger(Number(limit))) {
-  throw new Error("Expected service|job and a positive timeout in deciseconds");
-}
 
+const { RUN_ARGS = "", RUN_ARGS_FILE = "" } = process.env;
+if (RUN_ARGS && RUN_ARGS_FILE) throw new Error("Set run_args or run_args_file, not both");
+
+// A settings file keeps the reason for each flag on its own `#` line, which is not a flag.
+const flags = (RUN_ARGS_FILE ? readFileSync(RUN_ARGS_FILE, "utf8") : RUN_ARGS)
+  .split("\n")
+  .filter((line) => !line.trimStart().startsWith("#"))
+  .join("\n");
 // xargs handles quoted flags without evaluating shell substitutions or operators.
-const parsed = execFileSync("xargs", ["-r", "printf", "%s\\0"], {
-  input: process.env.RUN_ARGS ?? "",
-  encoding: "utf8",
-});
+const parsed = execFileSync("xargs", ["-r", "printf", "%s\\0"], { input: flags, encoding: "utf8" });
 const args = parsed ? parsed.slice(0, -1).split("\0") : [];
+// A reason after a flag would reach Docker as arguments, so it must sit on a line of its own.
+const stray = args.find((arg) => arg.startsWith("#"));
+if (stray !== undefined) throw new Error(`Unexpected "${stray}" in the smoke flags: a reason goes on its own line`);
+
+// `check` stops once the settings parse, so a build that skips the smoke run still checks them.
+if (mode === "check") process.exit(0);
+if (!["service", "job"].includes(mode) || !/^[1-9]\d*$/.test(limit) || !Number.isSafeInteger(Number(limit))) {
+  throw new Error("Expected check, or service|job and a positive timeout in deciseconds");
+}
 // Expand only named environment references, after tokenization, so values remain single arguments.
 const expanded = args.map((arg) =>
   arg.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (_, braced, bare) => process.env[braced ?? bare] ?? "")

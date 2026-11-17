@@ -144,7 +144,7 @@ test("Dockerfile discovery accepts fleet naming conventions without claiming sou
     assert.equal(command("grep", ["-Eq", pattern], { input: `${name}\n` }).status === 0, expected, name);
 });
 
-test("Docker provenance uses the published digest and security tools require caller-owned pins", () => {
+test("Docker provenance uses the published digest and the release CLI requires a caller-owned pin", () => {
   const steps = manifest("build-actions/docker/action.yaml").runs.steps;
   const index = steps.findIndex((s) => s.uses?.startsWith("actions/attest@"));
   assert(index > steps.findIndex((s) => s.id === "build"));
@@ -159,17 +159,8 @@ test("Docker provenance uses the published digest and security tools require cal
     assert.equal(attempt["continue-on-error"], i < attempts.length - 1 ? true : undefined);
     if (i > 0) assert.equal(attempt.if, `\${{ steps.${attempts[i - 1].id}.outcome == 'failure' }}`);
   }
-  const pinned = [
-    "generic-actions/lint-shell",
-    "generic-actions/lint-dockerfile",
-    "security-actions/scan-secrets",
-    "security-actions/lint-semgrep",
-    "security-actions/lint-workflows",
-    "publish-actions/release-core",
-    "publish-actions/release-core-hotfix",
-  ];
-  for (const action of pinned) {
-    const input = manifest(`${action}/action.yaml`).inputs[action.startsWith("publish-") ? "cli_version" : "version"];
+  for (const action of ["publish-actions/release-core", "publish-actions/release-core-hotfix"]) {
+    const input = manifest(`${action}/action.yaml`).inputs.cli_version;
     assert.equal(input.required, true, action);
     assert.equal(input.default, undefined, action);
   }

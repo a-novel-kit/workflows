@@ -46,11 +46,13 @@ update. A release that asks callers to change something comes with a
 
 ### `build-actions`
 
-| Action            | Purpose                                                                                                           |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `clean-images`    | Delete images once their branch or PR is gone; keep releases, open PRs, and `master` builds since the last minor. |
-| `clean-pr-images` | Delete a closed pull request's `pr-<N>` image from each package that has one.                                     |
-| `docker`          | Build an image, verify that it runs **healthy** or, in job mode, **exits 0**, push it and attest its provenance.  |
+| Action               | Purpose                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `check-reproducible` | Build an image twice on isolated builders and fail unless both give the same digest.                              |
+| `clean-images`       | Delete images once their branch or PR is gone; keep releases, open PRs, and `master` builds since the last minor. |
+| `clean-pr-images`    | Delete a closed pull request's `pr-<N>` image from each package that has one.                                     |
+| `compose-up`         | Start a job's Compose services and wait until healthy; print their state and logs on a failure.                   |
+| `docker`             | Build an image, verify that it runs **healthy** or, in job mode, **exits 0**, push it and attest its provenance.  |
 
 `docker` tags only the builds a deployment can name: pushes to the default branch, releases, and a pull
 request while it carries the `with-feature-env` label. The label tags the head it was added on, so the next
@@ -80,6 +82,24 @@ gh attestation verify \
 An image is releasable only once this command succeeds for its source repository. When an attestation
 is missing, fix the build path and publish a fresh SemVer release. Never backfill an attestation or
 move a tag.
+
+`docker` starts the image with the flags of `run_args`, or of `run_args_file`, a file that keeps one image's
+flags in the same syntax. Every workflow that builds the image then passes the same file, so a setting the
+binary starts to require reaches the release build too.
+
+`compose-up` reads the images and other values its Compose file interpolates from the calling step's `env`.
+A repository wraps it in a local action that holds only its image defaults:
+
+```yaml
+steps:
+  - uses: a-novel-kit/workflows/build-actions/compose-up@v1.86.0
+    env:
+      DATABASE_IMAGE: ${{ inputs.database_image }}
+      POSTGRES_PASSWORD: postgres
+    with:
+      services: ${{ inputs.services }}
+      registry_login: ${{ inputs.registry_login }}
+```
 
 ### `generic-actions`
 
@@ -153,9 +173,15 @@ check-migration-snapshots:
 
 ### `github-pages-actions`
 
-| Action              | Purpose                                     |
-| ------------------- | ------------------------------------------- |
-| `publish-storybook` | Build a Storybook site and deploy to Pages. |
+| Action              | Purpose                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------ |
+| `deploy`            | Deploy a built static site to the repository's Pages.                                            |
+| `publish-api-docs`  | Deploy a service's REST reference and, given its title, the gRPC document built from its protos. |
+| `publish-storybook` | Build a Storybook site and deploy to Pages.                                                      |
+
+A composite action cannot declare permissions, an environment or a concurrency group, so the calling job
+keeps them: `pages: write` and `id-token: write`, and a group that never cancels, since Pages runs one
+deployment per site at a time.
 
 ### `go-actions`
 
@@ -252,23 +278,36 @@ Each ships its own config, so a calling repository carries none. All three run o
 outside the repository can stall them, which a required check needs. Each takes `advisory: "true"` to
 report without failing, for a repository adopting the check over an existing backlog.
 
-`version` is required on all three, and on `generic-actions/lint-shell` and
-`generic-actions/lint-dockerfile`. The pin lives in the calling repository, so Renovate bumps each
-repository on its own cadence without waiting on a workflows release. Annotate it so Renovate can
-resolve the datasource:
+All three, `generic-actions/lint-shell` and `generic-actions/lint-dockerfile` check the repository out
+themselves, so a calling job is the action alone:
 
 ```yaml
-- uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.86.0
+scan-secrets:
+  runs-on: ubuntu-latest
+  permissions:
+    contents: read
+  steps:
+    - uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.86.0
+```
+
+Each runs the tool release it pins, and Renovate moves that pin in this repository, so one workflows
+release updates every caller. A repository that must hold another release passes `version`, annotated
+so that Renovate keeps it current there. `lint-semgrep` and `lint-workflows` run their image by digest,
+so their `version` reads `<tag>@sha256:<digest>`:
+
+```yaml
+- uses: a-novel-kit/workflows/security-actions/lint-workflows@v1.86.0
   with:
-    # renovate: datasource=github-releases depName=gitleaks/gitleaks
-    version: "8.30.1"
+    # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
+    version: "1.32.0@sha256:3014cc8f68f663935f69b3c3e0e41f5ce102b268d97db13db0f62208747f860d"
 ```
 
 A tool never trusts a checksum published beside its own release, since whoever can replace the
 release's files can replace that checksum too. `scan-secrets` builds gitleaks with the runner's Go,
 which checks the source against Go's checksum database, and `refresh-apko-locks` builds apko the same
-way. `lint-shell` and `lint-dockerfile` download a release binary, so the caller pins its SHA-256 on
-the line after `version`, and the base Renovate preset moves both together:
+way. `lint-shell` and `lint-dockerfile` download a release binary and check it against a pinned SHA-256,
+so a caller's `version` comes with its `sha256` on the next line, and the base Renovate preset moves
+both together:
 
 ```yaml
 - uses: a-novel-kit/workflows/generic-actions/lint-shell@v1.86.0
@@ -282,9 +321,10 @@ the line after `version`, and the base Renovate preset moves both together:
 `hadolint-linux-x86_64`. A download that does not match its pin fails the step. A release whose files
 change under an unchanged version gets a Renovate pull request that waits for a reviewer.
 
-A repository that needs its own gitleaks allowlist passes `config`, which replaces the shipped
-baseline. gitleaks drops a base config's allowlists when another config extends it, so the repository
-copies `security-actions/scan-secrets/gitleaks.toml` and adds its entries.
+A repository that needs its own gitleaks allowlists keeps them in a file of `[[allowlists]]` tables
+alone and passes it as `extra_config`, which the action appends to the shipped baseline. gitleaks drops
+a base config's allowlists when another config extends it, so the action joins the files instead.
+`config` replaces the baseline whole.
 
 Call the three as separate jobs. A reusable workflow's checks are named `<caller-job>/<inner-job>`,
 while required-check discovery reads the caller's job id, so a required check behind a reusable
