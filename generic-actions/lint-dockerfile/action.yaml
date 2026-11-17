@@ -58,7 +58,7 @@ runs:
 
         if [ ${#files[@]} -eq 0 ]; then
           echo "No Dockerfiles to lint."
-          printf '## hadolint\n\nNo Dockerfiles found — nothing to lint.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '## hadolint\n\nNo Dockerfiles found; nothing to lint.\n' >> "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
 

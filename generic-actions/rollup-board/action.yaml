@@ -69,7 +69,7 @@ runs:
         case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
-            echo "AGENT_KILL_SWITCH engaged — skipping epic rollup (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "AGENT_KILL_SWITCH engaged; skipping epic rollup (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
             ;;
         esac
@@ -216,7 +216,7 @@ runs:
                     gh('mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}',
                        p=PROJECT, i=e["id"], f=sfield["id"], o=opt[new])
 
-        emit("\nrollup-board: %d parent(s) scanned, %d status change(s), %d archived (%s)." % (len(epics), changes, archived, "DRY RUN — no writes" if DRY else "written"))
+        emit("\nrollup-board: %d parent(s) scanned, %d status change(s), %d archived (%s)." % (len(epics), changes, archived, "DRY RUN: no writes" if DRY else "written"))
         if summary:
             summary.close()
         PY

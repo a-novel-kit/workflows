@@ -33,6 +33,6 @@ test("token-expiry keeps a token's empty metadata fields in place", (t) => {
       permissions: { repository: { issues: "read" } },
     },
   ]);
-  assert.match(summary, /- no-expiry \(a\): no expiry metadata — skipped/);
+  assert.match(summary, /- no-expiry \(a\): no expiry metadata, skipped/);
   assert.match(summary, / -> \*\*Scope\*\*: Selected repositories\n -> \*\*Permissions\*\*: issues: read/);
 });

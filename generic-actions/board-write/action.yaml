@@ -103,7 +103,7 @@ runs:
         case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
-            echo "AGENT_KILL_SWITCH engaged — skipping board write for \"${FIELD}\" on ${CONTENT_ID} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "AGENT_KILL_SWITCH engaged; skipping board write for \"${FIELD}\" on ${CONTENT_ID} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             {
               echo "item_id="
               echo "changed=false"
@@ -227,12 +227,12 @@ runs:
           cur=$(echo "$item" | jq -r '.fieldValueByName.current // empty')
 
           if [ "$ONLY_IF_EMPTY" = "true" ] && [ -n "$cur" ]; then
-            echo "No change — \"$FIELD\" already set (\"$cur\") on item $item_id and only_if_empty." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No change: \"$FIELD\" already set (\"$cur\") on item $item_id and only_if_empty." | tee -a "$GITHUB_STEP_SUMMARY"
             continue
           fi
 
           if [ "$cur" = "$VALUE" ]; then
-            echo "No change — \"$FIELD\" already \"$VALUE\" on item $item_id." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "No change: \"$FIELD\" already \"$VALUE\" on item $item_id." | tee -a "$GITHUB_STEP_SUMMARY"
             continue
           fi
 

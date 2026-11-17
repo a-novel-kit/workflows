@@ -143,7 +143,7 @@ runs:
 
         if [ ${#files[@]} -eq 0 ]; then
           echo "No shell files to lint."
-          printf '## shellcheck\n\nNo shell files found — nothing to lint.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '## shellcheck\n\nNo shell files found; nothing to lint.\n' >> "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
 

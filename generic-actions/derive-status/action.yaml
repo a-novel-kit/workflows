@@ -71,14 +71,14 @@ runs:
         case "$switch" in
           "" | 0 | off | false | no | disabled) : ;;
           *)
-            echo "AGENT_KILL_SWITCH engaged — skipping board-status derivation (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "AGENT_KILL_SWITCH engaged; skipping board-status derivation (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
             echo "halted=true" >> "$GITHUB_OUTPUT"
             exit 0
             ;;
         esac
 
         if [ -z "${PR:-}" ]; then
-          echo "::error::no PR number — run on a pull_request / pull_request_review event, or pass pull_request_number"
+          echo "::error::no PR number. Run on a pull_request / pull_request_review event, or pass pull_request_number"
           exit 1
         fi
 
@@ -128,7 +128,7 @@ runs:
         esac
 
         if [ -z "$issue_ids" ]; then
-          echo "PR #$PR closes no issue — nothing to derive." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PR #$PR closes no issue; nothing to derive." | tee -a "$GITHUB_STEP_SUMMARY"
           echo "has_issue=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi

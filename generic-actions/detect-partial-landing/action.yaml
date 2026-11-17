@@ -205,7 +205,7 @@ runs:
           # A partial scope makes reenqueue fail in every uncovered repository, so a failed discovery
           # mints no enqueue token. Freeze detection still runs, because sweep_main enumerates again
           # when nothing was saved.
-          echo "::warning::active-Epic repo discovery failed — not minting the enqueue token this sweep (roll-forward waits for the next); freeze detection is unaffected."
+          echo "::warning::active-Epic repo discovery failed. Not minting the enqueue token this sweep (roll-forward waits for the next); freeze detection is unaffected."
           echo "repos=" >> "$GITHUB_OUTPUT"
         else
           open_prs=$(mktemp "${RUNNER_TEMP}/open-prs.XXXXXX")
@@ -513,7 +513,7 @@ runs:
           CLAIM_MEMBERS='[]'
           local pages nodes n fenced elem body marker total=0 added=0
           if ! pages=$(gh api --paginate "repos/${ORG}/${PLANNING_REPO}/issues?state=open&per_page=100" 2>/dev/null); then
-            echo "::warning::could not list open issues in ${ORG}/${PLANNING_REPO} — reaching Epics through live labels only this pass; a de-labeled Epic is not rescued." \
+            echo "::warning::could not list open issues in ${ORG}/${PLANNING_REPO}. Reaching Epics through live labels only this pass; a de-labeled Epic is not rescued." \
               | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
@@ -585,11 +585,11 @@ runs:
           # failure leaves the snapshot unknown. An unknown decides nothing, because a `clear` posts
           # success and lifts a standing freeze.
           if [ "$rc" = 2 ]; then
-            echo "::warning::epic #$1: ${ORG}/${PLANNING_REPO}#$1 not found — no snapshot possible, live label set only."
+            echo "::warning::epic #$1: ${ORG}/${PLANNING_REPO}#$1 not found; no snapshot possible, live label set only."
             return 2
           fi
           if [ "$rc" != 0 ]; then
-            echo "::error::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 after 3 attempts, so it is unknown whether a snapshot exists — deciding nothing this pass: $(cat "${EPIC_CACHE}/$1.err" 2>/dev/null || true)"
+            echo "::error::epic #$1: could not read ${ORG}/${PLANNING_REPO}#$1 after 3 attempts, so it is unknown whether a snapshot exists; deciding nothing this pass: $(cat "${EPIC_CACHE}/$1.err" 2>/dev/null || true)"
             return 1
           fi
           # GitHub stores bodies with CRLF, and the fences match only without \r.
@@ -615,14 +615,14 @@ runs:
             shown="${since//[$'\r\n']/}"
             shown="${shown:0:64}"
             if ! [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is not an ISO-8601 UTC instant (YYYY-MM-DDTHH:MM:SSZ) — ignoring it and scoping to the Epic's whole history."
+              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is not an ISO-8601 UTC instant (YYYY-MM-DDTHH:MM:SSZ); ignoring it and scoping to the Epic's whole history."
             elif ! since_epoch=$(date -u -d "$since" +%s 2>/dev/null); then
-              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is not a real date — ignoring it and scoping to the Epic's whole history."
+              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is not a real date; ignoring it and scoping to the Epic's whole history."
             # now_epoch is the step's start, and a sweep can be minutes in by the time it reaches this
             # Epic. Five minutes of skew keeps a tombstone that merge-gate just wrote in the past. The
             # allowance hides at most five minutes of merges, well inside the grace window.
             elif [ "$since_epoch" -gt "$(( now_epoch + 300 ))" ]; then
-              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is in the FUTURE — ignoring it (it would hide every merge this Epic has) and scoping to the Epic's whole history."
+              echo "::warning::epic #$1: the snapshot's wave boundary \"${shown}\" is in the FUTURE; ignoring it (it would hide every merge this Epic has) and scoping to the Epic's whole history."
             else
               SNAP_SINCE="$since"
             fi
@@ -700,7 +700,7 @@ runs:
                        | select($since == "" or (.createdAt // "") >= $since) | .label.name // empty]) | index($lbl)) | not)
               | "\(.repository.nameWithOwner)#\(.number)" ] | join(", ")' 2>/dev/null || printf 'PARSE_FAILURE')
           if [ -n "$unverified" ]; then
-            echo "::error::epic #$1: the activation snapshot names pull request(s) not labeled \`epic:$1\` during this wave (${unverified}) — refusing to decide anything for this Epic until it is corrected. Check who edited ${ORG}/${PLANNING_REPO}#$1."
+            echo "::error::epic #$1: the activation snapshot names pull request(s) not labeled \`epic:$1\` during this wave (${unverified}); refusing to decide anything for this Epic until it is corrected. Check who edited ${ORG}/${PLANNING_REPO}#$1."
             return 1
           fi
 
@@ -758,7 +758,7 @@ runs:
         # retried.
         freeze_post() { # $1=owner/repo $2=sha $3=conclusion $4=summary
           if [ "$dry" != "false" ]; then
-            echo "would post epic-freeze=$3 @ $1 ${2:0:12} — $4 (DRY RUN)" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "would post epic-freeze=$3 @ $1 ${2:0:12}: $4 (DRY RUN)" | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
           local payload
@@ -766,7 +766,7 @@ runs:
             '{name: "epic-freeze", head_sha: $sha, status: "completed", conclusion: $concl,
               output: {title: "epic-freeze", summary: $summary}}')
           if printf '%s' "$payload" | GH_TOKEN="$CHECKS_TOKEN" gh api "repos/$1/check-runs" --method POST --input - >/dev/null 2>&1; then
-            echo "epic-freeze=$3 @ $1 ${2:0:12} — $4" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "epic-freeze=$3 @ $1 ${2:0:12}: $4" | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
           if [ "${MODE:-sweep}" = "sweep" ]; then
@@ -784,7 +784,7 @@ runs:
           # Checked ahead of the dry-run return, so a rehearsal reports the same skip a live sweep takes
           # when discovery minted no enqueue token.
           if [ -z "${WRITE_TOKEN:-}" ]; then
-            echo "::warning::no enqueue token this sweep (repo discovery failed) — not rolling $target forward; the next sweep retries." \
+            echo "::warning::no enqueue token this sweep (repo discovery failed). Not rolling $target forward; the next sweep retries." \
               | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
@@ -795,7 +795,7 @@ runs:
           already=$(GH_TOKEN="$WRITE_TOKEN" gh pr view "$2" --repo "$1" --json autoMergeRequest \
             -q '.autoMergeRequest != null' 2>/dev/null || echo "unknown")
           if [ "$already" = "true" ]; then
-            echo "auto-merge already enabled on $target — no-op." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "auto-merge already enabled on $target; no-op." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
           if GH_TOKEN="$WRITE_TOKEN" gh pr merge "$2" --repo "$1" --auto --squash; then
@@ -948,7 +948,7 @@ runs:
             if [ "$st" = "closed true" ]; then confirmed_merged=true; break; fi
           done 4< <(printf '%s' "$merged" | jq -r '.[] | "\(.repository.nameWithOwner) \(.number)"')
           if [ "$confirmed_merged" != true ]; then
-            echo "epic #$EPIC: no merged member confirmed via REST (search lag?) — uncertain, no freeze this pass." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "epic #$EPIC: no merged member confirmed via REST (search lag?); uncertain, no freeze this pass." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
 
@@ -967,7 +967,7 @@ runs:
             trip_reason="${EV_STRAY_COUNT} sibling(s) left the merge queue and did not re-enter within the ${GRACE_MINUTES}-minute grace window"
           fi
           if [ -z "$trip_reason" ]; then
-            echo "epic #$EPIC: partial-landing predicate not confirmed on REST re-read — uncertain, no freeze." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "epic #$EPIC: partial-landing predicate not confirmed on REST re-read; uncertain, no freeze." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
 
@@ -985,7 +985,7 @@ runs:
         sweep_post_clear() { # $1 = epic
           local epic="$1"
           if [ "$EV_MERGED_COUNT" -ge 1 ] && [ "$EV_STRAY_COUNT" -ge 1 ]; then
-            echo "epic #$epic: $EV_STRAY_COUNT stray sibling(s) within grace — rolling forward (re-arms auto-merge; \`automation:paused\` stops it)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "epic #$epic: $EV_STRAY_COUNT stray sibling(s) within grace; rolling forward (re-arms auto-merge; \`automation:paused\` stops it)." | tee -a "$GITHUB_STEP_SUMMARY"
             # Only strays the live `epic:<N>` search still returns roll forward. A snapshot-only member
             # is one a person de-labeled, and merge-gate passes it as standalone. Re-arming it resumes a
             # landing that person stepped out of, and its repository can fall outside the enqueue
@@ -997,19 +997,19 @@ runs:
             done 5< <(printf '%s' "$EV_STRAYS" | jq -r '.[] | select((.isDraft | not) and .liveMember) | "\(.repository.nameWithOwner) \(.number)"')
             skipped=$(printf '%s' "$EV_STRAYS" | jq -r '[.[] | select((.isDraft | not) and (.liveMember | not))] | length')
             if [ "$skipped" -gt 0 ]; then
-              echo "::warning::epic #$epic: $skipped stray sibling(s) are frozen-set members the \`epic:$epic\` label no longer returns — NOT rolled forward (a de-labeled member is not auto-merged back into a landing). They still count toward the freeze." \
+              echo "::warning::epic #$epic: $skipped stray sibling(s) are frozen-set members the \`epic:$epic\` label no longer returns; NOT rolled forward (a de-labeled member is not auto-merged back into a landing). They still count toward the freeze." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
             # A draft cannot auto-merge, so a draft stray sits out the roll-forward and trips the freeze
             # at grace. The warning comes while there is time to mark it ready.
             drafts=$(printf '%s' "$EV_STRAYS" | jq -r '[.[] | select(.isDraft)] | length')
             if [ "$drafts" -gt 0 ]; then
-              echo "::warning::epic #$epic: $drafts stray sibling(s) are DRAFTS — not rolled forward (a draft cannot auto-merge). Mark them ready before the ${GRACE_MINUTES}-minute grace elapses or they trip the freeze." \
+              echo "::warning::epic #$epic: $drafts stray sibling(s) are DRAFTS; not rolled forward (a draft cannot auto-merge). Mark them ready before the ${GRACE_MINUTES}-minute grace elapses or they trip the freeze." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
           fi
           if [ "$EV_OPEN_COUNT" -eq 0 ]; then
-            echo "epic #$epic: no open siblings — nothing to post." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "epic #$epic: no open siblings; nothing to post." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
           local u_repo u_sha
@@ -1025,9 +1025,9 @@ runs:
         # the in-flight group. The freeze is re-derived each sweep, so it follows new commits.
         sweep_post_freeze() { # $1 = epic
           local epic="$1"
-          echo "epic #$epic: PARTIAL LANDING confirmed ($EV_REASON) — freezing $EV_OPEN_COUNT open sibling(s) + queue heads." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "epic #$epic: PARTIAL LANDING confirmed ($EV_REASON); freezing $EV_OPEN_COUNT open sibling(s) + queue heads." | tee -a "$GITHUB_STEP_SUMMARY"
           local summary
-          summary="Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding every remaining sibling to prevent further partial landing. This does NOT roll back merged PRs — a human rolls them back with the epic-rollback workflow."
+          summary="Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding every remaining sibling to prevent further partial landing. This does NOT roll back merged PRs: a human rolls them back with the epic-rollback workflow."
           local targets
           targets=$(jq -cn --argjson open "$EV_OPEN" --argjson queue "$EV_QUEUE" '
             ( [ $open[]  | {repo: .repository.nameWithOwner, sha: .headRefOid} ]
@@ -1043,7 +1043,7 @@ runs:
           distinct_repos=$(printf '%s' "$targets" | jq -r '[.[].repo] | unique | length')
           if [ "$distinct_repos" -gt "$MAX_FREEZE_REPOS" ]; then
             blast_cap_tripped=true
-            echo "::error::BLAST-CAP: epic #$epic freeze spans ${distinct_repos} distinct repos (> max_freeze_repos=${MAX_FREEZE_REPOS}) — posting the freeze anyway (skipping it would leave a partial landing un-frozen), but flagging this sweep RED. Investigate a runaway / mis-scoped Epic; raise max_freeze_repos deliberately if the width is genuine." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::BLAST-CAP: epic #$epic freeze spans ${distinct_repos} distinct repos (> max_freeze_repos=${MAX_FREEZE_REPOS}); posting the freeze anyway (skipping it would leave a partial landing un-frozen), but flagging this sweep RED. Investigate a runaway / mis-scoped Epic; raise max_freeze_repos deliberately if the width is genuine." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
           local t_repo t_sha
@@ -1057,14 +1057,14 @@ runs:
         # its landing is under manual control.
         sweep_epic() { # $1 = epic
           if epic_paused "$1"; then
-            echo "epic #$1: automation:paused — skipping (no freeze / roll-forward this sweep)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "epic #$1: automation:paused; skipping (no freeze / roll-forward this sweep)." | tee -a "$GITHUB_STEP_SUMMARY"
             return 0
           fi
           evaluate_epic "$1"
           case "$EV_DECISION" in
             clear)  sweep_post_clear "$1" ;;
             frozen) sweep_post_freeze "$1" ;;
-            *)      echo "epic #$1: uncertain (resolve/queue/REST error) — skipping this sweep (fail-closed); the next sweep re-derives." | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)      echo "epic #$1: uncertain (resolve/queue/REST error). Skipping this sweep (fail-closed); the next sweep re-derives." | tee -a "$GITHUB_STEP_SUMMARY" ;;
           esac
         }
 
@@ -1084,7 +1084,7 @@ runs:
           while read -r s_repo s_sha <&5; do
             [ -n "$s_repo" ] || continue
             freeze_post "$s_repo" "$s_sha" "success" \
-              "PR has no epic:<N> label — standalone, no partial-landing coordination. epic-freeze clear."
+              "PR has no epic:<N> label: standalone, no partial-landing coordination. epic-freeze clear."
           done 5< <(printf '%s' "$standalone" | jq -r '.[] | "\(.repo) \(.sha)"')
         }
 
@@ -1099,7 +1099,7 @@ runs:
           if [ -n "${OPEN_PRS:-}" ]; then
             all_open=$(cat "$OPEN_PRS")
           elif ! all_open=$(search_prs "org:${ORG} is:pr is:open"); then
-            echo "::error::could not enumerate open PRs (GraphQL search failed after retries) — nothing done this sweep"
+            echo "::error::could not enumerate open PRs (GraphQL search failed after retries); nothing done this sweep"
             exit 1
           fi
 
@@ -1136,7 +1136,7 @@ runs:
           echo "Partial-landing sweep complete." | tee -a "$GITHUB_STEP_SUMMARY"
 
           if [ "$blast_cap_tripped" = true ]; then
-            echo "::error::BLAST-CAP tripped this sweep — one or more Epics exceeded max_freeze_repos=${MAX_FREEZE_REPOS} (details above). They were frozen anyway (fail-safe); investigate a runaway / mis-scoped Epic."
+            echo "::error::BLAST-CAP tripped this sweep: one or more Epics exceeded max_freeze_repos=${MAX_FREEZE_REPOS} (details above). They were frozen anyway (fail-safe); investigate a runaway / mis-scoped Epic."
             exit 1
           fi
         }
@@ -1156,7 +1156,7 @@ runs:
               # Failure on an unidentifiable group's head dequeues it, as merge-gate does. The sweep
               # re-checks the pull request's own head.
               freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
-                "merge_group head_ref \"${IN_QUEUE}\" — couldn't identify the queued PR to check its Epic; posting failure (dequeues) rather than passing blind. The sweep re-checks the PR head."
+                "merge_group head_ref \"${IN_QUEUE}\": couldn't identify the queued PR to check its Epic; posting failure (dequeues) rather than passing blind. The sweep re-checks the PR head."
               return 0
             fi
           elif [ -n "${PR_NUMBER:-}" ]; then
@@ -1165,7 +1165,7 @@ runs:
             # A head with neither a pull request nor a merge group comes from a misconfigured caller. A
             # required check never passes on a head nothing evaluated.
             freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
-              "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event — refusing to pass a required check without evaluating a PR."
+              "No pull_request_number for ${HEAD_SHA:0:12} and not a merge_group event; refusing to pass a required check without evaluating a PR."
             return 0
           fi
 
@@ -1178,7 +1178,7 @@ runs:
             labels="${EVENT_LABELS:-[]}"
           elif ! labels=$(fetch_pr_labels "$classify_pr"); then
             freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
-              "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries) — failing open (success); merge-gate holds independently and the reconcile sweep re-derives."
+              "Couldn't read PR #${classify_pr}'s labels (GraphQL error after retries). Failing open (success); merge-gate holds independently and the reconcile sweep re-derives."
             return 0
           fi
 
@@ -1198,10 +1198,10 @@ runs:
             epic=$(epic_claiming "$REPO_FULL" "$classify_pr")
             if [ -z "$epic" ]; then
               freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
-                "PR #${classify_pr} has no epic:<N> label and no frozen snapshot claims it — standalone, no partial-landing coordination. epic-freeze clear."
+                "PR #${classify_pr} has no epic:<N> label and no frozen snapshot claims it: standalone, no partial-landing coordination. epic-freeze clear."
               return 0
             fi
-            echo "PR #${classify_pr} carries no label but Epic #${epic}'s frozen snapshot claims it (de-labeled mid-landing) — evaluating for a partial landing." \
+            echo "PR #${classify_pr} carries no label but Epic #${epic}'s frozen snapshot claims it (de-labeled mid-landing); evaluating for a partial landing." \
               | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -1209,11 +1209,11 @@ runs:
           # posts success and the head never strands on "Expected".
           if epic_paused "$epic"; then
             freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
-              "Epic #${epic} is automation:paused — merge-gate holds it; epic-freeze not evaluating partial-landing while paused. epic-freeze clear."
+              "Epic #${epic} is automation:paused. merge-gate holds it; epic-freeze not evaluating partial-landing while paused. epic-freeze clear."
             return 0
           fi
 
-          echo "PR #${classify_pr} belongs to Epic #${epic} — evaluating the Epic for a partial landing." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PR #${classify_pr} belongs to Epic #${epic}; evaluating the Epic for a partial landing." | tee -a "$GITHUB_STEP_SUMMARY"
           evaluate_epic "$epic"
           case "$EV_DECISION" in
             clear)
@@ -1221,12 +1221,12 @@ runs:
                 "Epic #${epic}: no partial landing (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}). epic-freeze clear." ;;
             frozen)
               freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
-                "Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding this sibling to prevent further partial landing. Does NOT roll back merged PRs — a human rolls them back with the epic-rollback workflow." ;;
+                "Epic #${epic} PARTIALLY LANDED (merged=${EV_MERGED_COUNT}, closed-unmerged=${EV_CLOSED_COUNT}, stray=${EV_STRAY_COUNT}): ${EV_REASON}. Holding this sibling to prevent further partial landing. Does NOT roll back merged PRs: a human rolls them back with the epic-rollback workflow." ;;
             *)
               # Uncertainty fails open. The next sweep re-derives from scratch and freezes the true heads
               # if the partial landing is real.
               freeze_post "$REPO_FULL" "$HEAD_SHA" "success" \
-                "Epic #${epic}: couldn't confirm partial-landing state (resolve/queue/REST uncertainty) — failing open (success). merge-gate holds independently and the reconcile sweep re-derives." ;;
+                "Epic #${epic}: couldn't confirm partial-landing state (resolve/queue/REST uncertainty); failing open (success). merge-gate holds independently and the reconcile sweep re-derives." ;;
           esac
         }
 
@@ -1237,9 +1237,9 @@ runs:
         if [ "$kill_engaged" = true ]; then
           if [ "${MODE:-sweep}" = "per-pr" ]; then
             freeze_post "$REPO_FULL" "$HEAD_SHA" "failure" \
-              "Automation halted org-wide by AGENT_KILL_SWITCH — holding this PR. Lift the org kill-switch to resume; the next event or reconcile sweep re-evaluates."
+              "Automation halted org-wide by AGENT_KILL_SWITCH; holding this PR. Lift the org kill-switch to resume; the next event or reconcile sweep re-evaluates."
           else
-            echo "AGENT_KILL_SWITCH engaged — skipping the partial-landing sweep (no freeze posts, no roll-forward). merge-gate HOLDs every PR org-wide meanwhile." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "AGENT_KILL_SWITCH engaged; skipping the partial-landing sweep (no freeze posts, no roll-forward). merge-gate HOLDs every PR org-wide meanwhile." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           exit 0
         fi
