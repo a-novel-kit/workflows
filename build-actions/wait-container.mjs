@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { setTimeout } from "node:timers/promises";
 
 const [mode, limit] = process.argv.slice(2);
@@ -6,9 +7,12 @@ if (!["service", "job"].includes(mode) || !/^[1-9]\d*$/.test(limit) || !Number.i
   throw new Error("Expected service|job and a positive timeout in deciseconds");
 }
 
+const { RUN_ARGS = "", RUN_ARGS_FILE = "" } = process.env;
+if (RUN_ARGS && RUN_ARGS_FILE) throw new Error("Set run_args or run_args_file, not both");
+
 // xargs handles quoted flags without evaluating shell substitutions or operators.
 const parsed = execFileSync("xargs", ["-r", "printf", "%s\\0"], {
-  input: process.env.RUN_ARGS ?? "",
+  input: RUN_ARGS_FILE ? readFileSync(RUN_ARGS_FILE, "utf8") : RUN_ARGS,
   encoding: "utf8",
 });
 const args = parsed ? parsed.slice(0, -1).split("\0") : [];

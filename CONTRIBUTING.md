@@ -91,6 +91,18 @@ command stubs. Prefer tests of a complete step's behavior, and extract a functio
 step would add unrelated setup. Keep a case for each distinct failure and security boundary, and leave
 out assertions that restate configuration or repeat another test's outcome.
 
+## Checkouts and tool pins
+
+An action that reads the repository checks it out first, with `persist-credentials: false`, as
+`lint-go` does, so a calling job can be the action alone. A job without a checkout would otherwise
+scan an empty workspace and pass, so `tests/action-behavior.test.mjs` lists these actions: add a new
+one there.
+
+A scanner's default release sits in its step's `env` as an annotated `version:` key, followed by
+`sha256:` for a downloaded binary. Those are the keys the base Renovate preset's workflow regex reads,
+so Renovate moves the default here, and the step falls back to it when the caller passes no `version`.
+`tests/renovate.test.mjs` checks that the regex reads exactly these defaults.
+
 ## Questions?
 
 [Open an issue](https://github.com/a-novel-kit/workflows/issues) with the logs and the environment

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { globSync, readdirSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { test } from "node:test";
 import { read, root } from "./helpers.mjs";
@@ -131,6 +131,35 @@ test("Renovate reads every annotated pin in this repository's workflows", () => 
     const content = read(`.github/workflows/${file}`);
     assert.equal(extract(workflow, content).length, content.split("# renovate: ").length - 1, file);
   }
+});
+
+// A scanner's default sits in its step's env under the keys a workflow pin uses, so one manager reads both.
+test("Renovate's workflow regex reads exactly the scanner defaults the actions hold", () => {
+  const workflow = base.customManagers.find((m) => m.description.includes("workflow with: blocks"));
+  assert(matches(workflow.managerFilePatterns, "security-actions/scan-secrets/action.yaml"));
+  const manifests = globSync("*-actions/*/action.yaml", { cwd: root }).sort();
+  const found = manifests.flatMap((path) =>
+    extract(workflow, read(path)).map(({ datasource, depName, currentValue, currentDigest }) => ({
+      path,
+      datasource,
+      depName,
+      pinned: `${currentValue}${currentDigest ? `@${currentDigest}` : ""}`,
+    }))
+  );
+  const digest = /^\d+\.\d+\.\d+@(sha256:)?[a-f0-9]{64}$/;
+  const expected = [
+    ["generic-actions/lint-dockerfile/action.yaml", "custom.hadolint", "hadolint/hadolint", digest],
+    ["generic-actions/lint-shell/action.yaml", "custom.shellcheck", "koalaman/shellcheck", digest],
+    ["security-actions/lint-semgrep/action.yaml", "docker", "semgrep/semgrep", digest],
+    ["security-actions/lint-workflows/action.yaml", "docker", "ghcr.io/zizmorcore/zizmor", digest],
+    // gitleaks is built from Go's checksum-verified module, so its pin carries no digest.
+    ["security-actions/scan-secrets/action.yaml", "github-releases", "gitleaks/gitleaks", /^\d+\.\d+\.\d+$/],
+  ];
+  assert.deepEqual(
+    found.map(({ path, datasource, depName }) => [path, datasource, depName]),
+    expected.map(([path, datasource, depName]) => [path, datasource, depName])
+  );
+  for (const [i, { path, pinned }] of found.entries()) assert.match(pinned, expected[i][3], path);
 });
 
 test("Renovate groups compatible libraries and runtimes after the npm catch-all", () => {

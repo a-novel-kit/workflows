@@ -38,7 +38,7 @@ function findingOutcomes(code) {
 
 const scanners = [
   ["lint-semgrep", "semgrep", "docker", { RULESET: "service", SEMGREP_VERSION: `test@sha256:${"e".repeat(64)}` }, [1]],
-  ["scan-secrets", "scan working tree", "gitleaks", { CONFIG: "" }, [10]],
+  ["scan-secrets", "scan working tree", "gitleaks", { CONFIG: "", EXTRA_CONFIG: "" }, [10]],
   [
     "lint-workflows",
     "zizmor",
@@ -80,7 +80,7 @@ for (const [action, name, tool, env, findings] of scanners)
       assert.equal(w.bash(script, { ...vars, RULESET: "none", ADVISORY: "false" }).status, 1);
   });
 
-test("lint-semgrep and lint-workflows run only an image pinned by digest", (t) => {
+test("lint-semgrep and lint-workflows run only an image pinned by digest, their own unless the caller pins one", (t) => {
   const w = workspace(t);
   w.write(".github/workflows/main.yaml", "name: fixture\n");
   w.stub("docker", "require('fs').writeFileSync('args', process.argv.slice(2).join('\\n'));");
@@ -89,21 +89,27 @@ test("lint-semgrep and lint-workflows run only an image pinned by digest", (t) =
     ["lint-workflows", "zizmor", "ZIZMOR_VERSION", "ghcr.io/zizmorcore/zizmor", { CONFIG: "" }],
   ];
   const pinned = `1.0.0@sha256:${"e".repeat(64)}`;
+  const fallback = `0.9.0@sha256:${"f".repeat(64)}`;
+  // [caller's version, the action's default, the image that runs or undefined]
+  const cases = [
+    [pinned, fallback, pinned],
+    ["", fallback, fallback],
+    ["1.0.0", fallback, undefined],
+    ["", "0.9.0", undefined],
+  ];
   for (const [action, name, variable, image, env] of images)
-    for (const [version, ran] of [
-      [pinned, true],
-      ["1.0.0", false],
-    ]) {
+    for (const [version, fallbackVersion, ran] of cases) {
       rmSync(join(w.cwd, "args"), { force: true });
       const result = w.bash(step(`security-actions/${action}/action.yaml`, name), {
         ...env,
         [variable]: version,
+        version: fallbackVersion,
         ADVISORY: "false",
         ACTION_PATH: join(root, "security-actions", action),
       });
       if (ran) {
         succeeds(result);
-        assert(w.read("args").split("\n").includes(`${image}:${version}`), `${action} ${version}`);
+        assert(w.read("args").split("\n").includes(`${image}:${ran}`), `${action} ${version}`);
       } else {
         assert.equal(result.status, 1, `${action} ${version}: ${result.stdout}${result.stderr}`);
         assert.match(result.stdout, /^::error::.* has no digest/m, `${action} ${version}`);
@@ -112,11 +118,16 @@ test("lint-semgrep and lint-workflows run only an image pinned by digest", (t) =
     }
 });
 
-test("lint-shell and lint-dockerfile run a release only when its bytes match the caller's sha256", (t) => {
+test("lint-shell and lint-dockerfile run a release only when its bytes match its pinned sha256", (t) => {
   const w = workspace(t);
   // One fixture stands in for the shellcheck archive and the hadolint binary, and records that it ran.
   const release = "#!/bin/sh\ntouch ran\n";
-  w.stub("curl", "const a = process.argv; require('fs').writeFileSync(a[a.indexOf('-o') + 1], process.env.RELEASE);");
+  w.stub(
+    "curl",
+    `const a = process.argv, fs = require('fs');
+    fs.writeFileSync(a[a.indexOf('-o') + 1], process.env.RELEASE);
+    fs.writeFileSync('url', a.find((arg) => arg.startsWith('https://')));`
+  );
   // lint-shell unpacks before installing, so its install marks the run there.
   w.stub("tar", "");
   w.stub("install", "require('fs').writeFileSync('ran', '');");
@@ -126,24 +137,35 @@ test("lint-shell and lint-dockerfile run a release only when its bytes match the
     ["generic-actions/lint-shell/action.yaml", "install shellcheck", "SHELLCHECK"],
     ["generic-actions/lint-dockerfile/action.yaml", "hadolint", "HADOLINT"],
   ];
+  const good = createHash("sha256").update(release).digest("hex");
+  const bad = "0".repeat(64);
+  // [caller's version and sha256, the action's default sha256, exit status, release that ran, annotation]
   const pins = [
-    [createHash("sha256").update(release).digest("hex"), 0, true, /^$/],
-    ["0".repeat(64), 1, false, /^::error::.* does not match the pinned sha256$/m],
-    ["", 1, false, /^::error::.* has no pinned sha256/m],
+    [["", ""], good, 0, "0.9.0", /^$/],
+    [["", ""], bad, 1, undefined, /^::error::.* does not match the pinned sha256$/m],
+    [["1.0.0", good], bad, 0, "1.0.0", /^$/],
+    [["1.0.0", bad], good, 1, undefined, /^::error::.* does not match the pinned sha256$/m],
+    // A caller's version never runs against the default's hash, nor its hash against the default.
+    [["1.0.0", ""], good, 1, undefined, /^::error::pass .* version and sha256 together/m],
+    [["", good], good, 1, undefined, /^::error::pass .* version and sha256 together/m],
   ];
   for (const [path, name, tool] of actions)
-    for (const [pin, status, ran, annotation] of pins) {
-      rmSync(join(w.cwd, "ran"), { force: true });
+    for (const [[version, sha256], fallback, status, ran, annotation] of pins) {
+      for (const file of ["ran", "url"]) rmSync(join(w.cwd, file), { force: true });
       const result = w.bash(step(path, name), {
         RELEASE: release,
         RUNNER_TEMP: w.cwd,
         PATHS: "Dockerfile",
         ADVISORY: "false",
-        [`${tool}_VERSION`]: "1.0.0",
-        [`${tool}_SHA256`]: pin,
+        [`${tool}_VERSION`]: version,
+        [`${tool}_SHA256`]: sha256,
+        version: "0.9.0",
+        sha256: fallback,
       });
-      assert.equal(result.status, status, `${name} ${pin}: ${result.stdout}${result.stderr}`);
-      assert.equal(existsSync(join(w.cwd, "ran")), ran, `${name} ${pin}`);
+      const label = `${name} ${version} ${sha256} ${fallback}`;
+      assert.equal(result.status, status, `${label}: ${result.stdout}${result.stderr}`);
+      assert.equal(existsSync(join(w.cwd, "ran")), ran !== undefined, label);
+      if (ran) assert.match(w.read("url"), new RegExp(`/v${ran}/`), label);
       assert.match(
         result.stdout
           .split("\n")
@@ -227,8 +249,14 @@ test("scan-secrets and refresh-apko-locks build their tool from Go's checksum-ve
     [
       "security-actions/scan-secrets/action.yaml",
       "install gitleaks",
-      { GITLEAKS_VERSION: "v8.30.1" },
+      { GITLEAKS_VERSION: "v8.30.1", version: "8.29.0" },
       ["/usr/local/bin", "github.com/zricethezav/gitleaks/v8@v8.30.1"],
+    ],
+    [
+      "security-actions/scan-secrets/action.yaml",
+      "install gitleaks",
+      { GITLEAKS_VERSION: "", version: "8.29.0" },
+      ["/usr/local/bin", "github.com/zricethezav/gitleaks/v8@v8.29.0"],
     ],
     [
       "generic-actions/refresh-apko-locks/action.yaml",
@@ -242,6 +270,50 @@ test("scan-secrets and refresh-apko-locks build their tool from Go's checksum-ve
     succeeds(w.bash(step(path, name), env));
     const call = JSON.parse(w.read("calls"));
     assert.deepEqual([call[0], call[1], call.at(-1)], [gobin, "install", module], name);
+  }
+});
+
+test("scan-secrets appends a repo's extra allowlists to the config gitleaks reads", (t) => {
+  const w = workspace(t);
+  const path = "security-actions/scan-secrets/action.yaml";
+  w.stub("gitleaks", "const a = process.argv; require('fs').copyFileSync(a[a.indexOf('--config') + 1], 'read.toml');");
+  const baseline = readFileSync(join(root, "security-actions/scan-secrets/gitleaks.toml"), "utf8");
+  const extra = "[[allowlists]]\ndescription = \"Fixture.\"\npaths = ['''fixture''']\n";
+  w.write(".gitleaks.extra.toml", extra);
+  w.write(".gitleaks.toml", "[extend]\nuseDefault = true\n");
+  const env = { ADVISORY: "false", RUNNER_TEMP: w.cwd, ACTION_PATH: join(root, "security-actions/scan-secrets") };
+  // [config, extra_config, the config gitleaks reads]
+  const cases = [
+    ["", "", baseline],
+    ["", ".gitleaks.extra.toml", `${baseline}\n${extra}`],
+    [".gitleaks.toml", ".gitleaks.extra.toml", `[extend]\nuseDefault = true\n\n${extra}`],
+  ];
+  for (const [config, extraConfig, read] of cases) {
+    succeeds(w.bash(step(path, "scan working tree"), { ...env, CONFIG: config, EXTRA_CONFIG: extraConfig }));
+    assert.equal(w.read("read.toml"), read, `${config} ${extraConfig}`);
+  }
+  const missing = w.bash(step(path, "scan working tree"), { ...env, CONFIG: "", EXTRA_CONFIG: "missing.toml" });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /^::error::config 'missing.toml' not found in the workspace\.$/m);
+});
+
+// A caller job is the action alone, so an action without its own checkout would scan an empty workspace.
+test("actions that read the repository check it out first, without persisting credentials", () => {
+  const actions = [
+    "build-actions/check-reproducible",
+    "build-actions/docker",
+    "generic-actions/lint-dockerfile",
+    "generic-actions/lint-shell",
+    "github-pages-actions/publish-api-docs",
+    "go-actions/lint-go",
+    "security-actions/lint-semgrep",
+    "security-actions/lint-workflows",
+    "security-actions/scan-secrets",
+  ];
+  for (const action of actions) {
+    const [first] = manifest(`${action}/action.yaml`).runs.steps;
+    assert.match(first.uses, /^actions\/checkout@[0-9a-f]{40}$/, action);
+    assert.deepEqual(first.with, { "persist-credentials": false }, action);
   }
 });
 

@@ -1,0 +1,46 @@
+name: check reproducible
+description: >
+  Build an image twice at once, on two fresh builders sharing no cache, and fail unless both builds
+  produce the same digest, so a release that changes nothing in the image keeps its digest.
+
+inputs:
+  file:
+    required: false
+    default: builds/database.Dockerfile
+    description: Path of the Dockerfile, relative to the repository root.
+  context:
+    required: false
+    default: .
+    description: The build context, relative to the repository root.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Build the image twice
+      shell: bash
+      env:
+        FILE: ${{ inputs.file }}
+        CONTEXT: ${{ inputs.context }}
+        SOURCE_DATE_EPOCH: "0"
+      run: |
+        set -euo pipefail
+        build() {
+          docker buildx create --name "$1" --driver docker-container --bootstrap >/dev/null
+          docker buildx build --builder "$1" --provenance=false --file "$FILE" \
+            --output "type=oci,dest=$RUNNER_TEMP/$1.tar,rewrite-timestamp=true" \
+            --metadata-file "$RUNNER_TEMP/$1.json" "$CONTEXT" 2>&1 | sed -u "s/^/[$1] /"
+        }
+        build first &
+        pid=$!
+        build second
+        wait "$pid"
+        first="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/first.json")"
+        second="$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/second.json")"
+        if [ "$first" != "$second" ]; then
+          echo "::error::$FILE rebuilt to $second instead of $first."
+          exit 1
+        fi
+        echo "$FILE reproduces as $first." >>"$GITHUB_STEP_SUMMARY"

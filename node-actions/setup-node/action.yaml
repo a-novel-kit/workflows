@@ -10,8 +10,10 @@ inputs:
   ref:
     required: false
     description: >
-      Ref to check out, github.head_ref by default. A dispatched release passes its tag, so the build
-      is the bumped commit.
+      Ref to check out. Empty checks out the event's commit, which on a pull request is GitHub's merge
+      commit, the tree the Go lanes test too. A check bound to the head passes
+      `github.event.pull_request.head.sha`, and a dispatched release passes its tag, so the build is
+      the bumped commit.
     default: ""
 
 outputs:
@@ -25,7 +27,7 @@ runs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         token: ${{ inputs.github_token }}
-        ref: ${{ inputs.ref != '' && inputs.ref || github.head_ref }}
+        ref: ${{ inputs.ref }}
         persist-credentials: false
     - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

@@ -1,0 +1,52 @@
+name: publish API docs
+description: >
+  Deploy a service's API reference to GitHub Pages: `openapi.html` as the page, beside
+  `openapi.yaml` when the repo has one, and, with `grpc_title`, the gRPC document converted from the
+  protos through `buf.gen.docs.yaml`. The calling job holds the permissions and concurrency group
+  `deploy` names.
+
+inputs:
+  grpc_title:
+    required: false
+    default: ""
+    description: >
+      Title of the gRPC document, such as "JSON Keys gRPC API". Empty publishes the REST reference
+      alone.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - if: inputs.grpc_title != ''
+      uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+      with:
+        setup_only: true
+    # The converted document names no API and no version, carries the Connect protocol headers,
+    # and repeats each field's name as its title. jq fixes all three.
+    - name: Assemble the site
+      shell: bash
+      env:
+        GRPC_TITLE: ${{ inputs.grpc_title }}
+      run: |
+        set -euo pipefail
+        mkdir _site
+        mv openapi.html _site/index.html
+        if [ -f openapi.yaml ]; then
+          mv openapi.yaml _site/openapi.yaml
+        fi
+        if [ -z "$GRPC_TITLE" ]; then
+          exit 0
+        fi
+
+        version="v$(jq -r .version package.json)"
+        buf generate --template buf.gen.docs.yaml -o "$RUNNER_TEMP"
+        jq --arg title "$GRPC_TITLE" --arg version "$version" '
+          .info = {title: $title, version: $version}
+          | del(.paths[][].parameters, .components.schemas["connect-protocol-version", "connect-timeout-header"])
+          | walk(if type == "object" and (.properties | type) == "object" then .properties[] |= del(.title) else . end)
+        ' "$RUNNER_TEMP/grpc.openapi.json" > _site/grpc.openapi.json
+    - uses: a-novel-kit/workflows/github-pages-actions/deploy@v1.86.0
+      with:
+        path: _site

@@ -16,8 +16,8 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Versions pinned in workflow with: blocks, under `version` or the release actions' `cli_version`, and container image tags that follow another package's releases, annotated with a renovate datasource comment. A digest moves with its version: an image digest written after the version as `@sha256:<digest>`, or a release file's sha256 on the next line.",
-      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "description": "Versions pinned in workflow with: blocks, under `version` or the release actions' `cli_version`, and container image tags that follow another package's releases, annotated with a renovate datasource comment. A digest moves with its version: an image digest written after the version as `@sha256:<digest>`, or a release file's sha256 on the next line. It also reads the scanner defaults kit/workflows' action manifests keep in a step's env.",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/", "/^[a-z]+-actions/[^/]+/action\\.yaml$/"],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+(?:cli_)?version:\\s*[\"']?(?<currentValue>[^\"'\\s@]+)(?:(?:@|[\"']?\\s+sha256:\\s*[\"']?)(?<currentDigest>(?:sha256:)?[a-f0-9]{64}))?",
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+image:\\s*[^\\s:]+:v(?<currentValue>[^\\s\"'-]+)"

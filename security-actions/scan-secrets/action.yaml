@@ -9,11 +9,15 @@ inputs:
     required: false
     default: ""
     description: >
-      Repo-local gitleaks config, relative to the workspace. Empty uses the shipped baseline.
-
-      A repo config replaces the baseline whole. gitleaks rejects `extend.path` together with
-      `extend.useDefault`, and an extending config's allowlists replace the base's. A repo that
-      needs one more allowlist entry therefore copies the shipped gitleaks.toml and adds to it.
+      Repo-local gitleaks config, relative to the workspace, that replaces the shipped baseline
+      whole. Empty uses the baseline.
+  extra_config:
+    required: false
+    default: ""
+    description: >
+      Repo file, relative to the workspace, holding only the repo's own `[[allowlists]]` tables.
+      They are appended to the config, since gitleaks drops a base config's allowlists when another
+      config extends it.
   advisory:
     required: false
     default: "false"
@@ -21,20 +25,25 @@ inputs:
       When "true", redacted findings go to the run summary and the log, and the check passes. When
       "false", any finding fails the check. A scan that fails to run fails either way.
   version:
-    required: true
+    required: false
     description: >
-      gitleaks release tag, with or without the leading v. The caller pins it so Renovate bumps it
-      per repo, with the annotation
-      `# renovate: datasource=github-releases depName=gitleaks/gitleaks`. The action builds that
-      version with the runner's Go, which checks the source against Go's checksum database.
+      gitleaks release tag, with or without the leading v, for a repo that must hold its own
+      release. Empty runs the release this action pins, which Renovate moves here. The action builds
+      the version with the runner's Go, which checks the source against Go's checksum database.
 
 runs:
   using: composite
   steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: install gitleaks
       shell: bash
       env:
         GITLEAKS_VERSION: ${{ inputs.version }}
+        # The pinned default, under the key the base Renovate preset's workflow regex reads.
+        # renovate: datasource=github-releases depName=gitleaks/gitleaks
+        version: "8.30.1"
         # Any proxy error falls back to the origin; Go's checksum database still verifies the source.
         GOPROXY: "https://proxy.golang.org|direct"
       run: |
@@ -43,7 +52,8 @@ runs:
         # replacing the release's files, checksums.txt included, or moving its tag cannot change.
         # The build tag and version stamp match gitleaks' release archives. The binary runs
         # directly, because gitleaks-action's free tier covers one repo per organization.
-        v="${GITLEAKS_VERSION#v}"
+        v="${GITLEAKS_VERSION:-$version}"
+        v="${v#v}"
         GOBIN=/usr/local/bin go install -tags gore2regex \
           -ldflags "-X=github.com/zricethezav/gitleaks/v8/version.Version=${v}" \
           "github.com/zricethezav/gitleaks/v8@v${v}"
@@ -53,17 +63,24 @@ runs:
       shell: bash
       env:
         CONFIG: ${{ inputs.config }}
+        EXTRA_CONFIG: ${{ inputs.extra_config }}
         ADVISORY: ${{ inputs.advisory }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
 
-        config="${CONFIG:-}"
-        if [ -z "$config" ]; then
-          config="$ACTION_PATH/gitleaks.toml"
-        elif [ ! -f "$config" ]; then
-          echo "::error::config '$config' not found in the workspace."
-          exit 1
+        for file in "$CONFIG" "$EXTRA_CONFIG"; do
+          if [ -n "$file" ] && [ ! -f "$file" ]; then
+            echo "::error::config '$file' not found in the workspace."
+            exit 1
+          fi
+        done
+
+        config="${CONFIG:-$ACTION_PATH/gitleaks.toml}"
+        # A TOML array of tables continues across the files, so the extra allowlists join the config's.
+        if [ -n "$EXTRA_CONFIG" ]; then
+          { cat "$config"; echo; cat "$EXTRA_CONFIG"; } >"$RUNNER_TEMP/gitleaks.toml"
+          config="$RUNNER_TEMP/gitleaks.toml"
         fi
 
         # Exit code 10 marks findings, apart from the 1 that gitleaks returns on its own errors.
