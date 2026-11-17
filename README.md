@@ -19,8 +19,8 @@ Composite actions package the steps of a job, reusable workflows package whole j
 [Renovate presets](./docs/renovate-presets.md) carry the shared dependency policy. A repository
 references them by path, pinned to a release tag, instead of copying CI logic.
 
-The governance workflows each repository carries, such as `merge-gate.yaml` and `review-gate.yaml`,
-are thin callers of the reusable workflows and actions here.
+The governance workflows each repository carries, such as `gates.yaml` and
+`auto-approve-dependabot.yaml`, are thin callers of the reusable workflows and actions here.
 
 ## Using an action
 
@@ -90,7 +90,8 @@ move a tag.
 | `approve-pr`             | Admin escape hatch: approve the dispatching admin's own PR as the [Agent] App.                                   |
 | `approve-translations`   | Revoke translation approval labels after a push and rerun the translation check on label changes.                |
 | `archive-board-items`    | Archive the board items in a terminal Status, or whose issue is closed, and close their issues.                  |
-| `assign-bot`             | Assign a PR to its author; a bot's PR stays unassigned.                                                          |
+| `assign-author`          | Assign a PR to its author; a bot's PR stays unassigned.                                                          |
+| `assign-bot`             | Deprecated, use `assign-author`, which it runs.                                                                  |
 | `board-write`            | Set one single-select or date board field on issues or PRs, writing only on a change.                            |
 | `chat-dispatch`          | Hand a central feed's posts to each repository's `notify-post.yaml`, which reads that repository's webhooks.     |
 | `chat-post`              | Post one state-colored embed to a Fluxer channel's Discord-compatible webhook; pings only the ids given.         |
@@ -123,6 +124,7 @@ move a tag.
 | `renovate`               | Run self-hosted Renovate as the bot.                                                                             |
 | `require-role`           | Fail unless whoever started this run attempt holds one of the listed repository roles.                           |
 | `review-gate`            | Required check: a maintainer or admin approved the head and applied every privileged label last.                 |
+| `revoke-labels`          | Remove a PR's head-bound privileged labels after a push, so a reviewer approves the new head again.              |
 | `rollup-board`           | Roll an Epic's Status and Start date up from its children.                                                       |
 | `verify-release-proof`   | Pass a bot PR only when a release built every first-party package and image version it adds.                     |
 
@@ -305,8 +307,10 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `auto-approve-dependabot-run` | Approve and queue a repository's trusted dependency-bot PRs once their update has aged.                          |
 | `backport-run`                | Hotfix entry point: open one backport pull request per default-branch fix into its `release/vX.Y` line.          |
+| `bot-comment-run`             | Post comments as the org's [Agent] App for `a-novel core bot-comment`, scoped to one repository.                 |
+| `dependabot-run`              | Gate, approve and queue a Dependabot security PR from the completion of its CI run.                              |
 | `epic-rollback-run`           | Admin-gated dispatch of `epic-rollback`, behind a typed confirmation.                                            |
-| `merge-gate-run`              | Post the required `merge-gate` check, and arm auto-merge on ready Epic members so they land together.            |
+| `gates-run`                   | Run a PR's governance gates in one job: `merge-gate`, `epic-freeze`, `review-gate` and the board Status.         |
 | `notify-audit-run`            | Alert the org's Fluxer security channel minutes after an audit-log entry grants access or skips a rule.          |
 | `notify-ci-run`               | Post a failed default-branch `main` or `release` run to Fluxer, pinging the repo role, and the run that ends it. |
 | `notify-issues-run`           | Post board issues' Status and assignee changes to Fluxer by stage color, pinging on Triage, Ready and assignees. |
@@ -314,10 +318,12 @@ A job calls these with `uses: a-novel-kit/workflows/.github/workflows/<file>@<ta
 | `notify-release-run`          | Announce a published release in Fluxer with its notes, colored by its bump, gold for a hotfix.                   |
 | `notify-stuck-run`            | Post bots' green pull requests stuck outside the merge queue to Fluxer, and warn when `notify-audit` stops.      |
 | `notify-warnings-run`         | Post a daily digest of the org's default-branch CI warnings to Fluxer, one line per warning.                     |
-| `reconcile-board`             | Per-org fail-safe sweep that repairs the board and the `merge-gate` and `epic-freeze` checks.                    |
+| `reconcile-board`             | Deprecated, use `reconcile-board-run`, which it runs.                                                            |
+| `reconcile-board-run`         | Per-org fail-safe sweep that repairs the board and the `merge-gate` and `epic-freeze` checks.                    |
 | `release-line-run`            | Cut the next patch when a backport merges into a `release/vX.Y` line, behind the `release` environment.          |
 | `release-train-run`           | Admin-gated dispatch of `release-train` for one landed Epic.                                                     |
-| `token-expiry`                | Post an organization's fine-grained personal access tokens to Fluxer as they near expiry.                        |
+| `token-expiry`                | Deprecated, use `token-expiry-run`, which it runs.                                                               |
+| `token-expiry-run`            | Post an organization's fine-grained personal access tokens to Fluxer as they near expiry.                        |
 
 ## Contributing
 

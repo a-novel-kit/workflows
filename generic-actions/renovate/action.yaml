@@ -4,10 +4,10 @@ description: Run a self-hosted Renovate pass over the calling repository as a Gi
 inputs:
   repository_config:
     required: false
-    default: "false"
+    default: ""
     description: >
-      When "true", drop the workflows base preset this action extends globally, so the repository's
-      class preset is the only source of update policy.
+      Deprecated and ignored: the repository's own renovate.json, which extends its class preset, is
+      always the only source of update policy. Drop the input.
   allowed_commands:
     required: false
     description: >
@@ -44,6 +44,10 @@ runs:
         permission-statuses: write
         permission-vulnerability-alerts: read
         permission-workflows: write
+    - name: Warn about the deprecated input
+      if: ${{ inputs.repository_config != '' }}
+      shell: bash
+      run: echo "::warning::The renovate action's repository_config input is deprecated and ignored; drop it."
     - name: self-hosted renovate
       uses: renovatebot/github-action@266fef21329c44765ad42f9dea1f01f5d2d91084 # v46.3.13
       with:
@@ -52,7 +56,6 @@ runs:
         docker-network: ${{ job.container.network }}
       env:
         # An empty variable leaves the matching config.json setting in force.
-        RENOVATE_GLOBAL_EXTENDS: ${{ inputs.repository_config == 'true' && '[]' || '' }}
         RENOVATE_ALLOWED_COMMANDS: ${{ inputs.allowed_commands }}
         RENOVATE_REPOSITORIES: "['${{ github.repository }}']"
         RENOVATE_SECRETS: '{"GITHUB_TOKEN": "${{ inputs.github_token }}"}'

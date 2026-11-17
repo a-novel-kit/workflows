@@ -28,6 +28,19 @@ const run = (files, autoMergeEnabledBy, { armed = true } = {}) =>
 /** A modified file whose patch is the given diff lines, already prefixed. */
 const diff = (filename, lines) => ({ filename, status: "modified", patch: ["@@ -1,9 +1,9 @@", ...lines].join("\n") });
 
+test("a release pin in the cluster root's per-service release file is a pin", async () => {
+  const pin = file(
+    "environments/production/cluster/releases/authentication.tfvars",
+    [`  rest = ${image("v2.13.1", "a")}`],
+    [`  rest = ${image("v2.13.2", "b")}`]
+  );
+  assert.equal((await run([pin], "agent")).decision, "pin");
+  const hyphenated = { ...pin, filename: "environments/production/cluster/releases/json-keys.tfvars" };
+  assert.equal((await run([hyphenated], "agent")).decision, "pin");
+  const elsewhere = { ...pin, filename: "environments/production/cluster/authentication.tfvars" };
+  assert.equal((await run([elsewhere], "agent")).decision, "review");
+});
+
 test("classify lets through only a release pin or a version update Renovate put on auto-merge", async () => {
   const pin = file(
     "environments/production/authentication/terraform.tfvars",
@@ -73,6 +86,7 @@ test("classify lets through only a release pin or a version update Renovate put 
     [`  authentication = "${database("v2.13.1", "a")}"`],
     [`  authentication = "${database("v2.13.2", "b")}"`]
   );
+  const clusterPin = { ...databasePin, filename: "environments/production/cluster/releases/authentication.tfvars" };
   const base = (version, char) =>
     file(
       "builds/backup-test.Dockerfile",
@@ -84,6 +98,8 @@ test("classify lets through only a release pin or a version update Renovate put 
     ["a release pin", [pin], null, "pin"],
     ["a release pin with the Dockerfile base it pins", [databasePin, base("v2.13.2", "b")], null, "pin"],
     ["a Dockerfile base the pull request does not pin", [pin, base("v2.13.2", "c")], null, "review"],
+    ["a Dockerfile base a cluster release file pins", [clusterPin, base("v2.13.2", "b")], null, "pin"],
+    ["a Dockerfile base off the cluster release file's digest", [clusterPin, base("v2.13.2", "c")], null, "review"],
     ["a Dockerfile base alone", [base("v2.13.2", "b")], null, "review"],
     [
       "a Dockerfile base by tag",

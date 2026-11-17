@@ -163,15 +163,13 @@ runs:
         # ---- Organization-wide halt, read before any membership work ------------------------
         # The switch fails toward halting, so only an explicit off-token runs the gate. The halt
         # precedes every other verdict, so it holds every pull request and dequeues every merge group.
-        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        case "$switch" in
-          "" | 0 | off | false | no | disabled) : ;;
-          *)
-            post_check failure "Automation halted org-wide by AGENT_KILL_SWITCH; holding this PR. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to resume; the next event or reconcile sweep re-evaluates."
-            emit ""
-            exit 0
-            ;;
-        esac
+        # shellcheck source=/dev/null # generic-actions/landing.sh, beside this action
+        source "$GITHUB_ACTION_PATH/../landing.sh"
+        if kill_switch_engaged "${KILL_SWITCH:-}"; then
+          post_check failure "Automation halted org-wide by AGENT_KILL_SWITCH; holding this PR. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) to resume; the next event or reconcile sweep re-evaluates."
+          emit ""
+          exit 0
+        fi
 
         # planning_repo becomes an API path component in the pause read below, so it must be a bare
         # repository name. An owner slash, whitespace or an injected path redirects the request. The

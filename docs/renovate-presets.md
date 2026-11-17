@@ -1,7 +1,7 @@
 # Repository-class Renovate configuration
 
-Choose the same class as `a-novel repo`: `service`, `platform`, `library`, `infra`, `workflows` or
-`meta`. Each class inherits `base`, which owns the common update policy.
+Choose the repository's class, as a-novel/infra's GitHub root records it: `service`, `platform`,
+`library`, `infra`, `workflows` or `meta`. Each class inherits `base`, which owns the common update policy.
 
 ```json
 {
@@ -125,21 +125,18 @@ class does not say whether a repository generates protobuf code, and the command
 
 ## Runner configuration
 
-The shared action loads its operator settings from `generic-actions/renovate/config.json`. Set
-`repository_config` when adopting a class preset:
+The shared action loads its operator settings from `generic-actions/renovate/config.json`. The
+repository's `renovate.json`, which extends its class preset, is its only update policy:
 
 ```yaml
 - uses: a-novel-kit/workflows/generic-actions/renovate@v1.86.0
   with:
-    repository_config: "true"
     github_token: ${{ secrets.GITHUB_TOKEN }}
     app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}
     client_id: ${{ vars.DEPENDENCY_BOT_CLIENT_ID }}
 ```
 
-A caller without the input keeps the base policy through the runner's `globalExtends` default.
-`repository_config: "true"` drops that default, so the repository's class preset becomes its only
-update policy. Adopt the preset and the input together.
+The `repository_config` input is deprecated and ignored.
 
 The environment supplies credentials, the current repository, logging and the caller's overrides.
 The runner JSON holds the install behavior, the credential-forwarding templates and the default
@@ -153,8 +150,9 @@ Keep nonstandard architecture or registry choices, compatibility exceptions and 
 generation paths in the consumer. Matching package rules merge in order, repository rules after
 presets. Remove local rules and managers that the class preset carries, since they would apply twice.
 
-The service and library classes share `go-tools`, which isolates each Go tool module in its own
-branch. The service class includes `database`, which updates apko and pinned APK packages and groups
+The service and library classes share `go-tools`, which matches each Go tool modfile in any
+directory, runs its post-upgrade commands in that directory, and isolates each Go tool module in its
+own branch. The service class includes `database`, which updates apko and pinned APK packages and groups
 PostgreSQL runtime packages. Its pgBackRest and apko managers update a version and its
 SHA-256 together: pgBackRest's source archive, and apko's `checksums.txt`, which covers the
 release binary of every architecture. Both accept only stable releases with a matching asset and
@@ -174,5 +172,4 @@ Renovate action version production uses. It resolves each preset's full inherita
 commit.
 
 Before a release, check the consumer overrides that meet a changed policy: group precedence, local
-exceptions, command permissions, duplicate managers and preset-tag updates. The release stamps the
-runner's `globalExtends` reference with its own tag.
+exceptions, command permissions, duplicate managers and preset-tag updates.

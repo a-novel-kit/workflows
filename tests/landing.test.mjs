@@ -124,7 +124,8 @@ function evaluate(t, changes = {}, mode = "evaluate", env = {}) {
     TMPDIR: w.cwd,
     ...env,
   };
-  const output = succeeds(w.bash(`${setup}\n${library}\n${entrypoints[mode]}`, vars));
+  // The search_prs stub on PATH answers in place of the function landing.sh defines.
+  const output = succeeds(w.bash(`${setup}\nunset -f search_prs\n${library}\n${entrypoints[mode]}`, vars));
   return {
     ...(mode === "evaluate" ? JSON.parse(output) : { output }),
     calls: w.read("calls").trim().split("\n").filter(Boolean).map(JSON.parse),

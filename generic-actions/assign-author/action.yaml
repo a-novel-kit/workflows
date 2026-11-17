@@ -1,0 +1,32 @@
+name: assign author
+description: >
+  Assign a pull request to its author. A bot's pull request stays unassigned, which spares a person
+  a notification for every version bump.
+
+inputs:
+  github_token:
+    required: true
+    description: Token with pull requests write, which adds the assignee.
+
+runs:
+  using: "composite"
+  steps:
+    - name: assign author
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        AUTHOR: ${{ github.event.pull_request.user.login }}
+        AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+      run: |
+        set -euo pipefail
+        if [ "$AUTHOR_TYPE" = "Bot" ]; then
+          echo "Author $AUTHOR is a bot; leaving the pull request unassigned."
+          exit 0
+        fi
+        echo "Assigning $AUTHOR to PR #$PR"
+        gh api --method POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "/repos/$REPO/issues/$PR/assignees" -f "assignees[]=$AUTHOR"

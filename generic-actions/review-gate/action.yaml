@@ -22,7 +22,8 @@ inputs:
     default: ""
     description: >
       Labels, separated by newlines or commas, that count only when a maintainer, an admin or the
-      App applied them last. These are the labels that waive a check or spend resources.
+      App applied them last. Empty uses the fleet's list, `generic-actions/privileged-labels.txt`:
+      the labels that waive a check or spend resources.
   event:
     required: false
     default: ${{ github.event_name }}
@@ -140,7 +141,9 @@ runs:
         applied="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/events?per_page=100" --paginate \
           --jq '.[] | select(.event == "labeled") | [.label.name, .actor.login, .actor.type] | @tsv')" ||
           hold "the label history"
-        privileged="$(tr ',' '\n' <<<"$PRIVILEGED" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d')"
+        # An assignment fails the step when the list is missing, so no passing check is posted.
+        list=${PRIVILEGED:-$(cat "$GITHUB_ACTION_PATH/../privileged-labels.txt")}
+        privileged="$(tr ',' '\n' <<<"$list" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^#/d; /^$/d')"
 
         problems=""
         if [ "$bot_written" = false ] && [ -z "$approver" ]; then

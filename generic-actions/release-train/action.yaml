@@ -72,14 +72,12 @@ runs:
         KILL_SWITCH: ${{ inputs.kill_switch }}
       run: |
         set -euo pipefail
-        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        case "$switch" in
-          "" | 0 | off | false | no | disabled) : ;;
-          *)
-            echo "::error::AGENT_KILL_SWITCH engaged: [Agent] automation is halted org-wide; refusing to run the release train. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) before releasing."
-            exit 1
-            ;;
-        esac
+        # shellcheck source=/dev/null # generic-actions/landing.sh, beside this action
+        source "$GITHUB_ACTION_PATH/../landing.sh"
+        if kill_switch_engaged "${KILL_SWITCH:-}"; then
+          echo "::error::AGENT_KILL_SWITCH engaged: [Agent] automation is halted org-wide; refusing to run the release train. Lift the org kill-switch (set it to an explicit off-token, e.g. \"off\", or unset it) before releasing."
+          exit 1
+        fi
 
     # The role is checked here as well as in the caller, since a hand-written or outdated caller can
     # omit the check.
@@ -170,47 +168,16 @@ runs:
 
         # Pull request search node. mergedAt picks each repository's newest-merged sibling, which
         # anchors the ship test, so a later sibling missing from the tag is never masked.
+        # shellcheck disable=SC2034 # search_prs, from landing.sh, reads it
         SEARCH_Q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
             nodes{ ... on PullRequest{ number mergedAt repository{ nameWithOwner } } } } }'
 
-        # Page an ISSUE search to completion, retrying transient GraphQL errors, and print the
-        # aggregated node array. Returns 1 on failure, so the caller fails closed.
-        search_prs() { # $1 = search query
-          local search="$1" cursor="" agg='[]' data page ok args
-          while :; do
-            ok=false
-            for attempt in 1 2 3; do
-              args=(-f query="$SEARCH_Q" -f q="$search")
-              [ -n "$cursor" ] && args+=(-f cursor="$cursor")
-              if data=$(gh api graphql "${args[@]}" 2>&1) \
-                && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
-                ok=true; break
-              fi
-              [ "$attempt" -lt 3 ] && sleep 2
-            done
-            [ "$ok" = true ] || { printf 'search_prs failed for "%s": %s\n' "$search" "$data" >&2; return 1; }
-            page=$(printf '%s' "$data" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')
-            agg=$(jq -s '.[0] + .[1]' <(printf '%s' "$agg") <(printf '%s' "$page"))
-            [ "$(printf '%s' "$data" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
-            cursor=$(printf '%s' "$data" | jq -r '.data.search.pageInfo.endCursor')
-          done
-          printf '%s' "$agg"
-        }
-
-        # Read one pull request through REST, the authority the search index lags behind. Prints
-        # "<merged> <merge_commit_sha>".
-        rest_pr_merge() { # $1=owner/repo $2=number
-          local data
-          for attempt in 1 2 3; do
-            if data=$(gh api "repos/$1/pulls/$2" 2>/dev/null); then
-              printf '%s' "$data" | jq -r '"\(.merged) \(.merge_commit_sha // "")"'; return 0
-            fi
-            [ "$attempt" -lt 3 ] && sleep 2
-          done
-          printf 'rest_pr_merge failed for %s#%s\n' "$1" "$2" >&2; return 1
-        }
+        # search_prs pages that search, failing closed; rest_pr_merge reads one pull request through
+        # REST, the authority the search index lags behind.
+        # shellcheck source=/dev/null # generic-actions/landing.sh, beside this action
+        source "$GITHUB_ACTION_PATH/../landing.sh"
 
         # Newest release tag of a repository, `vX.Y.Z` or a Go submodule's `<dir>/vX.Y.Z`. A
         # repository with no tag prints nothing, which means a first release. A read that fails after

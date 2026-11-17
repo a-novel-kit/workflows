@@ -5,7 +5,8 @@
   },
   "packageRules": [
     {
-      "matchFileNames": ["golangci-lint.mod"],
+      "description": "Each tool modfile, at the root or in a module directory such as the stack's cli/, gets its own branch, and its post-upgrade commands run in the modfile's directory (an empty packageFileDir is the root). A repository holding the same tool's modfile in two directories would share one branch, which takes its config from the first upgrade on it.",
+      "matchFileNames": ["**/golangci-lint.mod"],
       "additionalBranchPrefix": "golangci-lint-",
       "goGetDirs": ["."],
       "postUpgradeTasks": {
@@ -14,20 +15,22 @@
           "go get -modfile=golangci-lint.mod -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint",
           "go tool -modfile=golangci-lint.mod golangci-lint run ./... --fix"
         ],
-        "executionMode": "branch"
+        "executionMode": "branch",
+        "workingDirTemplate": "{{{packageFileDir}}}"
       }
     },
     {
-      "matchFileNames": ["gotestsum.mod"],
+      "matchFileNames": ["**/gotestsum.mod"],
       "additionalBranchPrefix": "gotestsum-",
       "goGetDirs": ["."],
       "postUpgradeTasks": {
         "commands": ["rm -f gotestsum.sum", "go get -modfile=gotestsum.mod -tool gotest.tools/gotestsum"],
-        "executionMode": "branch"
+        "executionMode": "branch",
+        "workingDirTemplate": "{{{packageFileDir}}}"
       }
     },
     {
-      "matchFileNames": ["govulncheck.mod"],
+      "matchFileNames": ["**/govulncheck.mod"],
       "additionalBranchPrefix": "govulncheck-",
       "goGetDirs": ["."],
       "postUpgradeTasks": {
@@ -35,16 +38,17 @@
           "rm -f govulncheck.sum",
           "go get -modfile=govulncheck.mod -tool golang.org/x/vuln/cmd/govulncheck"
         ],
-        "executionMode": "branch"
+        "executionMode": "branch",
+        "workingDirTemplate": "{{{packageFileDir}}}"
       }
     },
     {
-      "matchFileNames": ["go.mod"],
+      "matchFileNames": ["**/go.mod"],
       "postUpdateOptions": ["gomodTidy"]
     },
     {
       "description": "Keep x/tools current for tools that type-check: they read the compiler's export data through it, and a Go patch can raise that format (Go 1.27.2 writes v5, which x/tools before v0.50.0 rejects). Renovate disables the `// indirect` require unless a rule enables it.",
-      "matchFileNames": ["golangci-lint.mod", "mockery.mod"],
+      "matchFileNames": ["**/golangci-lint.mod", "**/mockery.mod"],
       "matchDepNames": ["golang.org/x/tools"],
       "enabled": true
     }

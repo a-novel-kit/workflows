@@ -17,7 +17,7 @@ function sweep(t, tokens) {
     TEST_RUN: "false",
     RUNNER_TEMP: w.cwd,
   };
-  succeeds(w.bash(step(".github/workflows/token-expiry.yaml", "Enumerate org PATs and ping on milestones"), env));
+  succeeds(w.bash(step(".github/workflows/token-expiry-run.yaml", "Enumerate org PATs and ping on milestones"), env));
   return w.read("summary");
 }
 

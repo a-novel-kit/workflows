@@ -77,14 +77,12 @@ runs:
         target="${REPO_FULL}#${PR:-}"
 
         # The org-wide halt is read first, so a halt exits 0 even without a pull request number.
-        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        case "$switch" in
-          "" | 0 | off | false | no | disabled) : ;;
-          *)
-            echo "AGENT_KILL_SWITCH engaged; not enabling auto-merge on ${target} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-            ;;
-        esac
+        # shellcheck source=/dev/null # generic-actions/landing.sh, beside this action
+        source "$GITHUB_ACTION_PATH/../landing.sh"
+        if kill_switch_engaged "${KILL_SWITCH:-}"; then
+          echo "AGENT_KILL_SWITCH engaged; not enabling auto-merge on ${target} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
 
         if [ -z "${PR:-}" ]; then
           echo "::error::pull_request_number is required"

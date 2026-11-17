@@ -1,0 +1,11 @@
+# The labels that waive a check or spend resources. Each approves the head it was added on, so
+# review-gate counts one only when a maintainer, an admin or the [Agent] App applied it last, and
+# revoke-labels removes them all after a push. One label per line.
+allow-dependency-change
+allow-downtime
+allow-incomplete-translations
+allow-resource-deletion
+allow-screenshot-change
+allow-translation-drift
+append-only-override
+with-feature-env

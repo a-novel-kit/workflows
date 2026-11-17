@@ -8,34 +8,37 @@ place this repository in the tooling layer.
 
 ## Where things live
 
-| Path                                                                        | Holds                                                                       |
-| --------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `<group>/<name>/action.yaml`                                                | One composite action, with its scripts beside it or in its group directory. |
-| `.github/workflows/*-run.yaml`, `reconcile-board.yaml`, `token-expiry.yaml` | The reusable workflows other repositories call.                             |
-| `.github/workflows/`, other files                                           | This repository's own CI and release, and its governance callers.           |
-| `renovate/`                                                                 | The Renovate presets, one per repository class plus shared parts.           |
-| `docs/migrations/`                                                          | One guide per release that asks callers to change something.                |
-| `tests/`                                                                    | The regression suites for the actions, workflows and presets.               |
+| Path                              | Holds                                                                       |
+| --------------------------------- | --------------------------------------------------------------------------- |
+| `<group>/<name>/action.yaml`      | One composite action, with its scripts beside it or in its group directory. |
+| `.github/workflows/*-run.yaml`    | The reusable workflows other repositories call.                             |
+| `.github/workflows/`, other files | This repository's own CI and release, and its governance callers.           |
+| `renovate/`                       | The Renovate presets, one per repository class plus shared parts.           |
+| `docs/migrations/`                | One guide per release that asks callers to change something.                |
+| `tests/`                          | The regression suites for the actions, workflows and presets.               |
 
 GitHub shows each action's `name` and `description` to its callers, and the README catalog copies them
 by hand. Update the README in the same change.
 
-Each repository owns its governance callers, such as `merge-gate.yaml`, and its
+Each repository owns its governance callers, such as `gates.yaml`, and its
 `.github/CODEOWNERS`. a-novel-kit/stack#983 retired the templates that rendered them, so a change to a
 caller lands in every repository that carries it.
 
 ## Versioning
 
 One `v*` tag releases every action, workflow and preset together. A maintainer cuts a release from
-**Actions** → **release** → **Run workflow** with a bump type. The run executes
-`publish-actions/release-core` in the protected `release` environment.
+**Actions** → **release** → **Run workflow**; release-core sizes the bump from the commits since the
+last tag. The run executes `publish-actions/release-core` in the protected `release` environment.
 
 An action that calls a sibling references it by tag, as `a-novel-kit/workflows/<group>/<name>@<tag>`,
 so a release always runs its own siblings. The release rewrites those pins to its new tag, together with
 the versions in the README and the presets guide.
 
 A script that several actions share loads through `$GITHUB_ACTION_PATH`, as the security actions load
-`security-actions/run-scan.mjs`.
+`security-actions/run-scan.mjs`. The landing actions source `generic-actions/landing.sh` for the
+kill-switch predicate and the paginated pull request search, and review-gate and revoke-labels read
+the fleet's privileged labels from `generic-actions/privileged-labels.txt`. A deprecated name stays as
+an alias that runs its successor, until the next major removes it.
 
 A third-party action is pinned to its release commit, as `owner/repo@<sha> # vX.Y.Z`, because many
 of these actions run beside an App's private key, and a moved tag must not change what they run.

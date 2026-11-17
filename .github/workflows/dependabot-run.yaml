@@ -1,0 +1,138 @@
+name: dependabot (reusable)
+
+# Gates, approves and queues a repository's Dependabot security pull requests. Dependabot's own pull
+# request events read no Actions secret, so each governed repository calls this engine from the
+# `dependabot` job of its `auto-approve-dependabot.yaml`, on the completion of a CI run, which runs the
+# caller's default-branch copy. The engine reads only metadata: it never checks out the pull request or
+# reads its artifacts. A commit GitHub did not sign for the bot leaves the pull request to a person.
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        description: >-
+          Client id of the [Agent] App that posts the gate checks and approves and queues the pull
+          request. Its review must count toward the required approval.
+        required: true
+        type: string
+      dependabot_security_login:
+        description: Login of the Dependabot security-updates bot whose pull requests are gated.
+        required: true
+        type: string
+    secrets:
+      app_private_key:
+        description: Private key (PEM) of the App that client_id names.
+        required: true
+
+permissions: {}
+
+jobs:
+  # Resolves the open Dependabot pull request whose head the CI run tested.
+  dependabot:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == inputs.dependabot_security_login &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'pull_request')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      node: ${{ steps.pr.outputs.node }}
+      sha: ${{ steps.pr.outputs.sha }}
+    steps:
+      - name: Resolve the current Dependabot pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          BOT: ${{ inputs.dependabot_security_login }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]]
+          candidates=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls")
+          pr=$(jq -ce --arg repo "$GITHUB_REPOSITORY" --arg sha "$HEAD_SHA" --arg bot "$BOT" '
+            [ .[][] | select(.state == "open" and .draft == false and
+              .head.repo.full_name == $repo and .base.repo.full_name == $repo and
+              .base.ref == .base.repo.default_branch and
+              .head.sha == $sha and .user.login == $bot) ] |
+            if length == 0 then {} elif length == 1 then .[0]
+            else error("Ambiguous Dependabot pull request") end' <<< "$candidates")
+          if [ "$pr" = '{}' ]; then
+            printf 'The CI commit no longer identifies an open Dependabot pull request.\n'
+            exit 0
+          fi
+          number=$(jq -r '.number' <<< "$pr")
+          commits=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$number/commits")
+          # An author is only a claimed email; GitHub signs (as web-flow) only the bot's own commits.
+          if ! jq -e --arg bot "$BOT" 'add | length > 0 and all(.[]; .author.login == $bot and
+            .committer.login == "web-flow" and .commit.verification.verified)' <<< "$commits" >/dev/null; then
+            printf 'Dependabot pull request contains commits GitHub did not sign for the bot; human review is required.\n'
+            exit 0
+          fi
+          printf 'number=%s\nnode=%s\nsha=%s\n' "$number" "$(jq -r '.node_id' <<< "$pr")" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  dependabot-gates:
+    needs: [dependabot]
+    if: needs.dependabot.outputs.number != ''
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    uses: a-novel-kit/workflows/.github/workflows/gates-run.yaml@v1.86.0
+    with:
+      client_id: ${{ inputs.client_id }}
+      dependabot_security_login: ${{ inputs.dependabot_security_login }}
+      pull_request_number: ${{ needs.dependabot.outputs.number }}
+      head_sha: ${{ needs.dependabot.outputs.sha }}
+    secrets:
+      app_private_key: ${{ secrets.app_private_key }}
+
+  # Approves the verified head and queues it: the merge queue re-validates the required checks the
+  # gates just posted.
+  dependabot-approve:
+    needs: [dependabot, dependabot-gates]
+    runs-on: ubuntu-latest
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
+    concurrency:
+      group: dependabot-${{ needs.dependabot.outputs.sha }}
+      cancel-in-progress: false
+    # Every write uses the App token.
+    permissions: {}
+    steps:
+      - name: Mint approval token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.app_private_key }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Approve and queue the verified commit
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR_NUMBER: ${{ needs.dependabot.outputs.number }}
+          PR_NODE: ${{ needs.dependabot.outputs.node }}
+          HEAD_SHA: ${{ needs.dependabot.outputs.sha }}
+        run: |
+          set -euo pipefail
+          current=$(gh api graphql -f query='query($pr: ID!) {
+            node(id: $pr) { ... on PullRequest { state headRefOid mergeQueueEntry { id } } }
+          }' -f pr="$PR_NODE")
+          if ! jq -e --arg sha "$HEAD_SHA" '.data.node |
+            .state == "OPEN" and .headRefOid == $sha and .mergeQueueEntry == null' <<< "$current" >/dev/null; then
+            printf 'The pull request changed, closed, or already entered the queue.\n'
+            exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews" --method POST \
+            -f event=APPROVE -f commit_id="$HEAD_SHA" >/dev/null
+          gh api graphql -f query='mutation($pr: ID!, $sha: GitObjectID!) {
+            enqueuePullRequest(input: {pullRequestId: $pr, expectedHeadOid: $sha}) {
+              mergeQueueEntry { id }
+            }
+          }' -f pr="$PR_NODE" -f sha="$HEAD_SHA"

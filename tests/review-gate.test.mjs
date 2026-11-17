@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { join } from "node:path";
 import { step, succeeds, workspace } from "./helpers.mjs";
 
 const gate = step("generic-actions/review-gate/action.yaml", "Evaluate and post review-gate");
@@ -21,6 +22,8 @@ function evaluate(
     applied = [],
     fail = "",
     postFails = false,
+    privileged = "allow-dependency-change, with-feature-env",
+    actionPath,
   } = {}
 ) {
   const w = workspace(t);
@@ -54,7 +57,8 @@ function evaluate(
   const env = {
     GITHUB_REPOSITORY: "a-novel/service-authentication",
     AGENT: "anovelbot-agent",
-    PRIVILEGED: "allow-dependency-change, with-feature-env",
+    PRIVILEGED: privileged,
+    ...(actionPath && { GITHUB_ACTION_PATH: actionPath }),
     EVENT: event,
     PR: "7",
     AUTHOR_TYPE: author,
@@ -64,6 +68,8 @@ function evaluate(
     DATA: JSON.stringify({ roles, owner, commits, reviews, labels, applied }),
   };
   const result = w.bash(gate, env);
+  // A run pointed at another action folder reports whether it posted any check.
+  if (actionPath) return { status: result.status, posted: w.read("reads").includes("/check-runs") };
   if (postFails) return { status: result.status };
   succeeds(result);
   const check = JSON.parse(w.read("check.json"));
@@ -176,4 +182,18 @@ test("an unread list or role holds the pull request", (t) => {
   }
   // A hold raised inside a condition still fails the job when its check cannot be posted.
   assert.notEqual(evaluate(t, { reviews: [approve("flaky")], postFails: true }).status, 0);
+});
+
+test("an empty privileged_labels input reads the fleet's list", (t) => {
+  const reviews = [approve("lead")];
+  const byDev = (label) => ({ reviews, privileged: "", labels: [label], applied: [[label, "dev", "User"]] });
+  assert.equal(evaluate(t, byDev("allow-screenshot-change")).conclusion, "failure");
+  assert.equal(evaluate(t, byDev("documentation")).conclusion, "success");
+});
+
+test("a missing privileged list fails the step, so no passing check is posted", (t) => {
+  const w = workspace(t);
+  const result = evaluate(t, { reviews: [approve("lead")], privileged: "", actionPath: join(w.cwd, "x") });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.posted, false);
 });
