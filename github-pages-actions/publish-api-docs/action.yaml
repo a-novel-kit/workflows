@@ -47,6 +47,6 @@ runs:
           | del(.paths[][].parameters, .components.schemas["connect-protocol-version", "connect-timeout-header"])
           | walk(if type == "object" and (.properties | type) == "object" then .properties[] |= del(.title) else . end)
         ' "$RUNNER_TEMP/grpc.openapi.json" > _site/grpc.openapi.json
-    - uses: a-novel-kit/workflows/github-pages-actions/deploy@v1.86.0
+    - uses: a-novel-kit/workflows/github-pages-actions/deploy@v1.87.0
       with:
         path: _site

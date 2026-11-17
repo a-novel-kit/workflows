@@ -6,7 +6,7 @@ Choose the repository's class, as a-novel/infra's GitHub root records it: `servi
 ```json
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>a-novel-kit/workflows//renovate/service#v1.86.0"]
+  "extends": ["github>a-novel-kit/workflows//renovate/service#v1.87.0"]
 }
 ```
 
@@ -116,8 +116,8 @@ beside its class, pinned to the same release:
 ```json
 {
   "extends": [
-    "github>a-novel-kit/workflows//renovate/service#v1.86.0",
-    "github>a-novel-kit/workflows//renovate/protobuf#v1.86.0"
+    "github>a-novel-kit/workflows//renovate/service#v1.87.0",
+    "github>a-novel-kit/workflows//renovate/protobuf#v1.87.0"
   ]
 }
 ```
@@ -134,7 +134,7 @@ The shared action loads its operator settings from `generic-actions/renovate/con
 repository's `renovate.json`, which extends its class preset, is its only update policy:
 
 ```yaml
-- uses: a-novel-kit/workflows/generic-actions/renovate@v1.86.0
+- uses: a-novel-kit/workflows/generic-actions/renovate@v1.87.0
   with:
     github_token: ${{ secrets.GITHUB_TOKEN }}
     app_private_key: ${{ secrets.DEPENDENCY_BOT_PRIVATE_KEY }}

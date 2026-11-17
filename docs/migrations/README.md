@@ -2,6 +2,7 @@
 
 One immutable guide per release that asks consumers to change something. Newest first.
 
+- [v1.87.0](./v1.87.0.md): The governance gates run from one reusable `gates-run.yaml`, the Dependabot path from `dependabot-run.yaml`, board ids and privileged labels default inside the actions, and the `go-tools` preset matches tool modfiles in any directory. The lint actions check out and pin their scanners themselves, new actions replace the services' copied build, Compose and Pages steps, and Node lanes on a pull request test the merge commit.
 - [v1.86.0](./v1.86.0.md): `discord-post`, `discord-users` and `discord-dispatch` are renamed `chat-post`, `chat-users` and `chat-dispatch`, and `chat-users` returns `chat_ids`. The old paths keep working until the next major.
 - [v1.85.0](./v1.85.0.md): A hotfix cut now rehearses itself and writes the patch's release notes to the run summary before anyone approves it.
 - [v1.84.1](./v1.84.1.md): Corrects the v1.84.0 guide, where the release replaced every mention of the pending guide's name with its version.

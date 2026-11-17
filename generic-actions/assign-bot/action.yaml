@@ -14,6 +14,6 @@ runs:
     - name: Warn about the deprecated name
       shell: bash
       run: echo "::warning::generic-actions/assign-bot is deprecated; call generic-actions/assign-author with the same inputs."
-    - uses: a-novel-kit/workflows/generic-actions/assign-author@v1.86.0
+    - uses: a-novel-kit/workflows/generic-actions/assign-author@v1.87.0
       with:
         github_token: ${{ inputs.github_token }}

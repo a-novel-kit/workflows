@@ -28,7 +28,7 @@ jobs:
   watch:
     # Every job of the engine mints its own App token.
     permissions: {}
-    uses: a-novel-kit/workflows/.github/workflows/token-expiry-run.yaml@v1.86.0
+    uses: a-novel-kit/workflows/.github/workflows/token-expiry-run.yaml@v1.87.0
     with:
       client_id: ${{ inputs.client_id }}
       dry_run: ${{ inputs.dry_run }}

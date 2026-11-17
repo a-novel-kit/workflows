@@ -80,7 +80,7 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
-    uses: a-novel-kit/workflows/.github/workflows/gates-run.yaml@v1.86.0
+    uses: a-novel-kit/workflows/.github/workflows/gates-run.yaml@v1.87.0
     with:
       client_id: ${{ inputs.client_id }}
       dependabot_security_login: ${{ inputs.dependabot_security_login }}
