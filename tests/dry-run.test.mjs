@@ -23,7 +23,7 @@ const actions = globSync("*-actions/*/action.yaml", { cwd: root }).filter(
 );
 assert.notEqual(actions.length, 0);
 
-for (const path of [...actions, ".github/workflows/token-expiry.yaml"])
+for (const path of [...actions, ".github/workflows/token-expiry-run.yaml"])
   test(`${path} runs live only on a dry_run of "false"`, (t) => {
     const doc = manifest(path);
     const steps = doc.runs?.steps ?? Object.values(doc.jobs).flatMap((job) => job.steps);

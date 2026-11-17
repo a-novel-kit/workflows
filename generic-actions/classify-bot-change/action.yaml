@@ -4,7 +4,8 @@ description: >
   merges reach production. The classified diff is that of the exact commit the caller approves.
 
   The decision is "pin" when the pull request changes nothing but release pins: ghcr.io/a-novel
-  images in terraform.tfvars, and Dockerfile FROM lines taking a digest the same pull request pins
+  images in terraform.tfvars or in environments/production/cluster/releases/<service>.tfvars, and
+  Dockerfile FROM lines taking a digest the same pull request pins
   there. It is "renovate" when the bot first enabled auto-merge, auto-merge is still on, and every
   changed line outside checksum files moves only a dependency reference's version, or a digest
   together with its version. It is "ranges" when the pull request changes only a

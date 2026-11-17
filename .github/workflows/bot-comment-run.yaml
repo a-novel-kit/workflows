@@ -1,0 +1,200 @@
+name: bot-comment (reusable)
+
+# Posts pull request, issue and review comments as the calling org's [Agent] App, for
+# `a-novel core bot-comment`. Each org's dispatcher repository calls this engine from its own
+# `bot-comment.yaml`, which an operator dispatches with their own gh token: a-novel's lives in
+# a-novel/.github and a-novel-kit's in a-novel-kit/stack. The App key is a secret of the caller's
+# governance environment, so it never reaches a dev machine.
+#
+# The job mints a token scoped to the target repository, with issues and pull requests write only,
+# so it cannot push, merge, release or change settings. Those permissions could still author or edit
+# a pull request or issue. The job only posts comments, and the governance environment admits only
+# the default branch's copy, so a compromised trigger can ask for comments and nothing more.
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        description: Client id of the org's [Agent] App, which posts the comments.
+        required: true
+        type: string
+      repo:
+        description: Target repository name within the calling org, with no owner/ prefix.
+        required: true
+        type: string
+      nonce:
+        description: Client-generated lowercase hex id, for run correlation and idempotency.
+        required: true
+        type: string
+      number:
+        description: >-
+          Pull request or issue number, for the single-comment form. Issues and pull requests share
+          one number sequence per repository, so a number names exactly one of them.
+        required: false
+        type: string
+        default: ""
+      body:
+        description: Markdown comment body, for the single-comment form.
+        required: false
+        type: string
+        default: ""
+      reply_to:
+        description: Inline review-comment id to reply to, for the single-comment form. Empty posts a top-level comment.
+        required: false
+        type: string
+        default: ""
+      comments:
+        description: >-
+          JSON array of {number, body, reply_to?}, for the batch form. A non-empty batch supersedes the
+          single-comment inputs.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app_private_key:
+        description: Private key (PEM) of the App that client_id names.
+        required: true
+
+# Every write uses the scoped App token, so the workflow token gets nothing.
+permissions: {}
+
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    # The App key is a secret of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
+    permissions: {}
+    steps:
+      # Validate before minting a token, so a malformed manual dispatch fails
+      # early. The checks cover what the GitHub API cannot report meaningfully:
+      # the token's repository scope, the nonce format, the batch shape and the
+      # comment targets that become API path segments. The API reports
+      # per-comment errors at post time, so the rules never drift from GitHub's.
+      # A malformed batch may post partially, and a re-dispatch posts the rest,
+      # since the markers skip what already landed.
+      - name: Validate inputs
+        env:
+          REPO: ${{ inputs.repo }}
+          NONCE: ${{ inputs.nonce }}
+          NUMBER: ${{ inputs.number }}
+          REPLY_TO: ${{ inputs.reply_to }}
+          COMMENTS: ${{ inputs.comments }}
+        run: |
+          set -euo pipefail
+          if [ -z "$REPO" ]; then
+            echo "::error::repo is empty"
+            exit 1
+          fi
+          case "$REPO" in
+            */*)
+              echo "::error::repo '$REPO' must be a bare repo name, no owner/ prefix"
+              exit 1
+              ;;
+          esac
+          # The CLI encodes the nonce as lowercase hex. The API never sees it:
+          # the nonce only appears in markers and the run name.
+          case "$NONCE" in
+            '' | *[!0-9a-f]*)
+              echo "::error::nonce '$NONCE' must be lowercase hex"
+              exit 1
+              ;;
+          esac
+          # The post loop's jq needs a non-empty array and fails cryptically on
+          # anything else.
+          if [ -n "$COMMENTS" ] && ! printf '%s' "$COMMENTS" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1; then
+            echo "::error::comments must be a non-empty JSON array"
+            exit 1
+          fi
+          # Each number and reply_to becomes a segment of the API path, so each
+          # must be a bare positive integer. The single form is checked as the
+          # one-item batch the post step builds from it. \A and \z anchor the
+          # whole value, where $ would also match before a trailing newline.
+          if [ -n "$COMMENTS" ]; then
+            items="$COMMENTS"
+          else
+            items=$(jq -cn --arg n "$NUMBER" --arg r "$REPLY_TO" '[{number: $n, reply_to: $r}]')
+          fi
+          if ! printf '%s' "$items" | jq -e 'all(.[];
+            (.number | tostring | test("\\A[1-9][0-9]*\\z"))
+            and ((.reply_to // "") | tostring | test("\\A([1-9][0-9]*)?\\z")))' >/dev/null 2>&1; then
+            echo "::error::every number must be a positive integer, and every reply_to empty or a positive integer"
+            exit 1
+          fi
+
+      # The App is installed org-wide, and the token still reaches only the
+      # target repository. The owner and the key both come from the host org,
+      # so this copy acts only within its own org.
+      - name: Mint scoped bot token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repo }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Post comments
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ inputs.repo }}
+          NONCE: ${{ inputs.nonce }}
+          NUMBER: ${{ inputs.number }}
+          BODY: ${{ inputs.body }}
+          REPLY_TO: ${{ inputs.reply_to }}
+          COMMENTS: ${{ inputs.comments }}
+        run: |
+          set -euo pipefail
+          slug="${OWNER}/${REPO}"
+
+          # The single-comment form becomes a one-item batch, so the loop below
+          # is the only post path.
+          if [ -n "$COMMENTS" ]; then
+            items="$COMMENTS"
+          else
+            items=$(jq -cn --arg n "$NUMBER" --arg b "$BODY" --arg r "$REPLY_TO" \
+              '[{number: $n, body: $b, reply_to: $r}]')
+          fi
+
+          # Each marker carries nonce:index, and the same array yields the same
+          # markers, so a retried run skips every comment that already landed.
+          # Each thread is listed once per run. A comment this run posts carries
+          # a marker no other item looks for, so that first listing answers
+          # every item of the thread.
+          declare -A listings=()
+          idx=0
+          # One jq streams every item's fields, NUL-separated, since a body may hold any other byte.
+          while IFS= read -r -d '' number && IFS= read -r -d '' reply_to && IFS= read -r -d '' body; do
+            marker="<!-- bot-comment:${NONCE}:${idx} -->"
+            full_body="${body}"$'\n\n'"${marker}"
+
+            # A reply_to answers an inline review thread, which only a pull
+            # request has. Without one, the issues endpoint posts a top-level
+            # comment on either kind, since a pull request is an issue.
+            if [ -n "$reply_to" ]; then
+              list_url="repos/${slug}/pulls/${number}/comments"
+              post_url="repos/${slug}/pulls/${number}/comments/${reply_to}/replies"
+            else
+              list_url="repos/${slug}/issues/${number}/comments"
+              post_url="repos/${slug}/issues/${number}/comments"
+            fi
+
+            # --paginate prints one array per page, and jq reads each in turn.
+            if [ -z "${listings[$list_url]:-}" ]; then
+              listings[$list_url]=$(mktemp)
+              gh api "$list_url" --paginate > "${listings[$list_url]}"
+            fi
+            existing=$(jq -r --arg marker "$marker" \
+              '[.[] | select(.body | contains($marker)) | .html_url] | .[0] // empty' "${listings[$list_url]}")
+
+            if [ -n "$existing" ]; then
+              echo "already posted (idempotent): $existing" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              url=$(gh api --method POST "$post_url" -f body="$full_body" --jq .html_url)
+              echo "posted: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            idx=$((idx + 1))
+          done < <(printf '%s' "$items" | jq -j '.[] | "\(.number)\u0000\(.reply_to // "")\u0000\(.body)\u0000"')

@@ -28,10 +28,11 @@ inputs:
     required: true
     description: Private key (PEM) of that App.
   project_id:
-    required: true
+    required: false
+    default: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
     description: >
       Node id of the Projects v2 board (PVT_…). Find it with: gh project view <n> --owner <org>
-      --format json.
+      --format json. Defaults to the calling org's Tasks board.
   severity:
     required: true
     description: >

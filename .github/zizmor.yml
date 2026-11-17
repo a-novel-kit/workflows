@@ -28,8 +28,8 @@ rules:
       # Each mints an App token with `owner:` and no `repositories:`, which zizmor reads as
       # over-broad. Each is an org-wide sweep, and a repository list would blind it:
       #
-      #   token-expiry.yaml: reads the organization's PATs through an org-level grant.
-      #   reconcile-board.yaml: searches every repository's pull requests for the board.
+      #   token-expiry-run.yaml: reads the organization's PATs through an org-level grant.
+      #   reconcile-board-run.yaml: searches every repository's pull requests for the board.
       #   notify-issues-run.yaml: reads the org board, whose issues live in every repository.
       #   notify-pr-run.yaml: reads the issues a pull request closes, in any repository.
       #   notify-stuck-run.yaml: searches every repository for stuck bot pull requests.
@@ -38,8 +38,8 @@ rules:
       #
       # All seven keep the default token unused or read-only and give the App token read-only
       # `permission-*` scopes. A wider grant voids this exception.
-      - token-expiry.yaml
-      - reconcile-board.yaml
+      - token-expiry-run.yaml
+      - reconcile-board-run.yaml
       - notify-issues-run.yaml
       - notify-pr-run.yaml
       - notify-stuck-run.yaml

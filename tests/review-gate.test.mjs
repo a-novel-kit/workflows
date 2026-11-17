@@ -21,6 +21,7 @@ function evaluate(
     applied = [],
     fail = "",
     postFails = false,
+    privileged = "allow-dependency-change, with-feature-env",
   } = {}
 ) {
   const w = workspace(t);
@@ -54,7 +55,7 @@ function evaluate(
   const env = {
     GITHUB_REPOSITORY: "a-novel/service-authentication",
     AGENT: "anovelbot-agent",
-    PRIVILEGED: "allow-dependency-change, with-feature-env",
+    PRIVILEGED: privileged,
     EVENT: event,
     PR: "7",
     AUTHOR_TYPE: author,
@@ -176,4 +177,11 @@ test("an unread list or role holds the pull request", (t) => {
   }
   // A hold raised inside a condition still fails the job when its check cannot be posted.
   assert.notEqual(evaluate(t, { reviews: [approve("flaky")], postFails: true }).status, 0);
+});
+
+test("an empty privileged_labels input reads the fleet's list", (t) => {
+  const reviews = [approve("lead")];
+  const byDev = (label) => ({ reviews, privileged: "", labels: [label], applied: [[label, "dev", "User"]] });
+  assert.equal(evaluate(t, byDev("allow-screenshot-change")).conclusion, "failure");
+  assert.equal(evaluate(t, byDev("documentation")).conclusion, "success");
 });

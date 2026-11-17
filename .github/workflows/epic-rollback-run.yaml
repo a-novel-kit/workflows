@@ -43,9 +43,10 @@ on:
         required: true
         type: string
       project_id:
-        description: Node id (PVT_…) of the org project board whose rolled-back tasks return to Ready.
-        required: true
+        description: Node id (PVT_…) of the org project board whose rolled-back tasks return to Ready. Defaults to the calling org's Tasks board.
+        required: false
         type: string
+        default: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
       kill_switch:
         description: >
           Org-wide halt value. Any value but an explicit off value (empty, 0, off, false, no,

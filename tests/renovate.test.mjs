@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { test } from "node:test";
 import { read, root } from "./helpers.mjs";
 
@@ -10,8 +10,9 @@ const base = preset("base"),
   goTools = preset("go-tools"),
   service = preset("service");
 const regex = (value) => new RegExp(value.slice(1, value.lastIndexOf("/")), value.slice(value.lastIndexOf("/") + 1));
+// Renovate reads a matchFileNames entry as a regular expression between slashes, else as a glob.
 const matches = (patterns, value) =>
-  patterns.some((pattern) => (pattern.startsWith("/") ? regex(pattern).test(value) : pattern === value));
+  patterns.some((pattern) => (pattern.startsWith("/") ? regex(pattern).test(value) : matchesGlob(value, pattern)));
 const extract = (manager, fixture) =>
   manager.matchStrings.flatMap((pattern) =>
     [...fixture.matchAll(new RegExp(pattern, "g"))].map(({ groups }) => ({ ...groups }))
@@ -246,9 +247,15 @@ test("Renovate discovers tool modules and compose files while excluding unrelate
   const tools = goTools.gomod.managerFilePatterns[0].match(/\(\?:([^)]+)\)/)[1].split("|");
   for (const tool of tools) {
     const rule = [...goTools.packageRules, ...service.packageRules].find(
-      (r) => r.matchFileNames?.includes(`${tool}.mod`) && r.additionalBranchPrefix
+      (r) => r.matchFileNames && matches(r.matchFileNames, `${tool}.mod`) && r.additionalBranchPrefix
     );
     assert.equal(rule?.additionalBranchPrefix, `${tool}-`, tool);
+  }
+  // The go-tools rules serve a module in a subdirectory too, and run its commands there.
+  for (const rule of goTools.packageRules.filter((r) => r.postUpgradeTasks)) {
+    const [file] = rule.matchFileNames;
+    assert(matches(rule.matchFileNames, `cli/${file.replace("**/", "")}`), file);
+    assert.equal(rule.postUpgradeTasks.workingDirTemplate, "{{{packageFileDir}}}", file);
   }
   const go = base.packageRules.find(
     (r) => r.groupName === "go toolchain" && r.matchManagers?.includes("gomod") && r.matchDepNames?.includes("go")

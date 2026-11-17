@@ -291,11 +291,10 @@ runs:
         # Org-level halt flag. Only an explicit off value runs the action, and any other value halts it.
         # The halt acts just before dispatch, once freeze_post is defined, so a halted per-PR run posts
         # its hold through the dry-run gate.
-        kill_engaged=true
-        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        case "$switch" in
-          "" | 0 | off | false | no | disabled) kill_engaged=false ;;
-        esac
+        # shellcheck source=/dev/null # generic-actions/landing.sh, beside this action
+        source "$GITHUB_ACTION_PATH/../landing.sh"
+        kill_engaged=false
+        if kill_switch_engaged "${KILL_SWITCH:-}"; then kill_engaged=true; fi
         # Per-PR inputs become GraphQL arguments and API path components. Per-PR mode fails open on
         # uncertain data, but a misconfigured input fails the run here.
         if [ "${MODE:-}" = "per-pr" ]; then
@@ -329,6 +328,7 @@ runs:
 
         # One pull request node shape serves the enumeration and the three per-Epic searches. The scope
         # step saves its enumeration in this shape, so a field added here is added there too.
+        # shellcheck disable=SC2034 # search_prs, from landing.sh, reads it
         SEARCH_Q='query($q:String!,$cursor:String){
           search(query:$q, type:ISSUE, first:100, after:$cursor){
             pageInfo{ hasNextPage endCursor }
@@ -351,36 +351,7 @@ runs:
 
         # ---- Read helpers (all use the default read GH_TOKEN) ----------------------------
 
-        # Pages a pull request search to completion, retrying transient GraphQL errors. Prints the
-        # node array, or logs the error to stderr and returns 1.
-        search_prs() { # $1 = search query string
-          local search="$1" cursor="" agg='[]' data page ok
-          while :; do
-            ok=false
-            local args
-            for attempt in 1 2 3; do
-              args=(-f query="$SEARCH_Q" -f q="$search")
-              [ -n "$cursor" ] && args+=(-f cursor="$cursor")
-              # stderr joins stdout so a transport, auth or rate-limit error reaches the log. On success
-              # gh prints only the response JSON, which jq validates.
-              if data=$(gh api graphql "${args[@]}" 2>&1) \
-                && printf '%s' "$data" | jq -e 'has("data") and (has("errors") | not)' >/dev/null 2>&1; then
-                ok=true
-                break
-              fi
-              [ "$attempt" -lt 3 ] && sleep 2
-            done
-            if [ "$ok" != true ]; then
-              printf 'search_prs failed for query "%s": %s\n' "$search" "$data" >&2
-              return 1
-            fi
-            page=$(printf '%s' "$data" | jq '[(.data.search.nodes // [])[] | select(.number != null)]')
-            agg=$(jq -s '.[0] + .[1]' <(printf '%s' "$agg") <(printf '%s' "$page"))
-            [ "$(printf '%s' "$data" | jq -r '.data.search.pageInfo.hasNextPage')" = "true" ] || break
-            cursor=$(printf '%s' "$data" | jq -r '.data.search.pageInfo.endCursor')
-          done
-          printf '%s' "$agg"
-        }
+        # search_prs, from landing.sh, pages a pull request search with SEARCH_Q.
 
         # Prints the live queue entries of one owner, repo and base as a JSON array of
         # {number, state, headOid}. Returns 1 on failure.

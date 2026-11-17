@@ -249,8 +249,8 @@ test("verify-release-proof withholds an image no release attested and passes a d
       assert.deepEqual(verify.slice(3), [
         "--repo",
         "a-novel/service-json-keys",
-        "--signer-workflow",
-        "a-novel/service-json-keys/.github/workflows/release.yaml",
+        "--signer-regex",
+        "^https://github\\.com/a-novel/service-json-keys/\\.github/workflows/(main|release)\\.yaml@refs/tags/v2\\.11\\.0$",
         "--source-ref",
         "refs/tags/v2.11.0",
         "--deny-self-hosted-runners",

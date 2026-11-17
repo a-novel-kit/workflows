@@ -1,7 +1,7 @@
-name: assign bot
+name: assign bot (deprecated)
 description: >
-  Assign a pull request to its author. A bot's pull request stays unassigned, which spares a person
-  a notification for every version bump.
+  Deprecated alias of `assign-author`, which assigns a pull request to its author. Call that action
+  instead; this one goes in the next major.
 
 inputs:
   github_token:
@@ -9,24 +9,11 @@ inputs:
     description: Token with pull requests write, which adds the assignee.
 
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: assign author
+    - name: Warn about the deprecated name
       shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github_token }}
-        REPO: ${{ github.repository }}
-        PR: ${{ github.event.pull_request.number }}
-        AUTHOR: ${{ github.event.pull_request.user.login }}
-        AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
-      run: |
-        set -euo pipefail
-        if [ "$AUTHOR_TYPE" = "Bot" ]; then
-          echo "Author $AUTHOR is a bot; leaving the pull request unassigned."
-          exit 0
-        fi
-        echo "Assigning $AUTHOR to PR #$PR"
-        gh api --method POST \
-          -H "Accept: application/vnd.github+json" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          "/repos/$REPO/issues/$PR/assignees" -f "assignees[]=$AUTHOR"
+      run: echo "::warning::generic-actions/assign-bot is deprecated; call generic-actions/assign-author with the same inputs."
+    - uses: a-novel-kit/workflows/generic-actions/assign-author@v1.86.0
+      with:
+        github_token: ${{ inputs.github_token }}

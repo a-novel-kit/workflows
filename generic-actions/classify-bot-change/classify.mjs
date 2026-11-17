@@ -7,7 +7,8 @@ import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { googleServiceRanges } from "../google-service-ranges/ranges.mjs";
 
-const tfvars = /(^|\/)terraform\.tfvars$/;
+// Release pins live in a root's terraform.tfvars, or in the cluster root's per-service release files.
+const tfvars = /(^|\/)terraform\.tfvars$|^environments\/production\/cluster\/releases\/[a-z0-9-]+\.tfvars$/;
 const serviceRangesFile = /(^|\/)google-service-ranges\.json$/;
 const releasePin = /"ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}"/;
 const releaseRef = /ghcr\.io\/a-novel\/[^"\s]+:[^"@\s]+@sha256:[0-9a-f]{64}/g;

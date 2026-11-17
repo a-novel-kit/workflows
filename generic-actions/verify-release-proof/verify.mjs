@@ -121,6 +121,9 @@ function gh(...args) {
   return execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
+/** A literal for a regular expression. */
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /** The network reads of missingProof, with the job token. */
 function network(token) {
   const dir = mkdtempSync(join(tmpdir(), "release-proof-"));
@@ -140,16 +143,18 @@ function network(token) {
       return file;
     },
     attest(subject, producer, tag) {
-      const workflow = `${producer}/.github/workflows/release.yaml`;
+      // A release builds at its tag in release.yaml, or in main.yaml where main.yaml owns the image
+      // builds; both files run from the tag, so the tag's review covers them.
       const ref = `refs/tags/${tag}`;
+      const signer = `^https://github\\.com/${escape(producer)}/\\.github/workflows/(main|release)\\.yaml@${escape(ref)}$`;
       gh(
         "attestation",
         "verify",
         subject,
         "--repo",
         producer,
-        "--signer-workflow",
-        workflow,
+        "--signer-regex",
+        signer,
         "--source-ref",
         ref,
         "--deny-self-hosted-runners"

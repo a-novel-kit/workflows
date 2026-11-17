@@ -15,10 +15,11 @@ inputs:
     required: true
     description: Private key (PEM) of that App.
   project_id:
-    required: true
+    required: false
+    default: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
     description: >
       Node id of the Projects v2 board (PVT_…). Find it with: gh project view <n> --owner <org>
-      --format json.
+      --format json. Defaults to the calling org's Tasks board.
   content_id:
     required: true
     description: >
@@ -99,18 +100,16 @@ runs:
 
         # Org-level halt, read before any write. Only an explicit off-token runs. The guard shares its
         # step with the write, so its `exit 0` ends the action.
-        switch=$(printf '%s' "${KILL_SWITCH:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-        case "$switch" in
-          "" | 0 | off | false | no | disabled) : ;;
-          *)
-            echo "AGENT_KILL_SWITCH engaged; skipping board write for \"${FIELD}\" on ${CONTENT_ID} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
-            {
-              echo "item_id="
-              echo "changed=false"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-            ;;
-        esac
+        # shellcheck source=/dev/null # generic-actions/landing.sh, beside this action
+        source "$GITHUB_ACTION_PATH/../landing.sh"
+        if kill_switch_engaged "${KILL_SWITCH:-}"; then
+          echo "AGENT_KILL_SWITCH engaged; skipping board write for \"${FIELD}\" on ${CONTENT_ID} (org-wide halt)." | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "item_id="
+            echo "changed=false"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         for v in PROJECT_ID CONTENT_ID FIELD VALUE; do
           if [ -z "${!v:-}" ]; then

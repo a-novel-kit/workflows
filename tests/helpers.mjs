@@ -46,6 +46,8 @@ export function workspace(t) {
     GITHUB_ENV: join(cwd, "env"),
     GITHUB_STEP_SUMMARY: join(cwd, "summary"),
     GIT_CEILING_DIRECTORIES: dirname(cwd),
+    // A generic action sources its shared files, such as landing.sh, from `$GITHUB_ACTION_PATH/..`.
+    GITHUB_ACTION_PATH: join(root, "generic-actions", "merge-gate"),
     // Scratch repositories ignore the developer's Git config, so no commit asks to be signed.
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",

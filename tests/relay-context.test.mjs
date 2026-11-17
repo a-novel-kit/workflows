@@ -75,12 +75,20 @@ test("the gates take their queue context from inputs a relayed run can supply", 
   const gate = manifest("generic-actions/review-gate/action.yaml");
   assert.equal(gate.runs.steps.find((s) => s.env?.EVENT).env.EVENT, "${{ inputs.event }}");
 
-  const run = manifest(".github/workflows/merge-gate-run.yaml");
-  const evaluate = run.jobs.evaluate.steps[0].with;
-  assert.equal(
-    evaluate.merge_group_head_ref,
-    "${{ inputs.merge_group_head_ref || github.event.merge_group.head_ref }}"
-  );
-  assert.equal(evaluate.pull_request_number, "${{ inputs.pull_request_number || github.event.pull_request.number }}");
-  assert.match(run.jobs["auto-merge"].if, /pull_request_target/);
+  // gates-run feeds every gate from the relay, falling back to a direct caller's inputs, then the event.
+  const steps = manifest(".github/workflows/gates-run.yaml").jobs.evaluate.steps;
+  const named = (name) => steps.find((s) => s.name === name || s.id === name);
+  assert.match(named("relay").if, /workflow_run/);
+  for (const gate of ["merge-gate", "epic-freeze", "review-gate"]) {
+    assert.equal(
+      named(gate).with.pull_request_number,
+      "${{ inputs.pull_request_number || steps.relay.outputs.pull_request_number || github.event.pull_request.number }}",
+      gate
+    );
+    assert.match(named(gate).if, /steps\.relay\.outputs\.event != ''/, gate);
+  }
+  for (const gate of ["merge-gate", "epic-freeze"]) {
+    assert.equal(named(gate).with.merge_group_head_ref, "${{ steps.relay.outputs.merge_group_head_ref }}", gate);
+  }
+  assert.match(named("Arm an Epic member's auto-merge").if, /pull_request_target/);
 });

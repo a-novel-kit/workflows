@@ -28,6 +28,17 @@ const run = (files, autoMergeEnabledBy, { armed = true } = {}) =>
 /** A modified file whose patch is the given diff lines, already prefixed. */
 const diff = (filename, lines) => ({ filename, status: "modified", patch: ["@@ -1,9 +1,9 @@", ...lines].join("\n") });
 
+test("a release pin in the cluster root's per-service release file is a pin", async () => {
+  const pin = file(
+    "environments/production/cluster/releases/authentication.tfvars",
+    [`  rest = ${image("v2.13.1", "a")}`],
+    [`  rest = ${image("v2.13.2", "b")}`]
+  );
+  assert.equal((await run([pin], "agent")).decision, "pin");
+  const elsewhere = { ...pin, filename: "environments/production/cluster/authentication.tfvars" };
+  assert.equal((await run([elsewhere], "agent")).decision, "review");
+});
+
 test("classify lets through only a release pin or a version update Renovate put on auto-merge", async () => {
   const pin = file(
     "environments/production/authentication/terraform.tfvars",

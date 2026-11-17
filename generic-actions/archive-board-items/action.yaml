@@ -40,10 +40,11 @@ inputs:
       When "true", ignore `status` and archive every item whose issue is closed. Pull request and
       draft items never match.
   project_id:
-    required: true
+    required: false
+    default: ${{ github.repository_owner == 'a-novel' && 'PVT_kwDOB9MxdM4BMh8r' || 'PVT_kwDOCy-nAM4BbtKH' }}
     description: >
       Node id of the Projects v2 board (PVT_…). Find it with: gh project view <n> --owner <org>
-      --format json.
+      --format json. Defaults to the calling org's Tasks board.
   dry_run:
     required: false
     default: "false"

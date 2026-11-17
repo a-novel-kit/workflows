@@ -37,7 +37,7 @@ test("status and reconcile selectors include every closing issue and label-only 
     [false, false],
   ];
   const nodes = memberships.map(pullRequest);
-  const workflow = read(".github/workflows/reconcile-board.yaml");
+  const workflow = read(".github/workflows/reconcile-board-run.yaml");
   assert.deepEqual(
     JSON.parse(filter(workflow, "tasks")(nodes)).map((pr) => pr.number),
     [1, 3]

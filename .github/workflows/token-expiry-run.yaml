@@ -1,0 +1,317 @@
+# Reusable daily watcher of an organization's fine-grained personal access tokens. It reads their
+# metadata through the org PAT endpoint, never a token value. It posts to the token-expiry chat
+# channel only when a token crosses a milestone of the ping policy below, so quiet days stay silent.
+#
+# Each post @mentions the one configured admin, who triages, and names the token's owner in the
+# message. The caller owns the schedule and the concurrency. A dispatch with test_run=true posts for
+# every token, for real, to drill the channel and the message format end to end.
+name: token-expiry (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      client_id:
+        required: true
+        type: string
+        description: Client id of a GitHub App installed on the organization.
+      dry_run:
+        required: false
+        type: string
+        default: "false"
+        description: >
+          Only "false", ignoring case and whitespace, sends posts. Any other value logs every post the run
+          would send without sending it. A test_run ignores it.
+      test_run:
+        required: false
+        type: boolean
+        default: false
+        description: >
+          Post for every token regardless of the ping policy, overriding dry_run, to drill the channel and
+          the message format. Wire it to the caller's workflow_dispatch.
+    secrets:
+      private_key:
+        required: true
+        description: Private key (PEM) of the App that client_id names.
+      webhook:
+        required: false
+        description: Webhook of the token-expiry channel. Empty skips every post with a warning.
+      default_mention:
+        required: false
+        description: >
+          Chat user id of the admin every post @mentions, who triages. Empty posts without a mention.
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    # The privileged keys are secrets of the caller's governance environment, which no feature branch opens.
+    environment:
+      name: governance
+      deployment: false
+    permissions: {}
+    steps:
+      # Metadata-only token: only organization_personal_access_tokens:read, scoped to this org.
+      - name: Mint org PAT-read token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.client_id }}
+          private-key: ${{ secrets.private_key }}
+          owner: ${{ github.repository_owner }}
+          permission-organization-personal-access-tokens: read
+
+      - name: Enumerate org PATs and ping on milestones
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+          WEBHOOK: ${{ secrets.webhook }}
+          DEFAULT_MENTION: ${{ secrets.default_mention }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          TEST_RUN: ${{ inputs.test_run }}
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+
+          # ---- Ping policy: edit here ------------------------------------------------------------
+          # Ping once as the percentage of lifetime remaining crosses below each milestone. The rule
+          # is stateless: it fires when yesterday's percentage was above the milestone and today's is
+          # at or below it. It also pings every day within FINAL_STRETCH_DAYS of expiry, counting an
+          # already-expired token as inside the stretch. Lifetime is derived as expires_at minus
+          # access_granted_at, which is exact for the final-stretch rule and approximate for the
+          # percentage milestones, since a token re-approval resets access_granted_at. A token with no
+          # derivable lifetime still gets the final-stretch pings.
+          LIFETIME_MILESTONES="50 30 10"
+          FINAL_STRETCH_DAYS=7
+
+          # Prints a human ping reason, or nothing to stay silent. $1 days-left, $2 lifetime-days.
+          ping_reason() {
+            local days="$1" life="$2" m pct pct_yst
+            if [ "$days" -le "$FINAL_STRETCH_DAYS" ]; then
+              if [ "$days" -lt 0 ]; then echo "EXPIRED"; else echo "${days}d left"; fi
+              return 0
+            fi
+            if [ "$life" -gt 0 ]; then
+              pct=$(( days * 100 / life ))
+              pct_yst=$(( (days + 1) * 100 / life ))
+              for m in $LIFETIME_MILESTONES; do
+                if [ "$pct_yst" -gt "$m" ] && [ "$pct" -le "$m" ]; then
+                  echo "crossed ${m}% lifetime (${pct}% left)"; return 0
+                fi
+              done
+            fi
+            return 1
+          }
+
+          # ---- Reading one token ----------------------------------------------------------------
+          # The functions below read the current row's fields: name, login, exp, expired, granted,
+          # repo_sel and perms.
+
+          # Sets days, the days left before expiry, and exp_ts, the expiry as epoch seconds. An expired
+          # token has -1 days, and a past expiry clamps to 0. Returns 1, after logging why, when the
+          # token has no usable expiry.
+          read_expiry() {
+            exp_ts=0
+            if [ "$expired" = "true" ]; then
+              days=-1
+              return 0
+            fi
+
+            if [ -z "$exp" ]; then
+              echo "  - ${name} (${login}): no expiry metadata, skipped" >> "$GITHUB_STEP_SUMMARY"
+              return 1
+            fi
+
+            exp_ts=$(date -u -d "$exp" +%s 2>/dev/null || echo 0)
+            if [ "$exp_ts" -eq 0 ]; then
+              echo "::warning::couldn't parse expiry \"$exp\" for \"$name\"; skipping."
+              return 1
+            fi
+
+            days=$(( (exp_ts - now) / 86400 ))
+            [ "$days" -ge 0 ] || days=0
+          }
+
+          # Prints the lifetime in days, from access_granted_at to expires_at, or 0 when it cannot be
+          # derived.
+          lifetime() {
+            local g_ts
+            if [ "$expired" = "true" ] || [ -z "$granted" ] || [ "$exp_ts" -le 0 ]; then
+              echo 0
+              return 0
+            fi
+
+            g_ts=$(date -u -d "$granted" +%s 2>/dev/null || echo 0)
+            if [ "$g_ts" -gt 0 ] && [ "$exp_ts" -gt "$g_ts" ]; then
+              echo $(( (exp_ts - g_ts) / 86400 ))
+            else
+              echo 0
+            fi
+          }
+
+          # ---- Message shape ----------------------------------------------------------------------
+
+          # Prints the embed color by days left: green >30, yellow >14, orange >7, red ≤7 or expired.
+          embed_color() {
+            if [ "$expired" = "true" ] || [ "$days" -le 7 ]; then echo 15158332
+            elif [ "$days" -le 14 ]; then echo 15105570
+            elif [ "$days" -le 30 ]; then echo 15844367
+            else echo 3066993; fi
+          }
+
+          # Prints the message, one embed description with no title field. A heading names the days
+          # left, which never go negative. A `-#` grey subtext names the owner, since the owner is not
+          # the runner. A blank line then leads into the regen recipe.
+          #
+          # The recipe is a masked link, then the owner, scope and permissions from the live per-token
+          # API data, then the `gh secret set` block. SECRET_NAME is a fill-in, because the org PAT API
+          # exposes the token's own name, not the Actions secret that stores it.
+          message() {
+            local hdays pct pctline="" scope regen desc
+
+            hdays=$([ "$days" -lt 0 ] && echo 0 || echo "$days")
+            if [ "$life" -gt 0 ]; then
+              pct=$(( days * 100 / life ))
+              [ "$pct" -le 100 ] || pct=100
+              pctline=" | ${pct}% left"
+            fi
+
+            case "$repo_sel" in
+              all)      scope="All repositories" ;;
+              selected) scope="Selected repositories" ;;
+              *)        scope="${repo_sel:-unknown}" ;;
+            esac
+            regen=$(printf '%s\n' \
+              "[New fine-grained PAT](https://github.com/settings/personal-access-tokens/new)" \
+              " -> **owner**: ${ORG}" \
+              " -> **Scope**: ${scope}" \
+              " -> **Permissions**: ${perms:-none}" \
+              "" '```' \
+              "gh secret set <SECRET_NAME> --org ${ORG} --app actions --visibility all --body <pat>" \
+              '```')
+
+            desc="## ⏳ [Token] ${name} - ${hdays} days left"$'\n'"-# owner \`${login}\` · Expires ${exp:-n/a}${pctline}"$'\n\n'"${regen}"
+            desc=$(printf '%s' "$desc" | head -c 3900)
+            printf '%s' "$desc" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null || printf '%s' "$desc"
+          }
+
+          # Prints the webhook payload for description $1 and color $2. The chat notifies only on a
+          # mention in `content`, never on one inside an embed, so the admin's mention goes there.
+          # users:[id] allows that one admin alone, and parse:[] blocks @everyone, @here and roles.
+          # With no admin configured, the embed posts unpinged.
+          payload_of() {
+            if [ -z "${DEFAULT_MENTION:-}" ]; then
+              jq -n --arg d "$1" --argjson col "$2" \
+                '{embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[]}}'
+              return 0
+            fi
+            jq -n --arg c "<@${DEFAULT_MENTION}>" --arg d "$1" --argjson col "$2" --arg uid "$DEFAULT_MENTION" \
+              '{content:$c, embeds:[{description:$d, color:$col}], allowed_mentions:{parse:[], users:[$uid]}}'
+          }
+
+          # ---- Posting ----------------------------------------------------------------------------
+
+          dry=$(printf '%s' "${DRY_RUN:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          [ "$dry" = false ] || dry=true
+          # A test run posts for every token, for real, overriding dry_run.
+          [ "$TEST_RUN" = "true" ] && dry=false
+
+          # Post one chat payload with a small retry and explicit timeouts. $1 = JSON payload.
+          post_chat() {
+            local payload="$1" max=3 code=000 attempt
+            for attempt in $(seq 1 "$max"); do
+              code=$(curl -sS --connect-timeout 5 --max-time 15 -o "$RUNNER_TEMP/tok_resp" -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' --data "$payload" "$WEBHOOK") || code=000
+              if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then return 0; fi
+              echo "::warning::ping post attempt $attempt/$max failed (HTTP $code)."
+              [ "$attempt" -lt "$max" ] && sleep "$((attempt * attempt * 2))"
+            done
+            echo "::error::The chat ping failed after $max attempts (last HTTP $code)."
+            return 1
+          }
+
+          # Sends the current token's ping, or logs it on a dry run, and counts the outcome in posted
+          # or failures. $1 = description, $2 = payload, $3 = who the ping reaches.
+          send() {
+            if [ "$dry" = true ]; then
+              { echo "[dry-run] would post for ${name}, ${reason} (ping: $3):"; printf '%s\n' "$1"; } | tee -a "$GITHUB_STEP_SUMMARY"
+              posted=$((posted + 1))
+              return 0
+            fi
+
+            if [ -z "${WEBHOOK:-}" ]; then
+              echo "::warning::no webhook; can't post for ${name} (${reason})."
+              return 0
+            fi
+
+            if ! post_chat "$2"; then
+              failures=$((failures + 1))
+              return 0
+            fi
+            posted=$((posted + 1))
+            echo "Posted for ${name}, ${reason} (ping: $3)." | tee -a "$GITHUB_STEP_SUMMARY"
+            sleep 1   # be polite to the webhook rate limit between per-token posts
+          }
+
+          # ---- Sweep ------------------------------------------------------------------------------
+
+          # Every fine-grained PAT with org access, plus its expiry and grant metadata. A read error
+          # fails loudly, since an empty list reads as nothing to ping.
+          if ! pats=$(gh api "/orgs/${ORG}/personal-access-tokens" --paginate 2>"$RUNNER_TEMP/pat.err"); then
+            echo "::error::could not list PATs for ${ORG} ($(tr '\n' ' ' < "$RUNNER_TEMP/pat.err")). A 404 means the App lacks organization_personal_access_tokens:read on this org."
+            exit 1
+          fi
+
+          # Each token is one line of unit-separated fields, so `read` keeps an empty field in its
+          # place. A newline or unit separator inside a value becomes a space, so each token stays on
+          # its own line.
+          rows=$(printf '%s' "$pats" | jq -r '
+            (if type=="array" then . else [] end)
+            | sort_by(.token_expires_at // "9999")
+            | .[]
+            | [ (.token_name // "unnamed"), (.owner.login // "?"),
+                (.token_expires_at // ""), (.token_expired // false | tostring),
+                (.access_granted_at // ""),
+                (.repository_selection // "?"),
+                ( [ (.permissions // {}) | to_entries[]
+                    | if (.value | type) == "object"
+                      then (.value | to_entries[] | "\(.key): \(.value)")
+                      else "\(.key): \(.value)" end ]
+                  | join("; ") ) ]
+            | map(tostring | gsub("[\u001f\r\n]"; " "))
+            | join("\u001f")')
+
+          total=0
+          posted=0
+          failures=0
+          hdr=$([ "$TEST_RUN" = "true" ] && echo "### ${ORG}: 🧪 TEST RUN (all PATs, admin only)" || echo "### ${ORG}: fine-grained PAT inventory")
+          echo "$hdr" >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS=$'\x1f' read -r name login exp expired granted repo_sel perms; do
+            [ -n "${name:-}" ] || continue
+            total=$((total + 1))
+            read_expiry || continue
+            life=$(lifetime)
+
+            status=$([ "$expired" = "true" ] && echo "EXPIRED" || echo "${days}d left")
+            reason=$(ping_reason "$days" "$life" || true)
+            # A test run posts every token, with its status as the reason when no milestone fired. Its
+            # message matches a genuine post; the 🧪 markers stay in the run summary.
+            if [ "$TEST_RUN" = "true" ] && [ -z "$reason" ]; then reason="$status"; fi
+            if [ -z "$reason" ]; then
+              echo "  - ${name} (${login}): ${status}, no ping today" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            echo "  - ${name} (${login}): ${status}, PING (${reason})" >> "$GITHUB_STEP_SUMMARY"
+
+            target="admin"
+            if [ -z "${DEFAULT_MENTION:-}" ]; then
+              target="no-one"
+              echo "::warning::no admin (default_mention) configured; posting ${name} without a ping."
+            fi
+
+            desc=$(message)
+            payload=$(payload_of "$desc" "$(embed_color)")
+            send "$desc" "$payload" "$target"
+          done <<< "$rows"
+
+          echo "Org ${ORG}: ${total} PAT(s) scanned, ${posted} posted, ${failures} post failure(s)$([ "$TEST_RUN" = "true" ] && echo ' [TEST RUN]')." | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$failures" -eq 0 ]
