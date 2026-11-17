@@ -70,7 +70,7 @@ jobs:
     steps:
       - id: relay
         if: github.event_name == 'workflow_run' && inputs.pull_request_number == ''
-        uses: a-novel-kit/workflows/generic-actions/relay-context@v1.87.0
+        uses: a-novel-kit/workflows/generic-actions/relay-context@v1.87.1
 
       # The required "may this merge?" check. An Epic member holds until every sibling is ready.
       - name: merge-gate
@@ -78,7 +78,7 @@ jobs:
           ${{ !cancelled() && (inputs.pull_request_number != '' || steps.relay.outputs.event != '' ||
           github.event_name == 'pull_request_target' && github.event.action != 'closed' &&
           github.actor != inputs.dependabot_security_login) }}
-        uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.87.0
+        uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.87.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
@@ -95,7 +95,7 @@ jobs:
           ${{ !cancelled() && github.event_name == 'pull_request_target' && github.event.action != 'closed' &&
           github.actor != inputs.dependabot_security_login && !github.event.pull_request.draft &&
           contains(toJSON(github.event.pull_request.labels.*.name), '"epic:') }}
-        uses: a-novel-kit/workflows/generic-actions/enable-auto-merge@v1.87.0
+        uses: a-novel-kit/workflows/generic-actions/enable-auto-merge@v1.87.1
         with:
           pull_request_number: ${{ github.event.pull_request.number }}
           client_id: ${{ inputs.client_id }}
@@ -112,7 +112,7 @@ jobs:
           ${{ !cancelled() && (inputs.pull_request_number != '' || steps.relay.outputs.event != '' ||
           github.event_name == 'pull_request_target' && github.event.action != 'closed' &&
           github.actor != inputs.dependabot_security_login) }}
-        uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.87.0
+        uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.87.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
@@ -131,7 +131,7 @@ jobs:
           ${{ !cancelled() && (inputs.pull_request_number != '' || steps.relay.outputs.event != '' ||
           contains(fromJSON('["opened", "reopened", "synchronize", "labeled", "unlabeled"]'), github.event.action) &&
           github.actor != inputs.dependabot_security_login) }}
-        uses: a-novel-kit/workflows/generic-actions/review-gate@v1.87.0
+        uses: a-novel-kit/workflows/generic-actions/review-gate@v1.87.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}
@@ -153,7 +153,7 @@ jobs:
           ${{ !cancelled() && (steps.relay.outputs.event == 'pull_request_review' ||
           github.event_name == 'pull_request_target' && github.event.action != 'labeled' &&
           github.event.action != 'unlabeled') }}
-        uses: a-novel-kit/workflows/generic-actions/derive-status@v1.87.0
+        uses: a-novel-kit/workflows/generic-actions/derive-status@v1.87.1
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.app_private_key }}

@@ -34,7 +34,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.87.0
+      - uses: a-novel-kit/workflows/go-actions/lint-go@v1.87.1
 ```
 
 Pin every reference to a release tag. The repository ships as one unit, so every reference in a
@@ -92,7 +92,7 @@ A repository wraps it in a local action that holds only its image defaults:
 
 ```yaml
 steps:
-  - uses: a-novel-kit/workflows/build-actions/compose-up@v1.87.0
+  - uses: a-novel-kit/workflows/build-actions/compose-up@v1.87.1
     env:
       DATABASE_IMAGE: ${{ inputs.database_image }}
       POSTGRES_PASSWORD: postgres
@@ -164,7 +164,7 @@ check-migration-snapshots:
         fetch-depth: 0
         persist-credentials: false
 
-    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.87.0
+    - uses: a-novel-kit/workflows/generic-actions/check-append-only@v1.87.1
       with:
         path: internal/models/migrations
         base: ${{ github.event.pull_request.base.sha }}
@@ -287,7 +287,7 @@ scan-secrets:
   permissions:
     contents: read
   steps:
-    - uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.87.0
+    - uses: a-novel-kit/workflows/security-actions/scan-secrets@v1.87.1
 ```
 
 Each runs the tool release it pins, and Renovate moves that pin in this repository, so one workflows
@@ -296,7 +296,7 @@ so that Renovate keeps it current there. `lint-semgrep` and `lint-workflows` run
 so their `version` reads `<tag>@sha256:<digest>`:
 
 ```yaml
-- uses: a-novel-kit/workflows/security-actions/lint-workflows@v1.87.0
+- uses: a-novel-kit/workflows/security-actions/lint-workflows@v1.87.1
   with:
     # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
     version: "1.32.0@sha256:3014cc8f68f663935f69b3c3e0e41f5ce102b268d97db13db0f62208747f860d"
@@ -310,7 +310,7 @@ so a caller's `version` comes with its `sha256` on the next line, and the base R
 both together:
 
 ```yaml
-- uses: a-novel-kit/workflows/generic-actions/lint-shell@v1.87.0
+- uses: a-novel-kit/workflows/generic-actions/lint-shell@v1.87.1
   with:
     # renovate: datasource=custom.shellcheck depName=koalaman/shellcheck
     version: "0.11.0"

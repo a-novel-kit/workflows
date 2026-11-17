@@ -26,7 +26,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.87.0
+    - uses: a-novel-kit/workflows/node-actions/setup-node@v1.87.1
       with:
         github_token: ${{ inputs.github_token }}
     - name: Build Storybook
@@ -36,6 +36,6 @@ runs:
         STORYBOOK_BUILD_ACTION: ${{ inputs.build_action }}
       run: pnpm run "$STORYBOOK_BUILD_ACTION"
     - id: deployment
-      uses: a-novel-kit/workflows/github-pages-actions/deploy@v1.87.0
+      uses: a-novel-kit/workflows/github-pages-actions/deploy@v1.87.1
       with:
         path: ${{ inputs.build_path }}
