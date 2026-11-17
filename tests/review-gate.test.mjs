@@ -68,6 +68,8 @@ function evaluate(
     DATA: JSON.stringify({ roles, owner, commits, reviews, labels, applied }),
   };
   const result = w.bash(gate, env);
+  // A run pointed at another action folder reports whether it posted any check.
+  if (actionPath) return { status: result.status, posted: w.read("reads").includes("/check-runs") };
   if (postFails) return { status: result.status };
   succeeds(result);
   const check = JSON.parse(w.read("check.json"));
@@ -191,11 +193,7 @@ test("an empty privileged_labels input reads the fleet's list", (t) => {
 
 test("a missing privileged list fails the step, so no passing check is posted", (t) => {
   const w = workspace(t);
-  const result = evaluate(t, {
-    reviews: [approve("lead")],
-    privileged: "",
-    postFails: true,
-    actionPath: join(w.cwd, "x"),
-  });
+  const result = evaluate(t, { reviews: [approve("lead")], privileged: "", actionPath: join(w.cwd, "x") });
   assert.notEqual(result.status, 0);
+  assert.equal(result.posted, false);
 });
