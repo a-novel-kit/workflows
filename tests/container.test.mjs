@@ -96,7 +96,10 @@ test("check validates the smoke settings without starting Docker", (t) => {
   w.write("flags", "# reason\n--env A=1\n");
   succeeds(w.run(process.execPath, [waiter, "check"], { RUN_ARGS_FILE: "flags" }));
   succeeds(w.run(process.execPath, [waiter, "check"], {}));
+  // A `#` inside a value is data, not a reason.
+  succeeds(w.run(process.execPath, [waiter, "check"], { RUN_ARGS: "-e COLOR=#fff" }));
   const invalid = [
+    { RUN_ARGS: "-e A=1 # reason" },
     { RUN_ARGS: "--env 'unclosed" },
     { RUN_ARGS: "--env A=1", RUN_ARGS_FILE: "flags" },
     { RUN_ARGS_FILE: "missing" },

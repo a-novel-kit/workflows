@@ -15,6 +15,9 @@ const flags = (RUN_ARGS_FILE ? readFileSync(RUN_ARGS_FILE, "utf8") : RUN_ARGS)
 // xargs handles quoted flags without evaluating shell substitutions or operators.
 const parsed = execFileSync("xargs", ["-r", "printf", "%s\\0"], { input: flags, encoding: "utf8" });
 const args = parsed ? parsed.slice(0, -1).split("\0") : [];
+// A reason after a flag would reach Docker as arguments, so it must sit on a line of its own.
+const stray = args.find((arg) => arg.startsWith("#"));
+if (stray !== undefined) throw new Error(`Unexpected "${stray}" in the smoke flags: a reason goes on its own line`);
 
 // `check` stops once the settings parse, so a build that skips the smoke run still checks them.
 if (mode === "check") process.exit(0);

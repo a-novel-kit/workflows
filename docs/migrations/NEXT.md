@@ -1,10 +1,10 @@
 # Upgrading to NEXT
 
 The governance gates run from one reusable `gates-run.yaml`, the Dependabot path from
-`dependabot-run.yaml`, board ids and privileged labels default inside the actions, and the `go-tools`
-preset matches tool modfiles in any directory. The lint actions check out and pin their scanners
-themselves, new actions replace the services' copied build, Compose and Pages steps, and Node lanes on
-a pull request test the merge commit.
+`dependabot-run.yaml`, board ids and privileged labels default inside the actions, and the
+`go-tools` preset matches tool modfiles in any directory. The lint actions check out and pin their
+scanners themselves, new actions replace the services' copied build, Compose and Pages steps, and
+Node lanes on a pull request test the merge commit.
 
 ## Do I need to act?
 
@@ -16,12 +16,14 @@ names its successor, and the daily CI digest collects them.
 Three changes act on their own:
 
 - The five lint actions check the repository out again inside a job that already did, and that
-  checkout removes untracked files earlier steps left in the workspace. No caller depends on such files
-  today; see [Drop the checkout before the lint actions](#drop-the-checkout-before-the-lint-actions).
+  checkout removes untracked files earlier steps left in the workspace. No caller depends on such
+  files today; see [Drop the checkout before the lint
+  actions](#drop-the-checkout-before-the-lint-actions).
 - A Node lane on a pull request now tests GitHub's merge commit, as the Go lanes do, instead of the
-  branch tip. A job that must test the head passes it, as `test-playwright` and `lint-translations` do.
-- `build-actions/docker` no longer accepts `version`, `secret_envs` or `secret_files`. No repository in
-  either organization passes them.
+  branch tip. A job that must test the head passes it, as `test-playwright` and `lint-translations`
+  do.
+- `build-actions/docker` no longer accepts `version`, `secret_envs` or `secret_files`. No repository
+  in either organization passes them.
 
 ## Call `gates-run.yaml` from `gates.yaml`
 
@@ -137,14 +139,14 @@ steps:
   - uses: a-novel-kit/workflows/security-actions/scan-secrets@<tag>
 ```
 
-A job whose other steps read the repository keeps its checkout. The action checks out the same commit
-again, which also removes untracked files, so an earlier step's output in the workspace is gone; the
-tools the actions install live outside it.
+A job whose other steps read the repository keeps its checkout. The action checks out the same
+commit again, which also removes untracked files, so an earlier step's output in the workspace is
+gone; the tools the actions install live outside it.
 
 ## Let the actions pin the scanners
 
-`version` and `sha256` are optional on the five lint actions. Each action runs the release it pins, and
-Renovate moves that pin in this repository, so a scanner release reaches every repository in one
+`version` and `sha256` are optional on the five lint actions. Each action runs the release it pins,
+and Renovate moves that pin in this repository, so a scanner release reaches every repository in one
 workflows update instead of one pull request per repository. Drop the pins:
 
 ```yaml
@@ -160,15 +162,15 @@ workflows update instead of one pull request per repository. Drop the pins:
 ```
 
 A repository that must hold another release keeps passing `version`, with its annotation. For
-`lint-shell` and `lint-dockerfile` it passes `sha256` with it: one without the other fails the step, so
-a pinned hash never vouches for a different release.
+`lint-shell` and `lint-dockerfile` it passes `sha256` with it: one without the other fails the step,
+so a pinned hash never vouches for a different release.
 
 ## Keep a repository's gitleaks entries in `extra_config`
 
-`scan-secrets` takes `extra_config`, a file holding only the repository's own `[[allowlists]]` tables,
-and appends it to the shipped baseline. A `.gitleaks.toml` that restates the baseline keeps only its
-own tables and moves from `config` to `extra_config`; one that adds nothing is deleted with its
-`config` line.
+`scan-secrets` takes `extra_config`, a file holding only the repository's own `[[allowlists]]`
+tables, and appends it to the shipped baseline. A `.gitleaks.toml` that restates the baseline keeps
+only its own tables and moves from `config` to `extra_config`; one that adds nothing is deleted with
+its `config` line.
 
 ```yaml
 # Before
@@ -201,9 +203,9 @@ test-reproducible-database:
 
 ## Start CI services with `compose-up`
 
-`build-actions/compose-up` holds the registry login, the `docker compose up --wait` and the log dump on
-a failure that each service's `.github/actions/start-ci-services` repeats. The local action keeps its
-inputs and image defaults, and hands the images to Compose through the step's `env`:
+`build-actions/compose-up` holds the registry login, the `docker compose up --wait` and the log dump
+on a failure that each service's `.github/actions/start-ci-services` repeats. The local action keeps
+its inputs and image defaults, and hands the images to Compose through the step's `env`:
 
 ```yaml
 runs:
@@ -222,8 +224,8 @@ runs:
 
 ## Deploy Pages with `deploy` and `publish-api-docs`
 
-`github-pages-actions/deploy` runs configure-pages, upload-pages-artifact and deploy-pages for a built
-site. `github-pages-actions/publish-api-docs` checks out a service, assembles `openapi.html`,
+`github-pages-actions/deploy` runs configure-pages, upload-pages-artifact and deploy-pages for a
+built site. `github-pages-actions/publish-api-docs` checks out a service, assembles `openapi.html`,
 `openapi.yaml` when present and, given `grpc_title`, the gRPC document converted through
 `buf.gen.docs.yaml`, then deploys it. A service's `publish-docs` job keeps its `if`, `needs`,
 `concurrency` and `permissions`, and its steps become one:
@@ -239,10 +241,10 @@ steps:
 
 ## Node lanes test the merge commit
 
-`node-actions/setup-node`'s `ref` defaults to the event's commit instead of `github.head_ref`. On a pull
-request, that is GitHub's merge commit, so the Node lanes, `lint-node`, `test-node` and `build-node`
-included, test the tree the Go lanes and the image builds test, and a push during the run no longer
-moves what a check reports on. A job that must test the head passes it:
+`node-actions/setup-node`'s `ref` defaults to the event's commit instead of `github.head_ref`. On a
+pull request, that is GitHub's merge commit, so the Node lanes, `lint-node`, `test-node` and
+`build-node` included, test the tree the Go lanes and the image builds test, and a push during the
+run no longer moves what a check reports on. A job that must test the head passes it:
 
 ```yaml
 - uses: a-novel-kit/workflows/node-actions/setup-node@<tag>
@@ -254,20 +256,21 @@ moves what a check reports on. A job that must test the head passes it:
 ## `docker` drops `version`, `secret_envs` and `secret_files`
 
 Releases tag their images from the git tag, so the dispatched-release `version` input has no caller,
-and neither do `secret_envs` and `secret_files`. A step that still passes one gets an unexpected-input
-warning and loses the input's effect: pass build secrets through `secrets`.
+and neither do `secret_envs` and `secret_files`. A step that still passes one gets an
+unexpected-input warning and loses the input's effect: pass build secrets through `secrets`.
 
 ## Keep an image's smoke flags in `run_args_file`
 
 `build-actions/docker` takes `run_args_file`, a file holding the smoke run's flags in the syntax of
 `run_args`: quoted values and `$NAME` references, no command substitution. Keep one file per image
 under `builds/`, such as `builds/migrations.run-args` below, and pass it from every workflow that
-builds the image, so `main.yaml` and `release.yaml` start it alike. Setting both inputs fails. A line
-starting with `#` holds the reason for a flag.
+builds the image, so `main.yaml` and `release.yaml` start it alike. Setting both inputs fails. A
+line starting with `#` holds the reason for a flag; a reason after a flag on the same line fails the
+check.
 
-Pass the file even where a job skips the smoke run, as `main.yaml` does for a standalone image: every
-build checks the file before it builds, so the pull request run of `main.yaml` catches a broken file
-before a release needs it.
+Pass the file even where a job skips the smoke run, as `main.yaml` does for a standalone image:
+every build checks the file before it builds, so the pull request run of `main.yaml` catches a
+broken file before a release needs it.
 
 ```text
 # The migrations job reads the discrete connection settings.
@@ -297,5 +300,5 @@ before a release needs it.
   tag, for repositories whose `main.yaml` builds the release images.
 - `classify-bot-change` also recognizes release pins in
   `environments/production/cluster/releases/<service>.tfvars`.
-- `go-actions/test-go`'s `skip_setup` still skips the checkout, setup-go and the go-test cache. A job
-  that runs no Go before `test-go`, such as a service's `test-pkg`, drops it to get the cache.
+- `go-actions/test-go`'s `skip_setup` still skips the checkout, setup-go and the go-test cache. A
+  job that runs no Go before `test-go`, such as a service's `test-pkg`, drops it to get the cache.

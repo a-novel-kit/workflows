@@ -26,7 +26,8 @@ inputs:
     description: >
       Path of a file holding the test run's Docker flags in the syntax of `run_args`, relative to the
       repository root, so every workflow building the image reads the same settings. A line starting
-      with `#` holds a reason, not a flag. Every build checks the file, a skipped smoke run included.
+      with `#` holds a reason, not a flag; a reason after a flag fails. Every build checks the file, a
+      skipped smoke run included.
       Setting both fails.
   timeout:
     required: false
