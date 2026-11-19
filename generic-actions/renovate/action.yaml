@@ -49,7 +49,7 @@ runs:
       shell: bash
       run: echo "::warning::The renovate action's repository_config input is deprecated and ignored; drop it."
     - name: self-hosted renovate
-      uses: renovatebot/github-action@266fef21329c44765ad42f9dea1f01f5d2d91084 # v46.3.13
+      uses: renovatebot/github-action@acdd6bda8b035c99ce59d5675816af2aa65a1774 # v46.3.14
       with:
         token: ${{ steps.app_token.outputs.token }}
         configurationFile: ${{ github.action_path }}/config.json
