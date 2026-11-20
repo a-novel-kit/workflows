@@ -61,7 +61,7 @@ runs:
       with:
         persist-credentials: false
     - id: setup-go
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
       if: ${{ inputs.skip_setup != 'true' }}
       with:
         go-version-file: ${{ inputs.working_directory && format('{0}/go.mod', inputs.working_directory) || 'go.mod' }}
