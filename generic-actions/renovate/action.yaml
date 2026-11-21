@@ -32,7 +32,7 @@ runs:
     # the run needs the bot token and no checkout. The token asks for exactly what Renovate uses: it
     # pushes branches, edits workflows, opens pull requests and the dependency dashboard, sets its
     # stability status, and reads check results and Dependabot alerts.
-    - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+    - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
       id: app_token
       with:
         client-id: ${{ inputs.client_id }}
