@@ -40,7 +40,7 @@ runs:
         ZIZMOR_VERSION: ${{ inputs.version }}
         # The pinned default, under the key the base Renovate preset's workflow regex reads.
         # renovate: datasource=docker depName=ghcr.io/zizmorcore/zizmor
-        version: "1.33.0@sha256:1b9bebe30894567d922aa8467ec3b6d39d8f4f65b7736addbda6e83d1b0c477f"
+        version: "1.33.1@sha256:ecd3ffe6158de1322e05a044ed43749bee12b1dccb7e1a7859bc6ac4b2a1c516"
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
