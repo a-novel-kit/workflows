@@ -2,9 +2,27 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { step, succeeds, workspace } from "./helpers.mjs";
+import { manifest, step, succeeds, workspace } from "./helpers.mjs";
 
 const assemble = step("github-pages-actions/publish-api-docs/action.yaml", "Assemble the site");
+
+test("deploy uploads the site once and retries only the deployment", () => {
+  const action = manifest("github-pages-actions/deploy/action.yaml");
+  const steps = action.runs.steps;
+  // A second upload leaves two artifacts of one name, which no deployment attempt can tell apart.
+  assert.equal(steps.filter((s) => s.uses?.startsWith("actions/upload-pages-artifact@")).length, 1);
+  // Each retry repeats the first attempt and runs only when the one before it failed; the last fails the job.
+  const attempts = steps.filter((s) => s.uses?.startsWith("actions/deploy-pages@"));
+  assert.equal(attempts.length, 3);
+  for (const [i, attempt] of attempts.entries()) {
+    assert.equal(attempt.uses, attempts[0].uses);
+    assert.equal(attempt["continue-on-error"], i < attempts.length - 1 ? true : undefined);
+    if (i > 0) assert.equal(attempt.if, `\${{ steps.${attempts[i - 1].id}.outcome == 'failure' }}`);
+  }
+  // The page URL comes from whichever attempt deployed.
+  const urls = attempts.map((attempt) => `steps.${attempt.id}.outputs.page_url`);
+  assert.equal(action.outputs.page_url.value, `\${{ ${urls.join(" || ")} }}`);
+});
 
 test("publish-api-docs deploys the REST reference, and the gRPC document only when titled", (t) => {
   const w = workspace(t);

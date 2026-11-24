@@ -12,7 +12,7 @@ inputs:
 outputs:
   page_url:
     description: The deployed GitHub Pages URL.
-    value: ${{ steps.deployment.outputs.page_url }}
+    value: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url || steps.deployment-last.outputs.page_url }}
 
 runs:
   using: composite
@@ -21,5 +21,28 @@ runs:
     - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
       with:
         path: ${{ inputs.path }}
-    - id: deployment
+    # deploy-pages finds the artifact by listing the run's artifacts, and GitHub can take seconds to
+    # list one it has just stored (actions/deploy-pages#451). An empty list fails the step, so a
+    # failed attempt runs again after a pause, and only the last one fails the job. The upload never
+    # repeats: two artifacts of one name fail the lookup for good.
+    - name: Deploy the site
+      id: deployment
+      continue-on-error: true
+      uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+    - name: Wait before retrying the deployment
+      if: ${{ steps.deployment.outcome == 'failure' }}
+      shell: bash
+      run: sleep 10
+    - name: Deploy the site, second attempt
+      id: deployment-retry
+      if: ${{ steps.deployment.outcome == 'failure' }}
+      continue-on-error: true
+      uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+    - name: Wait before the last deployment attempt
+      if: ${{ steps.deployment-retry.outcome == 'failure' }}
+      shell: bash
+      run: sleep 30
+    - name: Deploy the site, last attempt
+      id: deployment-last
+      if: ${{ steps.deployment-retry.outcome == 'failure' }}
       uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
