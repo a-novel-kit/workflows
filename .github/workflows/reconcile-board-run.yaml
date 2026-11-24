@@ -80,7 +80,7 @@ jobs:
       deployment: false
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.87.1
+      - uses: a-novel-kit/workflows/generic-actions/rollup-board@v1.87.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -99,7 +99,7 @@ jobs:
       deployment: false
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.87.1
+      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.87.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -111,7 +111,7 @@ jobs:
       # Archives every board item whose issue is closed, org-wide. No publish archives a done planning
       # issue in the `.github` repository, so this step keeps closed and archived equivalent on the
       # board.
-      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.87.1
+      - uses: a-novel-kit/workflows/generic-actions/archive-board-items@v1.87.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -200,7 +200,7 @@ jobs:
           permission-contents: read
           permission-issues: read
           permission-pull-requests: read
-      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.87.1
+      - uses: a-novel-kit/workflows/generic-actions/derive-status@v1.87.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -226,7 +226,7 @@ jobs:
       matrix:
         pr: ${{ fromJSON(needs.enumerate.outputs.epic_prs) }}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.87.1
+      - uses: a-novel-kit/workflows/generic-actions/merge-gate@v1.87.2
         with:
           client_id: ${{ inputs.client_id }}
           app_private_key: ${{ secrets.private_key }}
@@ -249,7 +249,7 @@ jobs:
       deployment: false
     permissions: {}
     steps:
-      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.87.1
+      - uses: a-novel-kit/workflows/generic-actions/detect-partial-landing@v1.87.2
         with:
           client_id: ${{ inputs.client_id }}
           planning_repo: ${{ inputs.planning_repo }}

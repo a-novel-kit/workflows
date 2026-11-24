@@ -40,7 +40,7 @@ jobs:
   reconcile:
     # Every job of the engine mints its own App token.
     permissions: {}
-    uses: a-novel-kit/workflows/.github/workflows/reconcile-board-run.yaml@v1.87.1
+    uses: a-novel-kit/workflows/.github/workflows/reconcile-board-run.yaml@v1.87.2
     with:
       project_id: ${{ inputs.project_id }}
       client_id: ${{ inputs.client_id }}
